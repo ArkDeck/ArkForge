@@ -61,6 +61,7 @@ fn research_toolchain() -> ToolchainIdentity {
         kind: ToolchainKind::Replay,
         version: Version::new(0, 1, 0),
         backend_digest: sha256(b"research"),
+        upstream_ref: None,
     }
 }
 

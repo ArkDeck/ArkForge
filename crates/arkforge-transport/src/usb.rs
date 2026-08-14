@@ -577,6 +577,69 @@ mod tests {
         );
     }
 
+    /// AD-013: on 2026-08-14 `rkdeveloptool ld` reported `Mode=Maskrom` for
+    /// this exact device — PID 0x5000, product string "HDC Device", HDC
+    /// answering `param get` — three times running.
+    ///
+    /// Maskrom is the stage where a loader is written into SRAM. A discovery
+    /// path that believed the tool's mode word would act on a booted system as
+    /// though it were in Maskrom. This transport is immune by construction: the
+    /// mode comes from the Profile's measured VID/PID, and no vendor tool's
+    /// output reaches it.
+    #[test]
+    fn a_pid_the_vendor_tool_misreports_still_resolves_by_profile() {
+        let profile = dayu200_profile();
+        let transport = UsbTransport::new(
+            &profile,
+            Box::new(StaticEnumerator(parse_ioreg(IOREG_SAMPLE))),
+        );
+        let observation = &transport.observe_now(1_000).unwrap()[0];
+
+        // The tool says Maskrom. The Profile's measured identity says otherwise,
+        // and the Profile is what this transport reads.
+        assert_eq!(observation.mode.as_str(), "hdc-normal");
+        assert_eq!(
+            profile
+                .mode_for_usb_identity(0x2207, 0x5000)
+                .map(|mode| mode.as_str()),
+            Some("hdc-normal")
+        );
+
+        // Nothing in an observation carries the vendor tool's own vocabulary.
+        // These are the fields of the `ld` line — its mode word and its record
+        // shape — which is the output a mode must never be derived from.
+        // (The tool's *name* is deliberately not listed: the architecture guard
+        // forbids naming it in this crate, and the property under test is about
+        // the tool's output, not its name.)
+        let rendered = format!("{observation:?}").to_lowercase();
+        for tool_word in ["maskrom", "devno", "locationid"] {
+            assert!(
+                !rendered.contains(tool_word),
+                "an observation must not carry a vendor tool's vocabulary: {tool_word}"
+            );
+        }
+    }
+
+    /// The Profile is the only source of the VID/PID -> mode mapping, so a
+    /// device whose identity nobody measured resolves to no mode at all —
+    /// which is what happened in Loader before 0x350a was measured.
+    #[test]
+    fn an_unmeasured_identity_resolves_to_no_mode() {
+        let profile = dayu200_profile();
+        let mut records = parse_ioreg(IOREG_SAMPLE);
+        let board = records
+            .iter_mut()
+            .find(|record| record.vendor_id == 0x2207)
+            .unwrap();
+        board.product_id = 0x9999;
+
+        let transport = UsbTransport::new(&profile, Box::new(StaticEnumerator(records)));
+        assert!(
+            transport.observe_now(1_000).unwrap().is_empty(),
+            "an unmeasured VID/PID names no mode"
+        );
+    }
+
     #[test]
     fn garbage_input_parses_to_nothing_rather_than_panicking() {
         for input in ["", "not ioreg output", "+-o \"x\"@1 <class IOUSBHostDevice", "{}{}{}"] {

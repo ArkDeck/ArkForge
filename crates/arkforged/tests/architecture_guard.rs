@@ -389,6 +389,7 @@ mod support {
             kind: ToolchainKind::FixedTool,
             version: Version::new(1, 32, 0),
             backend_digest: sha256(b"pinned tool"),
+            upstream_ref: None,
         };
         let host_platform = HostPlatform::new("macos", "aarch64").unwrap();
         let driver_facts_digest = sha256(b"driver");

@@ -259,6 +259,7 @@ mod tests {
                 kind: arkforge_core::identity::ToolchainKind::FixedTool,
                 version: Version::new(1, 32, 0),
                 backend_digest: sha256(b"tool"),
+                upstream_ref: None,
             },
             host_platform: HostPlatform::new(platform, "aarch64").unwrap(),
             driver_facts_digest: sha256(b"driver"),

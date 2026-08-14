@@ -651,6 +651,7 @@ fn research_toolchain_identity() -> ToolchainIdentity {
         kind: ToolchainKind::Replay,
         version: Version::new(0, 1, 0),
         backend_digest: arkforge_core::digest::sha256(b"arkforge/research-inspect"),
+        upstream_ref: None,
     }
 }
 
@@ -665,6 +666,10 @@ pub fn fixed_tool_identity() -> ToolchainIdentity {
             "038a8a0ea26ef7eb77451789f310c0c9fbeaf43a78af1d6146e02311a9c23611",
         )
         .expect("pinned literal digest"),
+        // ArkDeck records this alongside the hash. Two builds of this commit
+        // exist on the reference host with different digests, which is why the
+        // digest stays the discriminator and this is only provenance (AD-010).
+        upstream_ref: Some("rkdeveloptool@304f073752fd25c854e1bcf05d8e7f925b1f4e14".into()),
     }
 }
 
@@ -674,6 +679,7 @@ fn replay_toolchain_identity() -> ToolchainIdentity {
         kind: ToolchainKind::Replay,
         version: Version::new(1, 0, 0),
         backend_digest: arkforge_core::digest::sha256(b"arkforge/transcript-replay"),
+        upstream_ref: None,
     }
 }
 

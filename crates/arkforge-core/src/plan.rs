@@ -633,6 +633,7 @@ mod tests {
                 kind: ToolchainKind::FixedTool,
                 version: Version::new(1, 32, 0),
                 backend_digest: sha256(b"tool"),
+                upstream_ref: None,
             },
             negotiated_capabilities: NegotiatedCapabilities::empty(),
             public_steps: vec![step],

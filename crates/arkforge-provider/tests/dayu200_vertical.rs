@@ -71,6 +71,7 @@ fn fixed_tool() -> ToolchainIdentity {
         kind: ToolchainKind::FixedTool,
         version: Version::new(1, 32, 0),
         backend_digest: arkforge_core::Sha256Digest::parse_hex(PINNED_RKDEVELOPTOOL_SHA256).unwrap(),
+        upstream_ref: None,
     }
 }
 
@@ -80,6 +81,7 @@ fn replay_tool() -> ToolchainIdentity {
         kind: ToolchainKind::Replay,
         version: Version::new(1, 0, 0),
         backend_digest: sha256(CAMPAIGN.as_bytes()),
+        upstream_ref: None,
     }
 }
 

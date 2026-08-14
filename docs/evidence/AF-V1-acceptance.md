@@ -9,7 +9,7 @@
 > 差异为 TASK-AIN-021 收口，不触及 flash 执行路径与本文引用的 pinned 事实
 > (`RockchipFlashProfile`、`partition-mapping.json`、`WorkflowStep.swift` 元数据)。
 >
-> 复现：`cargo test --workspace --offline`(336 tests，全绿)；
+> 复现：`cargo test --workspace --offline`(338 tests，全绿)；
 > 导入预算另见下文单独命令。
 
 ## 1. 生产代码交付
@@ -104,7 +104,7 @@ projection 复现 `providerExecutionPlanDigest` 与 `publicProjectionDigest`。
 
 ### 2.6 unit / fuzz / transcript tests
 
-- unit：336 tests，`cargo test --workspace --offline` 全绿；
+- unit：338 tests，`cargo test --workspace --offline` 全绿；
 - 原语对公开向量：SHA-256(FIPS 180-4 四向量 + 百万 a)、HMAC-SHA-256(RFC 4231)、
   CRC-32(RFC 1952 §8)、CBOR(RFC 8949 Appendix A)、DEFLATE(与系统 `gzip -1/-6/-9`
   在 6 组语料上交叉验证)、tar(与系统 `tar` 互操作)；
@@ -160,6 +160,17 @@ available-space preflight 实测：`the_available_space_preflight_refuses_a_bund
 **边界**：被计时的是本实现在真实尺寸上的导入路径(流式读 + 全量 SHA-256 + staging +
 fsync + rename)，输入为等长确定性合成流，不是厂商归档本身。内容寻址必须哈希每一字节，
 两者工作量同形。
+
+### 2.8b 工具身份与模式判定(2026-08-14 真机)
+
+- **AD-010 已解**：ArkDeck 的两个 pin 是设计(只读发现 / 破坏性刷写各一个本地构建，
+  同一 upstream commit)，`038a8a0e…` 逐字节命中 `~/dayu200-rehearsal/rkdeveloptool/`。
+  不存在「签名前/后」歧义。`ToolchainIdentity` 因此新增 `upstream_ref`——digest 仍是
+  判别量，provenance 只是让 receipt 说得清是哪个构建。
+- **AD-013 开着，且是本次最要紧的一条**：`rkdeveloptool ld` 把处于 HDC-normal 的
+  DAYU200 报成 `Mode=Maskrom`(三次复现)。ArkForge 结构性免疫：模式来自 Profile 声明的
+  实测 VID/PID，transport 从不读厂商工具的 mode 词。
+  `usb.rs::a_pid_the_vendor_tool_misreports_still_resolves_by_profile` 钉住这条。
 
 ### 2.9 无设备 mutation
 

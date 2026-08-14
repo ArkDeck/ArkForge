@@ -154,25 +154,79 @@ verified 强度、也不判失败)；读域覆盖且 uniform filler → `Failed{
 `profiles/dayu200.yaml` 仍**不**钉死 65536——窗口大小是每次执行的实测事实，不是
 板级常量；两次观测一致不足以把它变成常量。
 
-## 6. 工具身份漂移(需要处理)
+## 6. 工具身份 — AD-010 澄清
 
-本机存在三个不同的 rkdeveloptool：
+初次记录时我把此处写成「三个哈希都不等于 pin」。**那个说法是错的**：ArkDeck 有
+**两个**有意不同的 pin，我只对了其中一个。完整结论如下。
 
-| 来源 | SHA-256 | 可用性 |
-|---|---|---|
-| ArkDeck 声明的 pin(`RockchipFlashProfile.pinnedToolchainFingerprint`) | `038a8a0e…c23611` | — |
-| `/Applications/ArkDeck.app/Contents/MacOS/rkdeveloptool` | `231a05ef…a11c79e` | **可用**，本次全部读操作由它完成 |
-| `/opt/homebrew/bin/rkdeveloptool` | `bbd7bdc0…6c9923` | **不可用**：`ld` 与 `-v` 均挂起(无设备操作也挂起) |
+### 6.0 ArkDeck 的两个 pin 是设计，不是失误
 
-两点：
+`RockchipDeviceDiscovery.swift:9–28` 声明两个 profile，**同一 upstream commit
+`304f073752fd25c854e1bcf05d8e7f925b1f4e14`**，两个不同的本地构建，两种 access policy：
 
-1. 捆绑件与声明 pin 不一致。最可能的解释是打包后重签名改变了二进制哈希
-   (仓内存在 `/private/tmp/ArkDeck.app.before-rk-signfix-2849c5c1-*`)，若如此，
-   pin 应明确其指向签名前还是签名后的产物——否则运行时校验无从执行。
-   这与 AD-007(entitlement 死锁)是同一片区域。
-2. homebrew 版本在本机不可用且哈希不同。ArkForge 的 maturity 组合键把 toolchain
-   backend digest 计入，因此换一个 rkdeveloptool 就是**换一个组合**，不继承任何
-   ProductionVerified —— 本次实测正是该设计要防的情形。
+| profile | executableSHA256 | 用途 | accessPolicy |
+|---|---|---|---|
+| `pinnedReadOnlyDiscovery` | `bbd7bdc0…9923` | 「clean, non-quarantined build approved **only** for E0/read-only `ld` discovery」 | `.userSelectedSecurityScopedBookmark` |
+| `pinnedProduction` | `038a8a0e…3611` | 「compatibility identity consumed by the existing **destructive** Flash authorization, execution, and manifest surfaces」 | `.installedOrdinaryBookmark` |
+
+同一份源码的两个构建,按用途分权——只读发现与破坏性刷写用不同的二进制、不同的
+bookmark 策略。这正是 ArkForge maturity 组合键把 toolchain backend digest 计入的理由:
+**它们是两个组合**,不互相继承任何 ProductionVerified。
+
+### 6.1 本机四个二进制的归属
+
+| 路径 | 签名后 SHA-256 | 剥签名后 | 归属 |
+|---|---|---|---|
+| `~/dayu200-rehearsal/rkdeveloptool/rkdeveloptool` | `038a8a0e…c23611` | `2081fb90…` | **= `pinnedProduction`,逐字节命中** |
+| `/opt/homebrew/bin/rkdeveloptool` | `bbd7bdc0…6c9923` | `016d468f…` | **= `pinnedReadOnlyDiscovery`,逐字节命中** |
+| `/Applications/ArkDeck.app/Contents/MacOS/rkdeveloptool` | `231a05ef…a11c79e` | `c31e8a3f…` | 两个 pin 均不符 |
+| `/private/tmp/ArkDeck.app.before-rk-signfix-…/…/rkdeveloptool` | `1e54a0cd…256739` | `c31e8a3f…` | 同上,签名前副本 |
+
+**AD-010 结论:pin 不存在「指向签名前还是签名后」的歧义。** `038a8a0e…` 指向一个
+确定的本地构建,该文件此刻就在本机、逐字节命中。ArkDeck 的
+`authorizations/README.md` 亦记「`~/dayu200-rehearsal/rkdeveloptool/rkdeveloptool`
+实测命中」。
+
+签名确实改变哈希——捆绑件与其签名前副本剥签名后同为 `c31e8a3f…`,签名后分别是
+`231a05ef…` 与 `1e54a0cd…`。但这与 pin 无关:捆绑件剥签名后是 `c31e8a3f…`,而
+rehearsal 构建剥签名后是 `2081fb90…`,**两者本就是不同构建**,不是同一构建的签名差异。
+
+### 6.2 仍然开着的三条
+
+**AD-011 — 只读发现所钉的二进制在本机不可用。** `/opt/homebrew/bin/rkdeveloptool`
+即 `pinnedReadOnlyDiscovery`,但它 `ld` 与 `-v` 都挂起,设备在 HDC-normal 或 Loader
+皆然——**无设备操作也挂起**,所以不是设备状态所致。ArkDeck 的只读发现路径钉的正是
+这个二进制。
+
+**AD-012 — 捆绑组件与两个 pin 都不符。** ArkDeck.app 里的那个是第三个构建。
+本次全部读操作由它完成(因为它能跑),但按声明门 `tool.sha256 == profile.executableSHA256`
+它两个 pin 都过不了。捆绑组件(CHG-2026-036)与 pin 的关系需要声明。
+
+**AD-013 — `ld` 的 Mode 字段会把 HDC-normal 误报为 Maskrom。** 连续三次复现:
+
+```text
+DevNo=1	Vid=0x2207,Pid=0x5000,LocationID=102	Maskrom
+```
+
+而设备此刻 PID `0x5000`、产品串 "HDC Device"、HDC 正常应答 `param get`。
+Loader 模式下 `ld` 报 `Mode=Loader` 是对的,所以只有 HDC-normal 这一档被误报。
+
+这条最要紧。Maskrom 是往 SRAM 写 loader 的阶段;把一台**正在运行系统**的板子
+判成 Maskrom 并据此动作,正是「精确身份」规则要防的那类事故。ArkDeck 记录的
+BlueTool 正则(`…\tMode=(?P<mode>\S+)`)取的就是这个字段。
+
+ArkForge 对此免疫,而且是结构性的:模式来自 **Profile 声明的、实测的 VID/PID**
+(`usbIdentities`),transport 从不读厂商工具的 mode 词。
+`crates/arkforge-transport/src/usb.rs::a_pid_the_vendor_tool_misreports_still_resolves_by_profile`
+把这条钉住。
+
+### 6.3 ArkDeck 已知的相邻缺陷
+
+`chg-2026-025/tasks.md` 记录了同一片区域的一个已知缺陷:缺省
+`RockchipDeviceDiscoveryAdapter()` 绑 `pinnedReadOnlyDiscovery`(bbd7),而
+production composition 声明 `pinnedProduction`(038a),声明门比较这两个编译期常量
+**恒不等**。修复方向已裁定为 A(在 composition 处显式注入正确 profile)。本次实测与
+该记录一致,不构成新缺陷。
 
 ## 7. 未做
 

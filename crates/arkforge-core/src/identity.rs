@@ -174,7 +174,18 @@ pub struct ToolchainIdentity {
     pub kind: ToolchainKind,
     pub version: Version,
     /// SHA-256 of the executable or of the native backend build.
+    ///
+    /// This is the discriminator: two builds of the same source are two
+    /// toolchains, and the maturity key treats them as such.
     pub backend_digest: Sha256Digest,
+    /// Where the source came from, when it is known — an upstream commit, a
+    /// tag, a package revision.
+    ///
+    /// Not a substitute for the digest and never compared instead of it. It
+    /// exists because a receipt that says only `038a8a0e…` cannot tell a reader
+    /// *which* build that was, and on a host that carries several builds of one
+    /// upstream commit that is the question a reader actually has (AD-010).
+    pub upstream_ref: Option<String>,
 }
 
 impl CanonicalCbor for ToolchainIdentity {
@@ -184,6 +195,13 @@ impl CanonicalCbor for ToolchainIdentity {
             ("kind", CborValue::text(self.kind.as_str())),
             ("version", self.version.to_cbor()),
             ("backendDigest", self.backend_digest.to_cbor()),
+            (
+                "upstreamRef",
+                match &self.upstream_ref {
+                    Some(reference) => CborValue::text(reference.clone()),
+                    None => CborValue::Null,
+                },
+            ),
         ])
     }
 }
@@ -370,6 +388,7 @@ mod tests {
                 kind: toolchain_kind,
                 version: Version::new(1, 32, 0),
                 backend_digest: sha256(b"tool"),
+                upstream_ref: None,
             },
             host_platform: HostPlatform::new("macos", "aarch64").unwrap(),
             driver_facts_digest: sha256(b"driver"),
