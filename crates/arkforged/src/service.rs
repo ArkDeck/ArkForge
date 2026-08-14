@@ -6,8 +6,8 @@
 //! belong to the service, not to the plumbing.
 
 use arkforge_artifact::cas::{CasQuota, ContentAddressedStore};
-use arkforge_artifact::dayu200;
 use arkforge_artifact::manifest::ArtifactManifest;
+use arkforge_artifact::{dayu200, pac};
 use arkforge_core::identity::{HostPlatform, ToolchainIdentity, ToolchainKind, Version};
 use arkforge_core::ids::{OpaqueId, PlanId};
 use arkforge_core::plan::PlanMaterialization;
@@ -20,6 +20,7 @@ use arkforge_ipc::messages::{
 };
 use arkforge_ipc::{Api, SessionKind, Status};
 use arkforge_provider::rockchip::{publish_af_v1_maturity, RockchipProvider};
+use arkforge_provider::unisoc::{publish_af_v3_maturity, UnisocProvider};
 use arkforge_provider::{
     FlashIntent, FlashProvider, MaterializeRequest, MaturityRegistry, ProbeContext,
 };
@@ -34,7 +35,8 @@ use std::path::Path;
 pub struct Service {
     store: ContentAddressedStore,
     engine: Engine,
-    provider: RockchipProvider,
+    rockchip: RockchipProvider,
+    unisoc: UnisocProvider,
     maturity: MaturityRegistry,
     profiles: BTreeMap<String, DeviceProfile>,
     manifests: BTreeMap<String, ArtifactManifest>,
@@ -51,22 +53,48 @@ impl Service {
     ) -> Result<Self, String> {
         let store = ContentAddressedStore::open(store_root, CasQuota::dayu200_default())
             .map_err(|error| error.to_string())?;
-        let provider = RockchipProvider::new();
+        let rockchip = RockchipProvider::new();
+        let unisoc = UnisocProvider::new();
 
         let mut maturity = MaturityRegistry::new();
         let mut profile_map = BTreeMap::new();
         for profile in profiles {
-            // Every profile publishes its AF-V1 maturity as it is loaded, so a
-            // combination is never merely absent from the registry.
-            for toolchain in [fixed_tool_identity(), replay_toolchain_identity()] {
-                publish_af_v1_maturity(
+            // Every profile publishes its maturity as it is loaded, so a
+            // combination is never merely absent from the registry. Which
+            // provider is published for a profile follows the profile's own
+            // declared artifact formats — the daemon does not decide that a
+            // device belongs to a vendor.
+            if profile
+                .artifact_formats
+                .iter()
+                .any(|format| format.as_str() == dayu200::FORMAT_ID)
+            {
+                for toolchain in [fixed_tool_identity(), replay_toolchain_identity()] {
+                    publish_af_v1_maturity(
+                        &mut maturity,
+                        &rockchip,
+                        &profile,
+                        &toolchain,
+                        &HostPlatform::current(),
+                        driver_facts_digest(),
+                        evidence_set_digest(),
+                    )
+                    .map_err(|error| error.to_string())?;
+                }
+            }
+            if profile
+                .artifact_formats
+                .iter()
+                .any(|format| format.as_str() == pac::FORMAT_ID)
+            {
+                publish_af_v3_maturity(
                     &mut maturity,
-                    &provider,
+                    &unisoc,
                     &profile,
-                    &toolchain,
+                    &research_toolchain_identity(),
                     &HostPlatform::current(),
-                    arkforge_core::digest::sha256(b"arkforge/af-v1/driver-facts/none"),
-                    arkforge_core::digest::sha256(b"AD-003,AD-005,AD-006"),
+                    driver_facts_digest(),
+                    evidence_set_digest(),
                 )
                 .map_err(|error| error.to_string())?;
             }
@@ -82,7 +110,8 @@ impl Service {
         Ok(Service {
             store,
             engine: Engine::new(),
-            provider,
+            rockchip,
+            unisoc,
             maturity,
             profiles: profile_map,
             manifests: BTreeMap::new(),
@@ -266,7 +295,7 @@ impl Service {
                         )
                     }
                 };
-                match dayu200::inspect(object) {
+                match inspect_container(object) {
                     Ok(manifest) => {
                         self.manifests.insert(artifact_id.clone(), manifest.clone());
                         manifest
@@ -276,7 +305,7 @@ impl Service {
                             request,
                             Status::Refused,
                             "ARTIFACT_REJECTED",
-                            &error.to_string(),
+                            &error,
                         )
                     }
                 }
@@ -331,7 +360,19 @@ impl Service {
             else {
                 continue;
             };
-            return match self.provider.probe(&ProbeContext {
+            let provider = provider_for(profile, &self.rockchip, &self.unisoc);
+            let Some(provider) = provider else {
+                return self.refuse(
+                    request,
+                    Status::NotFound,
+                    "NO_PROVIDER_FOR_PROFILE",
+                    &format!(
+                        "no registered provider handles the artifact formats profile {} declares",
+                        profile.id
+                    ),
+                );
+            };
+            return match provider.probe(&ProbeContext {
                 transport,
                 observation,
                 profile,
@@ -397,6 +438,18 @@ impl Service {
             );
         };
 
+        let Some(provider) = provider_for(&profile, &self.rockchip, &self.unisoc) else {
+            return self.refuse(
+                request,
+                Status::NotFound,
+                "NO_PROVIDER_FOR_PROFILE",
+                &format!(
+                    "no registered provider handles the artifact formats profile {} declares",
+                    profile.id
+                ),
+            );
+        };
+
         let mut probe = None;
         for transport in &self.transports {
             let Ok(observations) = transport.discover(&TypedDiscoveryFilter::default(), self.now_epoch_ms)
@@ -407,8 +460,7 @@ impl Service {
                 .iter()
                 .find(|candidate| candidate.observation_id.as_str() == observation_id)
             {
-                probe = self
-                    .provider
+                probe = provider
                     .probe(&ProbeContext {
                         transport,
                         observation,
@@ -447,17 +499,23 @@ impl Service {
                 binding_revision: 0,
                 stable_identity_digest: probe.facts_digest,
             },
-            toolchain: fixed_tool_identity(),
+            toolchain: if profile
+                .artifact_formats
+                .iter()
+                .any(|format| format.as_str() == pac::FORMAT_ID)
+            {
+                research_toolchain_identity()
+            } else {
+                fixed_tool_identity()
+            },
             host_platform: HostPlatform::current(),
-            driver_facts_digest: arkforge_core::digest::sha256(
-                b"arkforge/af-v1/driver-facts/none",
-            ),
-            evidence_set_digest: arkforge_core::digest::sha256(b"AD-003,AD-005,AD-006"),
+            driver_facts_digest: driver_facts_digest(),
+            evidence_set_digest: evidence_set_digest(),
             created_at_epoch_ms: self.now_epoch_ms,
             plan_lifetime_ms: 3_600_000,
         };
 
-        match self.provider.materialize(&materialize, &self.maturity) {
+        match provider.materialize(&materialize, &self.maturity) {
             Ok(PlanMaterialization::Assessment(assessment)) => {
                 let mut message = Assessment {
                     availability: assessment.availability.as_str().to_string(),
@@ -520,6 +578,79 @@ impl Service {
                 &error.to_string(),
             ),
         }
+    }
+}
+
+/// Chooses the provider by the artifact formats the *profile* declares.
+///
+/// The daemon does not decide that a device belongs to a vendor; the profile
+/// says which formats apply, and a provider that handles one of them takes it.
+/// A profile whose formats nobody handles gets a refusal, not a default.
+fn provider_for<'a>(
+    profile: &DeviceProfile,
+    rockchip: &'a RockchipProvider,
+    unisoc: &'a UnisocProvider,
+) -> Option<&'a dyn FlashProvider> {
+    if profile
+        .artifact_formats
+        .iter()
+        .any(|format| format.as_str() == dayu200::FORMAT_ID)
+    {
+        return Some(rockchip);
+    }
+    if profile
+        .artifact_formats
+        .iter()
+        .any(|format| format.as_str() == pac::FORMAT_ID)
+    {
+        return Some(unisoc);
+    }
+    None
+}
+
+/// Reads a container with the parser its framing indicates.
+///
+/// gzip's magic is a fact of the container, not a guess about the device, so
+/// sniffing it is legitimate. Anything else falls to the research observer,
+/// which claims nothing about what it read.
+fn inspect_container<R: Read>(mut source: R) -> Result<ArtifactManifest, String> {
+    let mut magic = [0u8; 2];
+    let mut filled = 0usize;
+    while filled < magic.len() {
+        match source.read(&mut magic[filled..]) {
+            Ok(0) => break,
+            Ok(count) => filled += count,
+            Err(error) => return Err(error.to_string()),
+        }
+    }
+    let head = magic[..filled].to_vec();
+    let rejoined = std::io::Read::chain(std::io::Cursor::new(head), source);
+
+    if filled == 2 && magic[0] == 0x1f && magic[1] == 0x8b {
+        dayu200::inspect(rejoined).map_err(|error| error.to_string())
+    } else {
+        pac::inspect(rejoined)
+            .map(|(manifest, _)| manifest)
+            .map_err(|error| error.to_string())
+    }
+}
+
+fn driver_facts_digest() -> Sha256Digest {
+    arkforge_core::digest::sha256(b"arkforge/driver-facts/none-measured")
+}
+
+fn evidence_set_digest() -> Sha256Digest {
+    arkforge_core::digest::sha256(b"AD-003,AD-005,AD-006")
+}
+
+/// The research backend the Unisoc provider dispatches through — which is to
+/// say, no backend at all.
+fn research_toolchain_identity() -> ToolchainIdentity {
+    ToolchainIdentity {
+        id: OpaqueId::new("research-inspect").expect("literal identifier"),
+        kind: ToolchainKind::Replay,
+        version: Version::new(0, 1, 0),
+        backend_digest: arkforge_core::digest::sha256(b"arkforge/research-inspect"),
     }
 }
 

@@ -99,7 +99,7 @@ fn the_read_domain_encodes_ad006() {
         profile.read_domain.read,
         ReadDomainDeclaration::CharacterizeAtRuntime
     );
-    assert_eq!(profile.read_domain.erased_medium_filler, 0xCC);
+    assert_eq!(profile.read_domain.erased_medium_filler, Some(0xCC));
 
     // The profile source must not pin a window size: the 65536-sector figure is
     // one session's observation (AD-006), and a constant here would turn it

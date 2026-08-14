@@ -14,6 +14,7 @@ pub mod dayu200;
 pub mod fixture;
 pub mod inflate;
 pub mod manifest;
+pub mod pac;
 pub mod tar;
 
 pub use cas::{

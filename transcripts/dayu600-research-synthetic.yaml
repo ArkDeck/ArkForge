@@ -1,0 +1,65 @@
+# DAYU600 research transcript — SYNTHETIC. NOT EVIDENCE.
+#
+# Provenance: synthetic.
+#
+# Nothing in this file was observed on a device. It is hand-written so the
+# DAYU600 read-only path — discover, open, probe, assess — can be exercised
+# without hardware, and so the wrong-device tests have something to be wrong
+# about.
+#
+# `TranscriptProvenance::supports_protocol_claims()` returns false for this
+# provenance, and `crates/arkforge-provider/tests/dayu600_vertical.rs` asserts
+# it. Concretely, this file may NOT be cited for:
+#
+#   - the download-mode USB identity (UNI-U05) — the digests below are derived
+#     from strings, not read from a descriptor;
+#   - a stable chip identifier (UNI-U06);
+#   - any protocol request, ACK, error or timeout (UNI-U07);
+#   - anything at all about the PAC format (UNI-U01).
+#
+# When a real DAYU600 is available, the capture that replaces this file will
+# carry `provenance: captured`, and that single word is what changes whether it
+# can back a claim (architecture.md 11.4, 24.1).
+#
+# The `hdc-normal` observation is the one mode with a real basis: AD-004 records
+# that `param get ohos.boot.hardware` answers `uis7885` over HDC on DAYU600.
+# Even there, the identity digests here are synthetic.
+
+schemaVersion: arkforge.transcript/v1
+
+transcript:
+  id: DAYU600-RESEARCH-SYNTHETIC
+  provenance: synthetic
+  source: "hand-written; no device was observed. See AD-004 for the only confirmed DAYU600 facts."
+  profileId: org.openharmony.dayu600
+
+records:
+  - sequence: 1
+    kind: observation
+    atEpochMs: 1754380800000
+    status: ok
+    observation:
+      id: OBS-DAYU600-NORMAL
+      mode: hdc-normal
+      topologyDigest: 1111111111111111111111111111111111111111111111111111111111111111
+      descriptorDigest: 2222222222222222222222222222222222222222222222222222222222222222
+      serialKind: descriptor
+      serialDigest: 3333333333333333333333333333333333333333333333333333333333333333
+      identityStrength: serialAsserted
+    semantic:
+      - key: ohos.boot.hardware
+        value: "uis7885"
+      - key: basis
+        value: "AD-004 records this answer over HDC; the identity digests in this record are synthetic"
+
+  - sequence: 2
+    kind: invocation
+    atEpochMs: 1754380801000
+    durationMs: 120
+    status: ok
+    action: read-product-facts
+    semantic:
+      - key: const.product.model
+        value: "DAYU600"
+      - key: basis
+        value: "synthetic; no device answered"

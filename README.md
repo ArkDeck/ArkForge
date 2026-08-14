@@ -11,8 +11,13 @@ ArkForge 决定：该已授权语义计划如何通过具体固件格式、Provi
 ## 状态
 
 AF-V1(Core + DAYU200 read-only parity)已完成，见
-[验收证据](docs/evidence/AF-V1-acceptance.md)。当前构建是**只读垂直**：
+[验收证据](docs/evidence/AF-V1-acceptance.md)；AF-V3 的软件半已完成，见
+[AF-V3 验收证据](docs/evidence/AF-V3-acceptance.md)。当前构建是**只读垂直**：
 `startExecution` 不可用，仓内没有 USB 后端，也没有 vendor 可执行调用路径。
+
+DAYU600 只有 inspect 与非可执行 PlanAssessment：PAC 格式、下载协议与数据影响
+全部未知(UNI-U01..U12)，17.5 的十八条证据门 0 条 PASS，见
+[证据账本](docs/evidence/ledger.md)。
 
 ```bash
 cargo test --workspace --offline
@@ -31,7 +36,8 @@ cargo run -p arkforged --bin arkforge-cli -- --socket /tmp/arkforge/public.sock 
 ## 文档
 
 - 架构正本：[docs/architecture.md](docs/architecture.md)(状态 Proposed；ArkDeck 审计基线 `2849c5c1`)
-- 任务台账：[TASKS.md](TASKS.md)(AF-V1 完成；AF-V2/AF-V4 阻塞于真机与证据门)
+- 任务台账：[TASKS.md](TASKS.md)(AF-V1 完成、AF-V3 软件半完成；AF-V2/AF-V4 阻塞于真机与证据门)
+- 证据账本：[docs/evidence/ledger.md](docs/evidence/ledger.md)
 - 实施决定：[docs/decisions/](docs/decisions/)
 - 验收证据：[docs/evidence/](docs/evidence/)
 
@@ -54,6 +60,7 @@ Protobuf wire codec 均在仓内实现并对公开测试向量，理由见
 
 - DAYU200(Rockchip RK3568 / RockUSB)：首个生产垂直，首版封装固定哈希 rkdeveloptool；
 - DAYU600(Unisoc uis7885 / PAC)：证据门(architecture.md 17.5)通过前仅 inspect 与非可执行 PlanAssessment。
+  当前 0/18 通过；`arkforge-artifact::pac` 是结构观测器而非 PAC parser。
 
 ## 与 ArkDeck 的关系
 

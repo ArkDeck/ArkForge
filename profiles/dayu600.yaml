@@ -1,0 +1,110 @@
+# DAYU600 (Unisoc uis7885 / PAC) DeviceProfile — research profile
+#
+# This profile describes a device nobody on this project has measured. It exists
+# so DAYU600 can be inspected, displayed and reasoned about through the same API
+# as DAYU200 (architecture.md 22 AF-V3), and it is written so that every fact it
+# does not have is *visible* rather than defaulted.
+#
+# What is confirmed (AD-004, static analysis only):
+#   - BlueTool 3.3.0 ships CmdDloader.exe, UNISOC DLLs and PAC resources;
+#   - `param get ohos.boot.hardware` answers `uis7885` on DAYU600;
+#   - that path is a different flashing implementation from DAYU200/RockUSB.
+#
+# What is NOT confirmed, and therefore not written here: the PAC format, the FDL
+# stages and their load addresses, the download-mode USB identity, the storage
+# geometry, the partition layout, the data impact, the erase/write/verify
+# semantics, cancellation, recovery, driver requirements and the vendor tool
+# licence. The full list is UNI-U01..UNI-U12 in
+# `crates/arkforge-artifact/src/pac.rs` and `docs/evidence/ledger.md`.
+#
+# Consequences, all of them enforced by code rather than by this comment:
+#   - `allowedTargets` is empty, so no target is writable;
+#   - `dataImpact` is unknown on every axis;
+#   - `logicalBlockSize` and `erasedMediumFiller` are `unknown`, so a sector
+#     offset cannot become a byte address and a readback cannot be classified;
+#   - `hardwareRevisions.allow` is empty: nothing has been measured, and an
+#     empty list claims nothing (a wildcard would claim everything and is
+#     refused at load);
+#   - `modeTransitions` is empty: no transition has been observed.
+#
+# `DeviceProfile::execution_blockers()` reports each of these, and the Unisoc
+# provider turns them into an assessment. There is no field in this file that
+# could make DAYU600 executable — that requires the eighteen evidence gates of
+# architecture.md 17.5, none of which has passed.
+
+schemaVersion: arkforge.device-profile/v1
+
+profile:
+  id: org.openharmony.dayu600
+  version: 0.1.0
+
+identity:
+  productModels: [DAYU600]
+  soc:
+    vendor: unisoc
+    # AD-004: `ohos.boot.hardware` answers uis7885. That identifies the SoC
+    # family; it says nothing about the download protocol.
+    family: uis7885
+  hardwareRevisions:
+    # No revision has been measured. Empty is the honest value; a wildcard is
+    # refused at load because it would be a claim about untested hardware.
+    allow: []
+
+providers:
+  - id: arkforge.unisoc
+    backend: research-inspect
+    minimumVersion: 0.1.0
+    maximumVersionExclusive: 1.0.0
+
+artifactCompatibility:
+  formats: [unisoc-pac]
+  knownMetadataMembers: []
+
+# Modes are named so an observation can be *labelled*, not because their
+# identity is known. UNI-U05 and UNI-U06 remain open: the USB identity of each
+# download stage and any stable chip identifier are unmeasured.
+modes:
+  - id: hdc-normal
+    aliases: [normal]
+  - id: unisoc-download
+
+# No transition has been observed, so none is declared. A plan that needed one
+# would have nothing to reference — which is the point.
+modeTransitions: []
+
+storage:
+  kind: unknown
+  # Unmeasured. Writing 512 here would be a guess that reads like a measurement.
+  logicalBlockSize: unknown
+
+readDomain:
+  # Both faces are unmeasured. AD-006 taught that the two are not necessarily
+  # the same size even on a device that has been flashed successfully, so
+  # neither may be assumed from the other.
+  write: characterize-at-runtime
+  read: characterize-at-runtime
+  erasedMediumFiller: unknown
+
+# Nothing is writable. This is not a placeholder to be filled in later by
+# configuration; it is the state of the evidence.
+allowedTargets: []
+
+# Nothing is known to be protected either — a protected list would imply a known
+# partition table (UNI-U08).
+protectedTargets: []
+
+dataImpact:
+  userdata: unknown
+  calibration: unknown
+  nonVolatileConfig: unknown
+  secureStorage: unknown
+
+recovery:
+  supportsCompleteOverwrite: false
+  version: 0.1.0
+  coveredEffects: []
+  unsupportedStates:
+    - "no recovery semantics are known for this device (UNI-U10)"
+    - "no effect vocabulary exists to cover, because no effect is known (UNI-U08)"
+
+evidenceRefs: [AD-004]

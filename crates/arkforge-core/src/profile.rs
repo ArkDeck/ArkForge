@@ -187,7 +187,9 @@ impl CanonicalCbor for ModeTransition {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct StorageDeclaration {
     pub kind: OpaqueId,
-    pub logical_block_size: u32,
+    /// `None` when the medium's block size has not been measured. An
+    /// executable plan needs it; a research profile may honestly lack it.
+    pub logical_block_size: Option<u32>,
 }
 
 impl CanonicalCbor for StorageDeclaration {
@@ -196,7 +198,10 @@ impl CanonicalCbor for StorageDeclaration {
             ("kind", self.kind.to_cbor()),
             (
                 "logicalBlockSize",
-                CborValue::Unsigned(self.logical_block_size as u64),
+                match self.logical_block_size {
+                    Some(size) => CborValue::Unsigned(size as u64),
+                    None => CborValue::Null,
+                },
             ),
         ])
     }
@@ -210,7 +215,8 @@ pub struct ReadDomainPolicy {
     pub write: WriteDomainDeclaration,
     pub read: ReadDomainDeclaration,
     /// The byte an erased or unreachable region reads as. On DAYU200, `0xCC`.
-    pub erased_medium_filler: u8,
+    /// `None` when nobody has measured it, which is different from `Some(0x00)`.
+    pub erased_medium_filler: Option<u8>,
 }
 
 impl CanonicalCbor for ReadDomainPolicy {
@@ -220,7 +226,10 @@ impl CanonicalCbor for ReadDomainPolicy {
             ("read", self.read.to_cbor()),
             (
                 "erasedMediumFiller",
-                CborValue::Unsigned(self.erased_medium_filler as u64),
+                match self.erased_medium_filler {
+                    Some(byte) => CborValue::Unsigned(byte as u64),
+                    None => CborValue::Null,
+                },
             ),
         ])
     }
@@ -448,33 +457,72 @@ impl DeviceProfile {
             .find(|transition| &transition.from == from && &transition.to == to)
     }
 
-    /// Enforces the invariants of architecture.md 18.3.
+    /// Why this profile cannot back an executable plan, if it cannot.
+    ///
+    /// An empty list does not mean a plan *will* be executable — provider
+    /// maturity, artifact unknowns and the authority all still have a say. It
+    /// means the Profile itself is not the reason.
+    pub fn execution_blockers(&self) -> Vec<ProfileExecutionBlocker> {
+        let mut blockers = Vec::new();
+
+        let unknown_axes = self.data_impact.unknown_axes();
+        if !unknown_axes.is_empty() {
+            blockers.push(ProfileExecutionBlocker::UnknownDataImpact(
+                unknown_axes.iter().map(|axis| axis.to_string()).collect(),
+            ));
+        }
+        if self.storage.logical_block_size.is_none() {
+            blockers.push(ProfileExecutionBlocker::UnknownBlockSize);
+        }
+        if self.read_domain.erased_medium_filler.is_none() {
+            blockers.push(ProfileExecutionBlocker::UnknownErasedMediumFiller);
+        }
+        if let HardwareRevisionPolicy::Allow(revisions) = &self.hardware_revisions {
+            if revisions.is_empty() {
+                blockers.push(ProfileExecutionBlocker::NoHardwareRevisionMeasured);
+            }
+        }
+        if self.allowed_targets.is_empty() {
+            blockers.push(ProfileExecutionBlocker::NoWritableTargets);
+        }
+        if self.mode_transitions.is_empty() {
+            blockers.push(ProfileExecutionBlocker::NoModeTransitions);
+        }
+        blockers
+    }
+
+    /// Whether the Profile itself permits an executable plan.
+    pub fn permits_executable_plan(&self) -> bool {
+        self.execution_blockers().is_empty()
+    }
+
+    /// Enforces the invariants of architecture.md 18.3 that are about the
+    /// profile being *well formed*.
+    ///
+    /// Missing device facts are not schema errors. A DAYU600 profile whose data
+    /// impact, block size and hardware revisions are all unknown is an accurate
+    /// profile of a device nobody has measured, and it must be loadable so it
+    /// can be displayed and reasoned about. What such a profile may not do is
+    /// back an executable plan — that is [`Self::execution_blockers`], and the
+    /// Provider consults it before materializing anything (architecture.md
+    /// 5.2, 18.3).
     pub fn validate(&self) -> Result<(), ProfileError> {
         if self.schema_version != SCHEMA_VERSION {
             return Err(ProfileError::UnknownSchemaVersion(
                 self.schema_version.clone(),
             ));
         }
-        if self.storage.logical_block_size == 0 {
+        if self.storage.logical_block_size == Some(0) {
+            // Zero is not "unknown"; it is a wrong answer.
             return Err(ProfileError::ZeroBlockSize);
         }
 
-        // A production profile may not cover an unbounded revision set without
-        // naming the evidence that makes it safe.
+        // A wildcard revision is a *claim* about untested hardware, so it stays
+        // a hard error. An empty list claims nothing and is merely unexecutable.
         if let HardwareRevisionPolicy::Allow(revisions) = &self.hardware_revisions {
-            if revisions.is_empty() {
-                return Err(ProfileError::NoHardwareRevisions);
-            }
             if revisions.iter().any(|revision| revision == "*") {
                 return Err(ProfileError::WildcardHardwareRevision);
             }
-        }
-
-        let unknown_axes = self.data_impact.unknown_axes();
-        if !unknown_axes.is_empty() {
-            return Err(ProfileError::UnknownDataImpact(
-                unknown_axes.iter().map(|axis| axis.to_string()).collect(),
-            ));
         }
 
         // Allowed and protected must not intersect: a protected target that a
@@ -567,6 +615,65 @@ impl DeviceProfile {
             return Err(ProfileError::RecoveryWithoutCoverage);
         }
         Ok(())
+    }
+}
+
+/// A device fact the Profile does not carry, which an executable plan needs.
+///
+/// Each variant is a fact somebody has to *measure*, not a setting somebody has
+/// to change — which is why they read as evidence requirements rather than as
+/// configuration errors (architecture.md 5.2).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ProfileExecutionBlocker {
+    UnknownDataImpact(Vec<String>),
+    UnknownBlockSize,
+    UnknownErasedMediumFiller,
+    NoHardwareRevisionMeasured,
+    NoWritableTargets,
+    NoModeTransitions,
+}
+
+impl ProfileExecutionBlocker {
+    /// A stable identifier, so an assessment can name the blocker the same way
+    /// every time and an evidence item can close it by name.
+    pub fn id(&self) -> &'static str {
+        match self {
+            ProfileExecutionBlocker::UnknownDataImpact(_) => "PROF-B01",
+            ProfileExecutionBlocker::UnknownBlockSize => "PROF-B02",
+            ProfileExecutionBlocker::UnknownErasedMediumFiller => "PROF-B03",
+            ProfileExecutionBlocker::NoHardwareRevisionMeasured => "PROF-B04",
+            ProfileExecutionBlocker::NoWritableTargets => "PROF-B05",
+            ProfileExecutionBlocker::NoModeTransitions => "PROF-B06",
+        }
+    }
+}
+
+impl fmt::Display for ProfileExecutionBlocker {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            ProfileExecutionBlocker::UnknownDataImpact(axes) => write!(
+                f,
+                "data impact is unknown for {}; no plan may be executed until each axis is measured",
+                axes.join(", ")
+            ),
+            ProfileExecutionBlocker::UnknownBlockSize => {
+                f.write_str("the medium's logical block size has not been measured")
+            }
+            ProfileExecutionBlocker::UnknownErasedMediumFiller => f.write_str(
+                "the erased-medium filler byte has not been measured, so a readback cannot be \
+                 classified",
+            ),
+            ProfileExecutionBlocker::NoHardwareRevisionMeasured => f.write_str(
+                "no hardware revision has been measured; a production profile names the \
+                 revisions it was tested on",
+            ),
+            ProfileExecutionBlocker::NoWritableTargets => {
+                f.write_str("the profile declares no writable target")
+            }
+            ProfileExecutionBlocker::NoModeTransitions => f.write_str(
+                "the profile declares no mode transition, so no plan can reach a writable mode",
+            ),
+        }
     }
 }
 
@@ -703,6 +810,27 @@ fn boolean(value: &YamlValue, key: &str, path: &str) -> Result<bool, ProfileErro
         Some(other) => Err(bad(path, format!("expected true or false, found {other:?}"))),
         None => Err(missing(path)),
     }
+}
+
+/// Reads a number that may honestly be `unknown`.
+///
+/// `unknown` is spelled out rather than left absent: an omitted field reads as
+/// an oversight, a written `unknown` reads as a measurement nobody has taken.
+fn optional_unsigned(
+    value: &YamlValue,
+    key: &str,
+    path: &str,
+) -> Result<Option<u64>, ProfileError> {
+    let text = value
+        .get(key)
+        .and_then(YamlValue::as_scalar)
+        .ok_or_else(|| missing(path))?;
+    if text == "unknown" {
+        return Ok(None);
+    }
+    parse_number(text)
+        .map(Some)
+        .ok_or_else(|| bad(path, format!("expected a number or `unknown`, found {text:?}")))
 }
 
 fn unsigned(value: &YamlValue, key: &str, path: &str) -> Result<u64, ProfileError> {
@@ -903,11 +1031,12 @@ pub fn load(source: &str) -> Result<DeviceProfile, ProfileError> {
     let storage_block = document.get("storage").ok_or_else(|| missing("storage"))?;
     let storage = StorageDeclaration {
         kind: identifier(storage_block, "kind", "storage.kind")?,
-        logical_block_size: unsigned(
+        logical_block_size: optional_unsigned(
             storage_block,
             "logicalBlockSize",
             "storage.logicalBlockSize",
-        )? as u32,
+        )?
+        .map(|size| size as u32),
     };
 
     let read_block = document
@@ -918,11 +1047,12 @@ pub fn load(source: &str) -> Result<DeviceProfile, ProfileError> {
             .ok_or_else(|| bad("readDomain.write", "expected full-disk or characterize-at-runtime"))?,
         read: ReadDomainDeclaration::parse(scalar(read_block, "readDomain.read")?)
             .ok_or_else(|| bad("readDomain.read", "expected full or characterize-at-runtime"))?,
-        erased_medium_filler: unsigned(
+        erased_medium_filler: optional_unsigned(
             read_block,
             "erasedMediumFiller",
             "readDomain.erasedMediumFiller",
-        )? as u8,
+        )?
+        .map(|byte| byte as u8),
     };
 
     let mut allowed_targets = Vec::new();
@@ -1137,7 +1267,7 @@ dataImpact:
         let profile = load(MINIMAL).unwrap();
         assert_eq!(profile.id.as_str(), "test.profile");
         assert_eq!(profile.version, Version::new(1, 0, 0));
-        assert_eq!(profile.read_domain.erased_medium_filler, 0xCC);
+        assert_eq!(profile.read_domain.erased_medium_filler, Some(0xCC));
         assert_eq!(profile.read_domain.write, WriteDomainDeclaration::FullDisk);
         assert_eq!(
             profile.read_domain.read,
@@ -1193,11 +1323,70 @@ dataImpact:
     }
 
     #[test]
-    fn unknown_userdata_impact_is_refused() {
+    fn unknown_userdata_impact_loads_but_blocks_execution() {
+        // A profile of a device nobody has measured is an accurate profile, and
+        // it has to be loadable so it can be shown. What it may not do is back
+        // an executable plan.
         let document = MINIMAL.replace("userdata: overwritten", "userdata: unknown");
+        let profile = load(&document).expect("an honest profile still loads");
+        assert!(!profile.permits_executable_plan());
+        assert!(profile
+            .execution_blockers()
+            .iter()
+            .any(|blocker| matches!(
+                blocker,
+                ProfileExecutionBlocker::UnknownDataImpact(axes) if axes.contains(&"userdata".to_string())
+            )));
+    }
+
+    #[test]
+    fn a_fully_measured_profile_has_no_execution_blockers() {
+        let profile = load(MINIMAL).unwrap();
+        assert!(
+            profile.permits_executable_plan(),
+            "{:?}",
+            profile.execution_blockers()
+        );
+    }
+
+    #[test]
+    fn unknown_block_size_and_filler_load_and_block() {
+        let document = MINIMAL
+            .replace("logicalBlockSize: 512", "logicalBlockSize: unknown")
+            .replace("erasedMediumFiller: 0xCC", "erasedMediumFiller: unknown");
+        let profile = load(&document).unwrap();
+        assert_eq!(profile.storage.logical_block_size, None);
+        assert_eq!(profile.read_domain.erased_medium_filler, None);
+        let ids: Vec<&str> = profile
+            .execution_blockers()
+            .iter()
+            .map(|blocker| blocker.id())
+            .collect();
+        assert!(ids.contains(&"PROF-B02"), "{ids:?}");
+        assert!(ids.contains(&"PROF-B03"), "{ids:?}");
+    }
+
+    #[test]
+    fn a_zero_block_size_is_still_a_hard_error_because_it_is_a_wrong_answer() {
+        let document = MINIMAL.replace("logicalBlockSize: 512", "logicalBlockSize: 0");
+        assert!(matches!(load(&document), Err(ProfileError::ZeroBlockSize)));
+    }
+
+    #[test]
+    fn an_empty_revision_list_loads_but_blocks_while_a_wildcard_never_loads() {
+        let empty = MINIMAL.replace("allow: [rev-a]", "allow: []");
+        let profile = load(&empty).expect("claiming nothing is honest");
+        assert!(profile
+            .execution_blockers()
+            .iter()
+            .any(|blocker| blocker.id() == "PROF-B04"));
+
+        // A wildcard is a claim about hardware nobody tested, so it stays a
+        // hard error.
+        let wildcard = MINIMAL.replace("allow: [rev-a]", "allow: [\"*\"]");
         assert!(matches!(
-            load(&document),
-            Err(ProfileError::UnknownDataImpact(_))
+            load(&wildcard),
+            Err(ProfileError::WildcardHardwareRevision)
         ));
     }
 

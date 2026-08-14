@@ -375,7 +375,7 @@ impl RockchipProvider {
                     target.partition
                 ))
             })?;
-            let block_size = profile.storage.logical_block_size as u64;
+            let block_size = block_size(profile)?;
             let start = target
                 .offset_sectors
                 .checked_mul(block_size)
@@ -436,7 +436,7 @@ impl RockchipProvider {
         for target in &ordered {
             let member_name = target.source_member.as_deref().expect("checked above");
             let member = artifact.member(member_name).expect("checked above");
-            let block_size = profile.storage.logical_block_size as u64;
+            let block_size = block_size(profile)?;
             let range = ByteRange::new(
                 target.offset_sectors * block_size,
                 member.size_bytes,
@@ -464,7 +464,10 @@ impl RockchipProvider {
                     ),
                     (
                         "erasedMediumFiller",
-                        CborValue::Unsigned(profile.read_domain.erased_medium_filler as u64),
+                        match profile.read_domain.erased_medium_filler {
+                            Some(byte) => CborValue::Unsigned(byte as u64),
+                            None => CborValue::Null,
+                        },
                     ),
                 ]),
             );
@@ -654,6 +657,22 @@ fn digest_of(action: &PrivateActionRecord) -> Result<Sha256Digest, ProviderError
     action
         .digest()
         .map_err(|error| ProviderError::Core(error.to_string()))
+}
+
+/// A plan needs an exact byte address, so an unmeasured block size is a hard
+/// stop here rather than a default of 512.
+fn block_size(profile: &DeviceProfile) -> Result<u64, ProviderError> {
+    profile
+        .storage
+        .logical_block_size
+        .map(u64::from)
+        .ok_or_else(|| {
+            ProviderError::FactsInsufficient(format!(
+                "profile {} does not declare a logical block size, so a sector offset cannot \
+                 become a byte address",
+                profile.id
+            ))
+        })
 }
 
 fn mode(name: &str) -> Result<DeviceMode, ProviderError> {

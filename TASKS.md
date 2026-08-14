@@ -1,12 +1,12 @@
 # ArkForge 实施任务台账
 
-> 状态总览(2026-08-14)：AF-V1 完成。任务定义正本是 [docs/architecture.md](docs/architecture.md) 第 22 节；本文件是执行台账，若两处出入，以 architecture.md 为准并回改本文件。
+> 状态总览(2026-08-14)：AF-V1 完成；AF-V3 软件半完成。任务定义正本是 [docs/architecture.md](docs/architecture.md) 第 22 节；本文件是执行台账，若两处出入，以 architecture.md 为准并回改本文件。
 
 | 任务 | 内容 | 依赖 | 状态 |
 |---|---|---|---|
 | AF-V1 | ArkForge Core + DAYU200 read-only parity | — | ✅ 完成([验收证据](docs/evidence/AF-V1-acceptance.md)) |
 | AF-V2 | DAYU200 ArkForge production cutover | AF-V1 | ⛔ 阻塞：需真实 DAYU200 硬件 + ArkDeck 仓变更 |
-| AF-V3 | DAYU600 evidence + plan-only | AF-V1(共用 API 面) | ⬜ 未开工(软件半可做，证据半需真机) |
+| AF-V3 | DAYU600 evidence + plan-only | AF-V1(共用 API 面) | 🟡 软件半完成([验收证据](docs/evidence/AF-V3-acceptance.md))；证据半需真机 |
 | AF-V4 | DAYU600 production execute | AF-V3 + AF-V2(engine) + 17.5 证据门全 PASS | ⛔ 阻塞：18 条证据门 0 条 PASS |
 
 ## 全局规矩(摘自 architecture.md 7.4 / 21)
@@ -110,12 +110,9 @@ inspect
 
 ## AF-V3：DAYU600 evidence + plan-only
 
-> **可做/不可做拆分(2026-08-14)**：软件半可做——PAC ResearchOnly parser、
-> exact unknown list、parser fuzz、DAYU600 Profile(execute unavailable)、
-> startExecution 无 bypass、bluetool 静态证据入 ledger。
-> 证据半不可做——`descriptor/transcript capture` 需真实 DAYU600；
-> 且无 PAC 样本与格式规范(UNI-U01 = missing)时，parser 只能做通用结构扫描，
-> 这本就是 10.5 对 ResearchOnly 的定义。
+> **状态(2026-08-14)**：软件半已完成，见[验收证据](docs/evidence/AF-V3-acceptance.md)。
+> 证据半未做——`descriptor/transcript capture` 需真实 DAYU600；17.5 十八条门
+> 0 条 PASS(第 18 条记为 HELD，见 [ledger](docs/evidence/ledger.md))。
 
 **目标**
 
@@ -130,14 +127,22 @@ PAC inspect
 
 **验收**
 
-- [ ] bluetool static evidence 纳入 ledger
-- [ ] PAC parser ResearchOnly
-- [ ] exact unknown list
-- [ ] descriptor/transcript capture
-- [ ] wrong device tests
-- [ ] parser fuzz
-- [ ] startExecution 无 bypass
-- [ ] 未把 plan-only 记为真机刷写通过
+- [x] bluetool static evidence 纳入 ledger(AD-004，含「仅静态」边界小节；ledger 可机器检查)
+- [x] PAC parser ResearchOnly(结构观测器；confidence 恒为 ResearchOnly，任何输入不可改变)
+- [x] exact unknown list(UNI-U01..U12，12 条；parser 与 ledger 双向一致)
+- [ ] descriptor/transcript capture — **需真实 DAYU600**；本仓 transcript 为 synthetic
+- [x] wrong device tests(6 个方向，含「共享模式名不构成认领」)
+- [x] parser fuzz(3600 变异 + 1500 confidence 不变量)
+- [x] startExecution 无 bypass(类型/Profile/Maturity/API 四层)
+- [x] 未把 plan-only 记为真机刷写通过(provenance 分级 + 十八门 0 PASS 断言)
+
+**生产代码**
+
+- [x] `arkforge-artifact::pac` 结构观测器
+- [x] `profiles/dayu600.yaml` 研究 profile(无可写目标)
+- [x] `arkforge-provider::unisoc` 仅出 PlanAssessment
+- [x] `docs/evidence/ledger.md` 证据账本(AD-001..007 / UNI-U01..U12 / 17.5 十八门)
+- [x] daemon 按 profile 声明的 artifact format 分派 provider，DAYU600 走同一 API
 
 ## AF-V4：DAYU600 production execute
 

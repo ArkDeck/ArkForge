@@ -14,6 +14,7 @@
 use arkforge_artifact::dayu200;
 use arkforge_artifact::fixture;
 use arkforge_artifact::inflate::GzipReader;
+use arkforge_artifact::pac;
 use arkforge_artifact::tar::TarReader;
 use std::io::Read;
 
@@ -179,4 +180,71 @@ fn a_lying_stored_block_length_is_rejected() {
         reader.read_to_end(&mut out).is_err(),
         "a corrupted stored-block length must not decode"
     );
+}
+
+/// The PAC research parser reads containers this project has no specification
+/// for, from sources it does not control. A panic there is a denial of service
+/// on the daemon that holds device authority, so the property is the same as
+/// for the DAYU200 parser: any input, typed outcome, no panic.
+#[test]
+fn arbitrary_containers_never_panic_the_pac_research_parser() {
+    let bases: Vec<Vec<u8>> = vec![
+        // Something shaped like a firmware package.
+        {
+            let mut bytes = b"BP_R1.0.0".to_vec();
+            bytes.extend_from_slice(&[0u8; 7]);
+            for index in 0..12u8 {
+                let start = bytes.len();
+                bytes.push(0x02);
+                bytes.push(index);
+                for character in format!("IMG_{index}").chars() {
+                    bytes.push(character as u8);
+                    bytes.push(0);
+                }
+                while bytes.len() - start < 32 {
+                    bytes.push(0);
+                }
+            }
+            bytes.extend(fixture::fixture_body("pac-payload", 8_000));
+            bytes.extend_from_slice(&[0xffu8; 1024]);
+            bytes
+        },
+        // Something that is not one at all.
+        fixture::fixture_body("noise", 12_000),
+        vec![0u8; 8_000],
+        vec![0xffu8; 8_000],
+    ];
+    for (index, base) in bases.iter().enumerate() {
+        for seed in 0..900u64 {
+            let input = mutate(seed ^ ((index as u64) << 40), base);
+            let _ = pac::inspect(input.as_slice());
+        }
+    }
+}
+
+/// Whatever a mutated container looks like, the parser cannot be talked into
+/// claiming it understands it.
+#[test]
+fn no_mutated_container_upgrades_the_parser_confidence() {
+    use arkforge_artifact::manifest::ParserConfidence;
+    let base = {
+        let mut bytes = b"BP_R1.0.0".to_vec();
+        bytes.extend(fixture::fixture_body("pac", 4_000));
+        bytes
+    };
+    for seed in 0..1_500u64 {
+        let input = mutate(seed, &base);
+        if let Ok((manifest, _)) = pac::inspect(input.as_slice()) {
+            assert_eq!(
+                manifest.confidence,
+                ParserConfidence::ResearchOnly,
+                "seed {seed} produced a non-research manifest"
+            );
+            assert_eq!(
+                manifest.execution_relevant_unknowns.len(),
+                pac::DAYU600_EXECUTION_UNKNOWNS.len(),
+                "seed {seed} dropped an unknown"
+            );
+        }
+    }
 }
