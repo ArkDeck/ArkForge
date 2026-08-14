@@ -32,11 +32,23 @@
 | AD-008 | DAYU200 USB 身份实测：HDC-normal = `0x2207:0x5000`("HDC Device")，Loader = `0x2207:0x350a`("USB download gadget"，`ld` 报 `Mode=Loader`) | [2026-08-14 只读取证](runs/2026-08-14-dayu200-read-only-capture.md) §1、§3 | A(真机实测) | confirmed |
 | AD-009 | DAYU200 跨 enter-loader 转换 **serial 与 locationID 双双变化**(loader 挂在另一 hub 之后，USB3→USB2)；`rl` 读窗边界实测落在扇区 65536，窗口外恒 `0xCC`——且读取时板子正由 `system`/`vendor` 启动运行 7.0.0.37，故窗口外 `0xCC` 现场证明不等于「未写入」 | [同上](runs/2026-08-14-dayu200-read-only-capture.md) §3.2、§5 | A(真机实测) | confirmed；AD-006 的独立复现 |
 | AD-010 | rkdeveloptool pin 解析：ArkDeck 有**两个**有意不同的 pin，同一 upstream commit `304f0737…`、两个本地构建、两种 access policy——`pinnedReadOnlyDiscovery` = `bbd7bdc0…9923`(只读 `ld` 发现)、`pinnedProduction` = `038a8a0e…3611`(破坏性 flash)。后者实测逐字节命中 `~/dayu200-rehearsal/rkdeveloptool/rkdeveloptool` | [2026-08-14 只读取证](runs/2026-08-14-dayu200-read-only-capture.md) §6；`RockchipDeviceDiscovery.swift:9-28` | A(本机实测) | **resolved** — 无「签名前/后」歧义，pin 指向确定的本地构建 |
-| AD-011 | `pinnedReadOnlyDiscovery`(`bbd7bdc0…`，本机 = `/opt/homebrew/bin/rkdeveloptool`)在本机挂起：`ld` 与 `-v` 皆然，无设备操作也挂起 | [同上](runs/2026-08-14-dayu200-read-only-capture.md) §6 | A(本机实测) | **environment** — 非 ArkDeck 缺陷：discovery profile 已带 `timeout: 5`，且 registry 有 libusb 类 accessDiagnostics，挂起会被超时收口。本条是本机环境事实 |
-| AD-012 | ArkDeck.app 捆绑的 rkdeveloptool 是第三个构建(签名 `231a05ef…`／剥签名 `c31e8a3f…`)，与两个 discovery pin 均不符 | [同上](runs/2026-08-14-dayu200-read-only-capture.md) §6 | A(本机实测) | **resolved** — 非缺陷：CHG-2026-036 的 `package-receipt.json` 按包声明 `component.signedSHA256` / `unsignedSHA256` 成对身份；捆绑件走的是打包收据这条独立声明线，不走 discovery pin |
+| AD-011 | `/opt/homebrew/bin/rkdeveloptool`(哈希 = `pinnedReadOnlyDiscovery` `bbd7bdc0…`)挂起的**已证原因**：该文件带 `com.apple.quarantine`，dyld 在 Gatekeeper 评估处阻塞，栈全部停在 `_dyld_start`，**从未进入 `main`**(故 `-v` 亦挂)。在副本上清除该 xattr 后同哈希立即正常运行 | [同上](runs/2026-08-14-dayu200-read-only-capture.md) §6.2 | A(本机实测，含栈采样与对照实验) | **environment，非缺陷** — pin 的代码注释本就写明它是「clean, **non-quarantined** build」；本机这份已漂出该状态 |
+| AD-012 | ArkDeck.app 捆绑的 rkdeveloptool 不是「第三个来路不明的构建」，而是 ArkDeck **自己的密闭可复现构建**产物(recipe `rockchip-component-build@1.0.0`)；身份由 CHG-2026-036 的 `package-receipt.json` 逐包声明 `component.signedSHA256` / `unsignedSHA256` 成对记录 | [同上](runs/2026-08-14-dayu200-read-only-capture.md) §6.2；`openspec/integrations/rockchip/bundled-component/1.0.0/recipe.json` | A(本机实测 + 仓内 recipe) | **resolved** — 非缺陷 |
 | AD-013 | `rkdeveloptool ld` 对处于 **HDC-normal** 的 DAYU200 报告 `Mode=Maskrom`(PID `0x5000`)——连续三次复现 | [同上](runs/2026-08-14-dayu200-read-only-capture.md) §6.1 | A(本机实测) | **resolved(已知)** — ArkDeck 早已把这一行固化为夹具 `maskrom.stdout.bin`(`Pid=0x5000…Maskrom`，与本次实测同形)，`providerPreflightDisposition` 先判 VID/PID 再判 mode，契约测试覆盖 |
+| AD-014 | ArkDeck 自建 rkdeveloptool 的密闭可复现 recipe：上游 tarball 钉 commit `304f0737…`(archive `389ba41a…`、tree `9908d5bd…`、`upstreamSourceModifications: none`)；**静态链入** GPG 验签的 libusb 1.0.30；`homebrewBuildPaths: denied`、`callerPATH: ignored`、`networkAfterFetch: denied`、`SOURCE_DATE_EPOCH` 固定；双 builder 字节一致；产物直接依赖仅七个系统库(实测 `otool -L` 与 `directDependencyAllowlist` 逐项吻合) | `openspec/integrations/rockchip/bundled-component/1.0.0/recipe.json`；`.github/workflows/rockchip-component.yml` | C(仓内 accepted) + A(本机 `otool -L` 实测) | confirmed；arkforged 打包设计输入 |
+| AD-015 | **工具哈希相等不等于工具可用。** 同一份字节(`bbd7bdc0…`)带 quarantine 时挂死在 dyld、清除后正常;ArkDeck 亦有同形教训「binary hash equality does not authorize silently ignoring the source-provenance check」(2026-07-24 source-drift 记录) | [同上](runs/2026-08-14-dayu200-read-only-capture.md) §6.2；`chg-2026-026/.../blocked-capability-preflight-rkdeveloptool-source-drift-2026-07-24.md` | A/C | confirmed；见下「对 ArkForge 的后果」 |
 | DIG-001 | deterministic CBOR | RFC 8949 §4.2 | A | confirmed(仓内实现对 Appendix A 向量) |
 | IPC-001 | Protobuf 演进规则 | protobuf.dev proto3 guide | A | confirmed |
+
+### AD-015 对 ArkForge 的后果
+
+`MaturityKey` 把 toolchain backend digest 计入组合键，这是对的——但本次证明 digest 相等
+**不足以**保证工具能跑：同一份字节因 quarantine 而挂死。因此 AF-V2 的 preflight 除了比对
+digest，还必须验证工具**可执行**(能在预算内返回)，并把「哈希命中但不可运行」与「哈希不符」
+判为两种不同的 typed 结果——前者是宿主环境问题，后者是身份问题，补救动作完全不同。
+
+ArkDeck 的 discovery profile 已带 `timeout: 5`，方向一致。本仓在 AF-V2 落地执行侧时须补上，
+当前 AF-V1 无执行路径，故只记录不实现。
 
 ### AD-004 的边界
 

@@ -225,12 +225,59 @@ ArkDeck 与 ArkForge 用的是同一道防线,各自独立到达。
 还是签名后」这个问题 ArkDeck 早就分开记了。本机安装的是比归档收据更新的一个包,所以
 两个哈希都对不上归档值——这是版本差异,不是声明缺失。
 
-**AD-011 — 环境事实,非 ArkDeck 缺陷。** `pinnedReadOnlyDiscovery` 那个二进制在本机挂起
-属实,但 discovery profile 自带 `timeout: 5`,registry 的 `accessDiagnostics` 也覆盖
-libusb 类失败,挂起会被超时收口为可诊断结果。对本机的实际影响是只读发现路径不可用,
-需要在本机换一个可用的构建;这是环境问题。
+**AD-011 — 原因已查明,是 quarantine,不是构建缺陷。**
 
-**结论:无 OpenSpec change 可提。** 三条里两条 ArkDeck 已覆盖,一条是本机环境。
+先说清一件我一开始搞反的事:`bbd7bdc0…` 虽然哈希等于 `pinnedReadOnlyDiscovery`,但那个
+pin 是 E0 表征期从 homebrew 二进制登记的,**ArkDeck 自己并不用它**——ArkDeck 编自己的
+(见 6.4)。而且 ArkDeck 早在 **2026-07-24** 就因**源码溯源漂移**把这条路径挡死了:探针从
+可执行文件的父 checkout 取 upstream 收据,`/opt/homebrew` 的 HEAD 是 `7c2bb3b2…` 而非注册
+的 `304f0737…`,记录原文「binary hash equality does not authorize silently replacing or
+ignoring the source-provenance check」。
+
+本次另外查清了它**为什么挂**:
+
+| 步骤 | 观察 |
+|---|---|
+| `sample` 抓栈 | 2 秒 1654 个采样**全部**停在 `_dyld_start + 0`——从未进入 `main`,故 `-v` 亦挂 |
+| `DYLD_PRINT_LIBRARIES=1` | 一行未输出,连第一个 dylib 都没加载 |
+| `xattr` | `/opt/homebrew/bin/rkdeveloptool` 带 `com.apple.quarantine`;两个依赖 dylib 都不带 |
+| 对照实验 | 复制一份、`xattr -c`、**哈希不变**(`bbd7bdc0…`)→ 立即正常返回 `DevNo=1 …` |
+
+结论:**quarantine 导致 Gatekeeper 评估在 dyld 阶段阻塞**。而 `pinnedReadOnlyDiscovery` 的
+代码注释原文就是「The clean, **non-quarantined** build」——本机这份哈希仍对,状态已漂出
+pin 的描述。ArkDeck 的 E0 collector 本就检查 quarantine(source-drift 记录写它「stopped
+before codesign/quarantine checks」),只是那次更早地被源码漂移挡住了。
+
+本机若要用它:`xattr -d com.apple.quarantine /opt/homebrew/bin/rkdeveloptool`。但更该做的是
+用 ArkDeck 自己的构建——见下。
+
+### 6.4 ArkDeck 自建构建:为什么这类问题在它那里不存在
+
+`openspec/integrations/rockchip/bundled-component/1.0.0/recipe.json`
+(`rockchip-component-build@1.0.0`)是一个**密闭、可复现**的构建:
+
+- 上游钉死:`rockchip-linux/rkdeveloptool` commit `304f0737…`,archive `389ba41a…`,
+  tree `9908d5bd…`,`upstreamSourceModifications: "none"`;
+- **libusb 1.0.30 静态链入**,tarball 带 GPG 签名与指纹校验;
+- 密闭:`homebrewBuildPaths: denied`、`callerPATH: ignored`、`networkAfterFetch: denied`、
+  `SOURCE_DATE_EPOCH`/`ZERO_AR_DATE` 固定、`normalization: forbidden`;
+- 双 builder(builder-a / builder-b)独立构建,verdict「byte-identical unsigned Mach-O」;
+- 产物直接依赖被 `directDependencyAllowlist` 限定为七个系统库。
+
+本机 `otool -L` 实测三者:
+
+| 构建 | libusb | C++ 运行时 | 结果 |
+|---|---|---|---|
+| ArkDeck 自建 | **静态链入** | Apple `libc++` | 依赖恰为 recipe 允许的七项,可用 |
+| homebrew | 动态 `/opt/homebrew/…/libusb-1.0.0.dylib` | **GCC `libstdc++.6`** | quarantine → 挂 |
+| rehearsal(`pinnedProduction`) | 动态同上 | Apple `libc++` | 可用 |
+
+静态链接 + 系统库白名单,正是让捆绑件既不依赖宿主 homebrew 状态、也不暴露在这类
+dylib/quarantine 耦合下的原因。用户所说「homebrew 里的 rk 是错的,ArkDeck 是自己编译的」
+在 recipe 与实测两侧都成立。
+
+**结论:无 OpenSpec change 可提。** AD-012/AD-013 ArkDeck 已覆盖;AD-011 是本机 quarantine,
+且 ArkDeck 早已因源码漂移挡住该路径并改用自建构建。
 
 ### 6.3 ArkDeck 已知的相邻缺陷
 
