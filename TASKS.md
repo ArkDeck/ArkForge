@@ -121,7 +121,9 @@ inspect
 - [x] read-domain-aware verification(readback/typed-skip)— 真机实测：1 Verified / 2 Failed /
       6 TypedSkip，读窗边界与 AD-006 相容(AD-019)；+ build postflight — 期望值已从
       真实 `system.img` 提取(`OpenHarmony-7.0.0.36`，AD-016)，比对待写入后执行
-- [ ] rebind 瞬态容忍与 normal 别名真机复验
+- [~] rebind 瞬态容忍 — ✅ 真机实测两个方向的空窗(3,725 ms / 15,579 ms)、
+      serial 与 topology 双双变化、窗口内始终唯一匹配(AD-020)；
+      normal 别名 — 未验：它是 hdc 的词汇，需走 ManagedDeviceControlPort，那一侧是 authority 的
 - [ ] crash/cancel/fault
 - [ ] outcomeUnknown no replay
 - [ ] eligible complete-overwrite recovery
