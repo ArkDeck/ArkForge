@@ -251,6 +251,56 @@ before codesign/quarantine checks」),只是那次更早地被源码漂移挡住
 本机若要用它:`xattr -d com.apple.quarantine /opt/homebrew/bin/rkdeveloptool`。但更该做的是
 用 ArkDeck 自己的构建——见下。
 
+### 6.3 quarantine 清除与只读发现复验(经用户授权的宿主变更)
+
+用户授权后在**原文件**上执行 `xattr -d com.apple.quarantine /opt/homebrew/bin/rkdeveloptool`。
+这是宿主侧变更,不是设备变更;本次取证的 destructive dispatch 仍为 0。
+
+| 项 | 清除前 | 清除后 |
+|---|---|---|
+| xattr | `com.apple.provenance com.apple.quarantine` | `com.apple.provenance` |
+| sha256 | `bbd7bdc0…6c9923` | `bbd7bdc0…6c9923`(**未变**) |
+| mtime | Mar 9 09:46:58 2026 | 同(**未变**) |
+
+只动属性,字节与时间戳均未变——仍逐字节等于 `pinnedReadOnlyDiscovery`。
+
+按 profile 的确切形态(`exactArguments: ["ld"]`,`timeout: 5`)连跑三次:
+
+```text
+run 1: rc=0  0.25s  DevNo=1	Vid=0x2207,Pid=0x5000,LocationID=102	Maskrom
+run 2: rc=0  0.03s  同上
+run 3: rc=0  0.03s  同上
+```
+
+从「无限挂起」变为冷启 0.25 s、热态 0.03 s,远在 5 s 预算内。**AD-011 在本机已消除。**
+
+三份构建横向复验,输出**逐字节一致**:
+
+| 构建 | sha256 前 8 | 耗时 | 输出 |
+|---|---|---|---|
+| homebrew(`pinnedReadOnlyDiscovery`) | `bbd7bdc0` | 0.04 s | `…Pid=0x5000…	Maskrom` |
+| rehearsal(`pinnedProduction`) | `038a8a0e` | 0.03 s | 同 |
+| ArkDeck 自建(捆绑件) | `231a05ef` | 0.03 s | 同 |
+
+同一上游 commit 的三个独立构建对同一块板给出同一份观测,是一次有价值的交叉验证。
+
+同时它再次现场演示了 AD-013 的设计要点——两条路径读的是同一个 PID `0x5000`,但:
+
+- `rkdeveloptool ld` 猜成 `Maskrom`;
+- ArkForge 按 Profile 实测身份判为 `hdc-normal`;
+- ArkDeck 的 `providerPreflightDisposition` 先判 VID/PID,`0x5000 != 0x350a` 即
+  `.blocked(.deviceNotExpectedRockUSB)`,那个 mode 词根本读不到。
+
+ArkForge 侧复验(与本文 §1 首次观测逐位一致,板子状态未变):
+
+```text
+profile org.openharmony.dayu200 recognizes 1 of them
+  USB-2207-5000-01200000 mode=hdc-normal
+    identity   serialAndTopology
+    topology   a5c146cf…f11c6c      descriptor 026c0910…d1f37b32
+read-product-facts ohos              read-build-facts OpenHarmony-7.0.0.37
+```
+
 ### 6.4 ArkDeck 自建构建:为什么这类问题在它那里不存在
 
 `openspec/integrations/rockchip/bundled-component/1.0.0/recipe.json`
