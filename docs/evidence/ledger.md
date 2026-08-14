@@ -29,6 +29,9 @@
 | AD-005 | 现行 Rockchip Provider / tool / profile 实现 | ArkDeckKit production sources | C | confirmed |
 | AD-006 | DAYU200 板端 RockUSB 读写面不对称：`rl` 读面自扇区 65536(32 MiB)起结构性盲区、窗口外恒 uniform 0xCC；擦除介质亦读为 0xCC；`wlx` 写面全盘可达；读窗大小须每次执行实测 | GJ-4 真机 campaign ECAMP-96EFFF15 / ECAMP-31E041BC；PR #1066–#1070；`RockchipRuntimeActionHost.characterizeMediumReadDomain` | C | confirmed(真机定案) |
 | AD-007 | macOS Rockchip 组件 entitlement 死锁：运行时校验器要求 app-sandbox+inherit 与打包契约(#1052)要求空 entitlements 互斥，以修改校验器收口 | 2026-08-04 定案；#1299 helper signing 现代化 | C | confirmed；arkforged 打包设计输入 |
+| AD-008 | DAYU200 USB 身份实测：HDC-normal = `0x2207:0x5000`("HDC Device")，Loader = `0x2207:0x350a`("USB download gadget"，`ld` 报 `Mode=Loader`) | [2026-08-14 只读取证](runs/2026-08-14-dayu200-read-only-capture.md) §1、§3 | A(真机实测) | confirmed |
+| AD-009 | DAYU200 跨 enter-loader 转换 **serial 与 locationID 双双变化**(loader 挂在另一 hub 之后，USB3→USB2)；`rl` 读窗边界实测落在扇区 65536，窗口外恒 `0xCC`——且读取时板子正由 `system`/`vendor` 启动运行 7.0.0.37，故窗口外 `0xCC` 现场证明不等于「未写入」 | [同上](runs/2026-08-14-dayu200-read-only-capture.md) §3.2、§5 | A(真机实测) | confirmed；AD-006 的独立复现 |
+| AD-010 | 本机三个 rkdeveloptool 哈希互不相同，且均不等于 ArkDeck 声明的 pin `038a8a0e…`；homebrew 版本在本机不可用(无设备操作亦挂起)，ArkDeck 捆绑件可用 | [同上](runs/2026-08-14-dayu200-read-only-capture.md) §6 | A(本机实测) | **open** — pin 指向签名前还是签名后产物需澄清 |
 | DIG-001 | deterministic CBOR | RFC 8949 §4.2 | A | confirmed(仓内实现对 Appendix A 向量) |
 | IPC-001 | Protobuf 演进规则 | protobuf.dev proto3 guide | A | confirmed |
 

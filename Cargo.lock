@@ -28,6 +28,9 @@ dependencies = [
 [[package]]
 name = "arkforge-core"
 version = "0.1.0"
+dependencies = [
+ "arkforge-artifact",
+]
 
 [[package]]
 name = "arkforge-engine"
@@ -65,6 +68,7 @@ version = "0.1.0"
 dependencies = [
  "arkforge-arkdeck-adapter",
  "arkforge-artifact",
+ "arkforge-authority-api",
  "arkforge-core",
  "arkforge-engine",
  "arkforge-ipc",

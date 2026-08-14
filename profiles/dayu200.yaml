@@ -68,10 +68,35 @@ modes:
   - id: rockusb-maskrom
     aliases: [maskrom]
 
+# Measured USB identities. architecture.md 11.2 permits VID/PID here, and
+# forbids them from forming a stable target on their own: these say which
+# *mode* a device is in, never which board it is.
+#
+# hdc-normal was measured on the attached DAYU200 on 2026-08-14 (AD-008) and
+# agrees with ArkDeck's `dayu200NormalProductID = 0x5000`.
+usbIdentities:
+  - mode: hdc-normal
+    vendorId: 0x2207
+    productId: 0x5000
+    evidenceRef: AD-008
+  # Measured 2026-08-14 on the same board after `hdc target boot loader`:
+  # the loader personality answers 0x350a and reports Mode=Loader to `ld`.
+  - mode: rockusb-loader
+    vendorId: 0x2207
+    productId: 0x350a
+    evidenceRef: AD-008
+
 modeTransitions:
   - from: hdc-normal
     to: rockusb-loader
     action: enter-updater
+    # Measured 2026-08-14 (AD-009): across this transition the board changes
+    # BOTH its USB serial and its port path — the loader personality
+    # enumerates behind a different hub (0x01200000 -> 0x01120000). A rebind
+    # that required either to match would reject a healthy DAYU200, so
+    # identity here rests on uniqueness and the protocol's own `ld` answer.
+    serialPolicy: may-change
+    topologyPolicy: may-change
     rebind:
       requireDisconnect: true
       # Re-enumeration into Loader showed transient malformed descriptors on
@@ -82,6 +107,12 @@ modeTransitions:
   - from: rockusb-loader
     to: hdc-normal
     action: reboot-to-normal
+    # The return trip was measured on the same board: it came back on the same
+    # port with the same serial. Declaring may-change anyway is deliberate —
+    # one observed round trip is not proof that the path is always restored,
+    # and over-tightening here would turn a re-plug into a hard failure.
+    serialPolicy: may-change
+    topologyPolicy: may-change
     rebind:
       requireDisconnect: true
       # A full boot to HDC-normal takes considerably longer than entering the

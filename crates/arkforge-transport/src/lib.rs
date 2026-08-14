@@ -17,6 +17,7 @@
 #![forbid(unsafe_code)]
 
 pub mod replay;
+pub mod usb;
 pub mod transcript;
 
 use arkforge_core::digest::{
@@ -510,8 +511,13 @@ mod tests {
             to_mode: mode("rockusb-loader"),
             to_mode_aliases: vec![mode("loader")],
             allowed_identity_set_digest: sha256(b"allowed"),
+            // Measured on a real DAYU200 on 2026-08-14: entering Loader
+            // changes both the serial and the port path, because the loader
+            // personality enumerates behind a different hub. This fixture used
+            // to require topology to match, which would have rejected a healthy
+            // board (docs/evidence/runs/2026-08-14-dayu200-read-only-capture.md).
             serial_policy: SerialPolicy::MayChange,
-            topology_policy: TopologyPolicy::MustMatch,
+            topology_policy: TopologyPolicy::MayChange,
             identity_strength_floor: IdentityEvidenceStrength::SerialAndTopology,
             tolerance: RebindTolerance {
                 require_disconnect: true,
@@ -601,7 +607,7 @@ mod tests {
     }
 
     #[test]
-    fn a_device_moved_to_another_port_is_refused_when_topology_must_match() {
+    fn a_device_moved_to_another_port_is_refused_only_when_topology_must_match() {
         let previous = observation("OBS-0", 0, "hdc-normal", IdentityEvidenceStrength::SerialAndTopology);
         let mut settled = observation(
             "OBS-1",
@@ -610,8 +616,19 @@ mod tests {
             IdentityEvidenceStrength::SerialAndTopology,
         );
         settled.topology_digest = sha256(b"port-2");
+
+        // DAYU200's enter-loader transition changes the port path, so the
+        // measured policy is MayChange and this settles.
+        assert!(evaluate_rebind(&expectation(), &previous, std::slice::from_ref(&settled))
+            .settled()
+            .is_some());
+
+        // Where a Profile has measured that the path is stable, a move is a
+        // stop.
+        let mut strict = expectation();
+        strict.topology_policy = TopologyPolicy::MustMatch;
         assert_eq!(
-            evaluate_rebind(&expectation(), &previous, &[settled]),
+            evaluate_rebind(&strict, &previous, &[settled]),
             RebindOutcome::TopologyChanged
         );
     }

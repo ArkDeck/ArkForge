@@ -54,7 +54,7 @@ pub use ids::{
 };
 pub use profile::{
     load as load_profile, AllowedTarget, DeviceProfile, HardwareRevisionPolicy, ModeDeclaration,
-    ModeTransition, ProfileError, ProfileExecutionBlocker, ProviderCombination,
+    IdentityFieldPolicy, ModeTransition, ProfileError, ProfileExecutionBlocker, ProviderCombination,
     ReadDomainPolicy, RebindTolerance,
     RecoveryDeclaration, SocIdentity, StorageDeclaration, WriteDomainDeclaration,
 };

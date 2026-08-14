@@ -48,12 +48,12 @@ artifact import
 **验收**
 
 - [x] Core 不依赖 ArkDeck/vendor(依赖图守卫为主，词法扫描为辅)
-- [x] current DAYU200 archive facts parity(结构等价；厂商归档字节级比对待归档到位)
+- [x] current DAYU200 archive facts parity(设备侧真机验证 15/15；厂商归档字节级比对待归档到位)
 - [x] unknown member/partition fail closed
 - [x] private action digest 覆盖
 - [x] startExecution disabled(类型层 / 服务层 / 线上 UDS 三层)
 - [x] unit/fuzz/transcript tests(277 tests + 18000 变异输入)
-- [x] Profile 含 readDomain 与 per-target 验证强度，与 AD-006 一致
+- [x] Profile 含 readDomain 与 per-target 验证强度，与 AD-006 一致(2026-08-14 真机复现，AD-009)
 - [x] DAYU200 整包 CAS 导入在声明预算内(实测 3.07 s / 227 MiB/s，预算 60 s)
 - [x] 无设备 mutation
 

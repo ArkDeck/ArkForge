@@ -1,1 +1,4 @@
 /target
+
+# hdc writes a client log wherever it is invoked
+/log/

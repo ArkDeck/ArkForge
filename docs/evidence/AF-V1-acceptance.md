@@ -9,7 +9,7 @@
 > 差异为 TASK-AIN-021 收口，不触及 flash 执行路径与本文引用的 pinned 事实
 > (`RockchipFlashProfile`、`partition-mapping.json`、`WorkflowStep.swift` 元数据)。
 >
-> 复现：`cargo test --workspace --offline`(277 tests，全绿)；
+> 复现：`cargo test --workspace --offline`(336 tests，全绿)；
 > 导入预算另见下文单独命令。
 
 ## 1. 生产代码交付
@@ -59,9 +59,15 @@
 - `crates/arkforge-artifact/tests/dayu200_inspect.rs`：import → inspect 复现 17 成员清单
   与角色划分。
 
-**边界**：与厂商真实 `images.tar.gz`(`fc7637f3…` / `6a023c73…`)的字节级比对不在本次范围——
-该归档不在任一仓库内。夹具是**结构等价**(成员清单、角色、分区表相同，成员体为确定性小数据)，
-`fixture.rs` 顶部对此明写。字节级 parity 属于取得归档后的证据项。
+**真机补充(2026-08-14)**：三方一致中的**设备一侧已由真机验证**。板子自身的 GPT
+(`rkdeveloptool ppt`)与本仓解码 **15/15 逐值一致**，profile 的 9 个可写目标 + 6 个
+protected 目标恰好覆盖设备表全部分区。见
+[只读取证](runs/2026-08-14-dayu200-read-only-capture.md) §4 与
+`crates/arkforge-core/tests/dayu200_real_device_parity.rs`。
+
+**仍存边界**：与厂商真实 `images.tar.gz`(`fc7637f3…` / `6a023c73…`)的**字节级**比对
+仍不在范围——该归档不在任一仓库内。夹具是结构等价(成员清单、角色、分区表相同，
+成员体为确定性小数据)，`fixture.rs` 顶部对此明写。
 
 ### 2.3 unknown member / partition fail closed
 
@@ -98,12 +104,12 @@ projection 复现 `providerExecutionPlanDigest` 与 `publicProjectionDigest`。
 
 ### 2.6 unit / fuzz / transcript tests
 
-- unit：277 tests，`cargo test --workspace --offline` 全绿；
+- unit：336 tests，`cargo test --workspace --offline` 全绿；
 - 原语对公开向量：SHA-256(FIPS 180-4 四向量 + 百万 a)、HMAC-SHA-256(RFC 4231)、
   CRC-32(RFC 1952 §8)、CBOR(RFC 8949 Appendix A)、DEFLATE(与系统 `gzip -1/-6/-9`
   在 6 组语料上交叉验证)、tar(与系统 `tar` 互操作)；
 - fuzz：`crates/arkforge-artifact/tests/parser_fuzz.rs`，18000 个 seeded 变异输入，
-  性质为「不 panic、不挂起、不无界分配」，见 [`fuzz/README.md`](../../fuzz/README.md)；
+  性质为「不 panic、不挂起、不无界分配」(含 PAC 观测器 5100 例)，见 [`fuzz/README.md`](../../fuzz/README.md)；
 - transcript：`crates/arkforge-transport/tests/golden_transcript_parity.rs`，
   两个 GJ-4 campaign 的 13 步收据链、每个 digest 由声明的推导规则复算。
 
@@ -125,7 +131,10 @@ readDomain:
 - 三态判定在 `arkforge-core::verification`：读域不覆盖 → `TypedSkip`(不计任何 verified 强度)；
   读域覆盖且 uniform filler → `Failed{ErasedMediumFiller}`(单列，不冒充 hash mismatch)；
   读域**不**覆盖且 uniform filler → **不是失败**——这正是 2026-08-04 九个分区被冤判的那一类
-  (`uniform_filler_outside_the_window_is_never_a_failure`)。
+  (`uniform_filler_outside_the_window_is_never_a_failure`)；
+- **真机复现(2026-08-14，AD-009)**：读窗边界实测落在扇区 65536，窗口外(含 system 245760、
+  vendor 4440064)恒返回 uniform `0xCC`——而板子当时正由这两个分区启动运行
+  OpenHarmony-7.0.0.37。窗口外的 `0xCC` 因此被现场证明**不等于「未写入」**。
 
 ### 2.8 DAYU200 整包 CAS 导入在声明预算内
 

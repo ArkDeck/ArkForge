@@ -1,0 +1,42 @@
+# Captured transcript — org.openharmony.dayu200 
+#
+# Provenance: captured. Every digest below is derived from bytes the
+# operating system read from the device, not from a string.
+#
+# Captured by `arkforge-capture` on a host where the device was present
+# and observable. What it records is a USB-level observation: identity,
+# topology and descriptor facts. It records no protocol exchange,
+# because this tool speaks no protocol.
+#
+# Serial numbers appear only as digests (architecture.md 11.4).
+
+schemaVersion: arkforge.transcript/v1
+
+transcript:
+  id: CAP-E8D4C075505747EC18FBB83B
+  provenance: captured
+  source: "arkforge-capture usb observation; 3 host USB device(s) present, 1 recognized by the profile"
+  profileId: org.openharmony.dayu200
+
+records:
+  - sequence: 1
+    kind: observation
+    atEpochMs: 1786713162784
+    status: ok
+    observation:
+      id: USB-2207-5000-01200000
+      mode: hdc-normal
+      topologyDigest: a5c146cf94941d749e109f820cff15e64f76c4721e0fcd998f98d8d711f11c6c
+      descriptorDigest: 026c091025adebbeb8965f11b65ffc58d427592c6024e22ef58c3690d1f37b32
+      serialKind: descriptor
+      serialDigest: 75153e59fdd3b260917ebd5f4b2f3b61bba59b140b5d18a95cac67fbce7c2933
+      identityStrength: serialAndTopology
+      protocolIdentity:
+        - key: profile
+          value: "org.openharmony.dayu200"
+        - key: usb.identity
+          value: "0x2207:0x5000"
+        - key: usb.productName
+          value: "HDC Device"
+        - key: usb.vendorName
+          value: "Rockchip"

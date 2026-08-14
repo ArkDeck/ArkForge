@@ -102,6 +102,34 @@ impl CanonicalCbor for ProviderCombination {
     }
 }
 
+/// A USB identity that indicates a mode.
+///
+/// architecture.md 11.2 permits VID/PID inside a Profile or Transport but
+/// forbids them from forming a stable target on their own — so this maps an
+/// identity to a *mode*, never to a device. Which board answered is still
+/// decided by serial, topology and protocol identity.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct UsbModeIdentity {
+    pub mode: DeviceMode,
+    pub vendor_id: u16,
+    pub product_id: u16,
+    /// The evidence entry this identity was measured under. A VID/PID pair
+    /// nobody measured is a guess, and a guess that names a mode is how a
+    /// wrong device gets adopted.
+    pub evidence_ref: OpaqueId,
+}
+
+impl CanonicalCbor for UsbModeIdentity {
+    fn to_cbor(&self) -> CborValue {
+        CborValue::map(vec![
+            ("mode", self.mode.to_cbor()),
+            ("vendorId", CborValue::Unsigned(self.vendor_id as u64)),
+            ("productId", CborValue::Unsigned(self.product_id as u64)),
+            ("evidenceRef", self.evidence_ref.to_cbor()),
+        ])
+    }
+}
+
 /// A mode and the aliases that mean the same mode.
 ///
 /// Aliases are declared, not inferred: on DAYU200 the "normal" mode answers to
@@ -162,6 +190,41 @@ impl CanonicalCbor for RebindTolerance {
     }
 }
 
+/// Whether an identity field survives a transition.
+///
+/// Measured, not assumed. On DAYU200 both the USB serial and the port path
+/// change between HDC-normal and Loader — the loader personality enumerates
+/// behind a different hub — so a rebind that required either to match would
+/// reject a healthy board (measured 2026-08-14, AD-009).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum IdentityFieldPolicy {
+    MustMatch,
+    MayChange,
+}
+
+impl IdentityFieldPolicy {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            IdentityFieldPolicy::MustMatch => "must-match",
+            IdentityFieldPolicy::MayChange => "may-change",
+        }
+    }
+
+    pub fn parse(value: &str) -> Option<Self> {
+        match value {
+            "must-match" => Some(IdentityFieldPolicy::MustMatch),
+            "may-change" => Some(IdentityFieldPolicy::MayChange),
+            _ => None,
+        }
+    }
+}
+
+impl CanonicalCbor for IdentityFieldPolicy {
+    fn to_cbor(&self) -> CborValue {
+        CborValue::text(self.as_str())
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ModeTransition {
     pub from: DeviceMode,
@@ -171,6 +234,10 @@ pub struct ModeTransition {
     /// (architecture.md 9.2).
     pub action: OpaqueId,
     pub rebind: RebindTolerance,
+    /// Whether the USB serial survives this transition.
+    pub serial_policy: IdentityFieldPolicy,
+    /// Whether the port path survives this transition.
+    pub topology_policy: IdentityFieldPolicy,
 }
 
 impl CanonicalCbor for ModeTransition {
@@ -180,6 +247,8 @@ impl CanonicalCbor for ModeTransition {
             ("to", self.to.to_cbor()),
             ("action", self.action.to_cbor()),
             ("rebind", self.rebind.to_cbor()),
+            ("serialPolicy", self.serial_policy.to_cbor()),
+            ("topologyPolicy", self.topology_policy.to_cbor()),
         ])
     }
 }
@@ -356,6 +425,9 @@ pub struct DeviceProfile {
     /// profile digest (architecture.md 10.4).
     pub known_metadata_members: Vec<String>,
     pub modes: Vec<ModeDeclaration>,
+    /// Measured USB identities that indicate a mode. Empty means no identity
+    /// has been measured, and a USB transport can then recognize nothing.
+    pub usb_identities: Vec<UsbModeIdentity>,
     pub mode_transitions: Vec<ModeTransition>,
     pub storage: StorageDeclaration,
     pub read_domain: ReadDomainPolicy,
@@ -405,6 +477,10 @@ impl CanonicalCbor for DeviceProfile {
                 CborValue::array(self.modes.iter().map(|m| m.to_cbor()).collect()),
             ),
             (
+                "usbIdentities",
+                CborValue::array(self.usb_identities.iter().map(|i| i.to_cbor()).collect()),
+            ),
+            (
                 "modeTransitions",
                 CborValue::array(self.mode_transitions.iter().map(|t| t.to_cbor()).collect()),
             ),
@@ -449,6 +525,14 @@ impl DeviceProfile {
 
     pub fn mode(&self, mode: &DeviceMode) -> Option<&ModeDeclaration> {
         self.modes.iter().find(|declared| declared.matches(mode))
+    }
+
+    /// The mode a measured USB identity indicates, if the Profile declares one.
+    pub fn mode_for_usb_identity(&self, vendor_id: u16, product_id: u16) -> Option<&DeviceMode> {
+        self.usb_identities
+            .iter()
+            .find(|identity| identity.vendor_id == vendor_id && identity.product_id == product_id)
+            .map(|identity| &identity.mode)
     }
 
     pub fn transition(&self, from: &DeviceMode, to: &DeviceMode) -> Option<&ModeTransition> {
@@ -593,6 +677,30 @@ impl DeviceProfile {
             }
         }
 
+        // A USB identity must indicate a mode the profile declares, and no two
+        // identities may indicate different modes for the same VID/PID — an
+        // ambiguous identity is worse than none.
+        for identity in &self.usb_identities {
+            if self.mode(&identity.mode).is_none() {
+                return Err(ProfileError::UndeclaredMode(identity.mode.to_string()));
+            }
+        }
+        for (index, identity) in self.usb_identities.iter().enumerate() {
+            for other in self.usb_identities.iter().skip(index + 1) {
+                if identity.vendor_id == other.vendor_id
+                    && identity.product_id == other.product_id
+                    && identity.mode != other.mode
+                {
+                    return Err(ProfileError::AmbiguousUsbIdentity {
+                        vendor_id: identity.vendor_id,
+                        product_id: identity.product_id,
+                        first: identity.mode.to_string(),
+                        second: other.mode.to_string(),
+                    });
+                }
+            }
+        }
+
         // One alias may not belong to two modes.
         let mut alias_owner: Vec<(&str, &str)> = Vec::new();
         for declaration in &self.modes {
@@ -696,6 +804,12 @@ pub enum ProfileError {
         first: String,
         second: String,
     },
+    AmbiguousUsbIdentity {
+        vendor_id: u16,
+        product_id: u16,
+        first: String,
+        second: String,
+    },
     RecoveryWithoutCoverage,
     Yaml(yaml::YamlError),
     MissingField(String),
@@ -760,6 +874,15 @@ impl fmt::Display for ProfileError {
             } => write!(
                 f,
                 "mode alias {alias} is claimed by both {first} and {second}"
+            ),
+            ProfileError::AmbiguousUsbIdentity {
+                vendor_id,
+                product_id,
+                first,
+                second,
+            } => write!(
+                f,
+                "USB identity {vendor_id:#06x}:{product_id:#06x} is claimed by both {first} and {second}"
             ),
             ProfileError::RecoveryWithoutCoverage => f.write_str(
                 "recovery claims complete-overwrite support but declares no covered effects",
@@ -993,6 +1116,22 @@ pub fn load(source: &str) -> Result<DeviceProfile, ProfileError> {
         modes.push(ModeDeclaration { id, aliases });
     }
 
+    let mut usb_identities = Vec::new();
+    for entry in document
+        .get("usbIdentities")
+        .and_then(YamlValue::as_sequence)
+        .unwrap_or(&[])
+    {
+        let mode = DeviceMode::new(scalar(entry, "usbIdentities[].mode")?)
+            .map_err(|error| bad("usbIdentities[].mode", error.to_string()))?;
+        usb_identities.push(UsbModeIdentity {
+            mode,
+            vendor_id: unsigned(entry, "vendorId", "usbIdentities[].vendorId")? as u16,
+            product_id: unsigned(entry, "productId", "usbIdentities[].productId")? as u16,
+            evidence_ref: identifier(entry, "evidenceRef", "usbIdentities[].evidenceRef")?,
+        });
+    }
+
     let mut mode_transitions = Vec::new();
     for entry in document
         .get("modeTransitions")
@@ -1008,6 +1147,18 @@ pub fn load(source: &str) -> Result<DeviceProfile, ProfileError> {
             to: DeviceMode::new(scalar(entry, "modeTransitions[].to")?)
                 .map_err(|error| bad("modeTransitions[].to", error.to_string()))?,
             action: identifier(entry, "action", "modeTransitions[].action")?,
+            serial_policy: IdentityFieldPolicy::parse(scalar(
+                entry,
+                "modeTransitions[].serialPolicy",
+            )?)
+            .ok_or_else(|| bad("modeTransitions[].serialPolicy", "expected must-match or may-change"))?,
+            topology_policy: IdentityFieldPolicy::parse(scalar(
+                entry,
+                "modeTransitions[].topologyPolicy",
+            )?)
+            .ok_or_else(|| {
+                bad("modeTransitions[].topologyPolicy", "expected must-match or may-change")
+            })?,
             rebind: RebindTolerance {
                 require_disconnect: boolean(
                     rebind_block,
@@ -1182,6 +1333,7 @@ pub fn load(source: &str) -> Result<DeviceProfile, ProfileError> {
         artifact_formats,
         known_metadata_members,
         modes,
+        usb_identities,
         mode_transitions,
         storage,
         read_domain,
@@ -1233,6 +1385,8 @@ modeTransitions:
   - from: normal
     to: loader
     action: enter-updater
+    serialPolicy: may-change
+    topologyPolicy: must-match
     rebind:
       requireDisconnect: true
       toleranceWindowMs: 20000
