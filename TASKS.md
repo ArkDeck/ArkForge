@@ -96,7 +96,9 @@ inspect
 
 - [x] ArkForge durable engine(journal 落盘 + fsync policy 随 record kind 固定；
       撕裂尾部穷举复原；13.3 崩溃处置表由 journal 推导)
-- [ ] ArkDeck adapter — **ArkDeck 仓变更，需拍板**
+- [~] ArkDeck adapter — ArkForge 半已完成(step 映射表 + 控制动作映射表 + ArkDeck
+      provider action 归属表 + permit 交叉验证向量)；Swift 半是 ArkDeck 仓变更，
+      提案已写好待贴：[docs/openspec/chg-arkdeck-arkforge-authority](docs/openspec/chg-arkdeck-arkforge-authority/proposal.md)
 - [x] StepPermit(含 8.6 完整性与重传信任模型；single-use 跨重启由 durable ledger 保证，
       顺序由类型强制：admit → begin_dispatch → record_receipt → checkpoint，逐个 by value 消费)
 - [x] ManagedDeviceControlPort(typed 动作 + Provider 侧「这属于 authority」的显式拒绝)
@@ -110,7 +112,9 @@ inspect
 
 **验收**
 
-- [ ] real DAYU200 full flash pass — **待 authority 归属拍板**；除写入外全部已在真机跑通
+- [ ] real DAYU200 full flash pass — **已定：ArkDeck 做 authority**(2026-08-15)。
+      除写入外全部已在真机跑通;写入待 ArkDeck 侧 OpenSpec 合入并实现 permit 签发。
+      台架/真机的任何一次通过只发布它自己那一个 maturity 组合
 - [x] exact identity(两种人格均 `serialAndTopology`；locationID 跨模式变化第二次复现)
       / multi-device — 单板环境，多板未验
 - [x] nine partitions/userdata — 九个目标全部降解、前置校验通过、镜像 revalidate 通过(未派发)

@@ -7,17 +7,21 @@
 //! registry is a versioned, reviewed adapter artifact. A second authority would
 //! bring its own table without touching Core.
 //!
-//! Scope note: the rest of the adapter — the ExecutionAuthority implementation,
-//! the ManagedDeviceControlPort binding, the IPC client — is AF-V2
-//! (architecture.md 22). What AF-V1 owes is this table and the admission
-//! predicate it feeds, so a plan materialized today can be checked against the
-//! registry it will be admitted by.
+//! [`control`] carries the second published table: which ArkDeck provider
+//! actions each semantic [`ManagedDeviceControlAction`] binds to, and which of
+//! ArkDeck's Rockchip actions move to ArkForge. Still outstanding for AF-V2:
+//! the ExecutionAuthority implementation and the IPC client, both of which are
+//! written against these two tables.
+//!
+//! [`ManagedDeviceControlAction`]: arkforge_authority_api::ManagedDeviceControlAction
 //!
 //! Values are read from the ArkDeck audit baseline
 //! (`Packages/ArkDeckKit/Sources/ArkDeckCore/WorkflowStep.swift`,
 //! `WorkflowStepMetadata`). They are pinned data, not policy this crate relaxes.
 
 #![forbid(unsafe_code)]
+
+pub mod control;
 
 use arkforge_core::step::{
     BindingRequirement, CancellationPolicy, FlashStepKind, PublicFlashStep, WorkflowEffect,
