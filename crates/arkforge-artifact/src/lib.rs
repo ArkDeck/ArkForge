@@ -15,6 +15,7 @@ pub mod fixture;
 pub mod inflate;
 pub mod manifest;
 pub mod pac;
+pub mod staging;
 pub mod tar;
 
 pub use cas::{

@@ -12,6 +12,7 @@
 #![forbid(unsafe_code)]
 
 pub mod rockchip;
+pub mod rockchip_execute;
 pub mod unisoc;
 
 use arkforge_artifact::manifest::ArtifactManifest;

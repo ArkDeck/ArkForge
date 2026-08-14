@@ -569,38 +569,10 @@ pub struct ActionReceiptSummary {
 
 /// How an action ended.
 ///
-/// `exit 0` is not a variant, because a zero exit is not a disposition
-/// (architecture.md 12.4).
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
-pub enum ActionDisposition {
-    /// The action's own semantic success marker was observed.
-    SemanticSuccess,
-    /// The action provably did not take effect.
-    ConfirmedNoEffect,
-    /// The action provably failed after taking effect.
-    ConfirmedPartialEffect,
-    /// Whether the effect happened is unknown. Never replay
-    /// (architecture.md 14.1).
-    OutcomeUnknown,
-}
-
-impl ActionDisposition {
-    pub fn as_str(self) -> &'static str {
-        match self {
-            ActionDisposition::SemanticSuccess => "semanticSuccess",
-            ActionDisposition::ConfirmedNoEffect => "confirmedNoEffect",
-            ActionDisposition::ConfirmedPartialEffect => "confirmedPartialEffect",
-            ActionDisposition::OutcomeUnknown => "outcomeUnknown",
-        }
-    }
-
-    /// Whether this outcome permits any further dispatch of the same action.
-    pub fn permits_redispatch(self) -> bool {
-        // Never, for any variant. The method exists so the answer is stated
-        // once, in a place a caller can reach, rather than assumed.
-        false
-    }
-}
+/// Defined in Core rather than here: a disposition is domain vocabulary that a
+/// Provider produces and an authority consumes, and duplicating a four-variant
+/// enum on both sides of that boundary is how the two spellings drift apart.
+pub use arkforge_core::outcome::ActionDisposition;
 
 /// How completely the possible effects of an unresolved action are bounded.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]

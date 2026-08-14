@@ -13,7 +13,10 @@
 
 #![forbid(unsafe_code)]
 
+pub mod durable;
 pub mod journal;
+pub mod recovery;
+pub mod step;
 
 use arkforge_core::plan::{FlashPlanEnvelope, PlanError};
 use arkforge_core::projection::StoredProviderPlan;
@@ -184,25 +187,28 @@ impl PlanStore {
 
 /// Why execution is refused.
 ///
-/// There is no `Allowed` variant. Turning execution on is not a configuration
-/// change — it is the AF-V2 durable engine, the ArkDeck adapter, StepPermit
-/// handling and a real DAYU200 campaign (architecture.md 22 AF-V2).
+/// There is no `Allowed` variant, and the reason is stated as what is still
+/// missing rather than as a stage name. A gate whose text outlives the thing it
+/// describes is worse than no gate: it tells an operator a false story about
+/// why the daemon will not run.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ExecutionGate {
-    /// This build has no durable engine, no authority adapter and no permit
-    /// consumption path.
-    ReadOnlyVertical,
+    /// The durable journal, the crash-disposition table and single-use permit
+    /// consumption are here ([`durable`], [`recovery`], [`step`]). No authority
+    /// is paired with this daemon, so no permit can be verified against a real
+    /// pairing secret, and no session exists to receive the receipts.
+    NoPairedAuthority,
 }
 
 impl ExecutionGate {
-    pub const CURRENT: ExecutionGate = ExecutionGate::ReadOnlyVertical;
+    pub const CURRENT: ExecutionGate = ExecutionGate::NoPairedAuthority;
 
     pub fn reason(self) -> &'static str {
         match self {
-            ExecutionGate::ReadOnlyVertical => {
-                "startExecution is unavailable in the AF-V1 read-only vertical: this build has no \
-                 durable engine, no authority adapter and no permit consumption path \
-                 (architecture.md 21.2 Stage A, 22 AF-V1)"
+            ExecutionGate::NoPairedAuthority => {
+                "startExecution is unavailable: no authority is paired with this daemon, so a \
+                 StepPermit cannot be verified against a pairing secret and no session can \
+                 receive its receipts (architecture.md 8.6, 21.2 Stage A)"
             }
         }
     }
@@ -395,7 +401,7 @@ mod tests {
 
     #[test]
     fn the_execution_gate_has_no_allowed_state() {
-        assert_eq!(ExecutionGate::CURRENT, ExecutionGate::ReadOnlyVertical);
+        assert_eq!(ExecutionGate::CURRENT, ExecutionGate::NoPairedAuthority);
         assert!(ExecutionGate::CURRENT.reason().contains("unavailable"));
     }
 }

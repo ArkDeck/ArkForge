@@ -100,7 +100,13 @@ fn start_execution_is_unavailable_on_the_controller_socket() {
     assert_eq!(response.status, Status::Unavailable);
     let error = decode_error(&response).unwrap();
     assert_eq!(error.code, "EXECUTION_DISABLED");
-    assert!(error.message.contains("AF-V1"), "{}", error.message);
+    // The refusal names what is still missing, so an operator reading it is not
+    // sent to look for a stage that has already shipped.
+    assert!(
+        error.message.contains("no authority is paired"),
+        "{}",
+        error.message
+    );
 }
 
 #[test]

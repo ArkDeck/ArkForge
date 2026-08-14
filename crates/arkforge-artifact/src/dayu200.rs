@@ -42,12 +42,9 @@ pub const BUILD_FACT_KEYS: [&str; 3] = [
     "const.product.name",
 ];
 
-/// Bound on how much of one member is scanned for build facts.
-///
-/// The facts live in a properties blob near the head of a system image; hashing
-/// still covers every byte, but scanning all 2 GiB for a handful of keys buys
-/// nothing.
-const BUILD_FACT_SCAN_BYTES: u64 = 64 * 1024 * 1024;
+/// Longest plausible value; a properties line longer than this is not a fact
+/// this parser will claim.
+const MAX_VALUE_LEN: usize = 256;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ParameterError {
@@ -464,32 +461,28 @@ impl<R: Read> Read for CountingHasher<R> {
 ///
 /// Handles chunk boundaries by retaining a tail as long as the longest key plus
 /// its value bound, so a fact split across two reads is still found.
+///
+/// The whole member is scanned, with no byte bound. An earlier revision capped
+/// the scan at 64 MiB on the reasoning that "the facts live near the head of a
+/// system image". Measurement disproved that: in the real DAYU200 daily build
+/// the properties blob sits at byte 320,762,067 of a 2 GiB `system.img`
+/// (evidence AD-016), so the cap silently produced "no build facts" on every
+/// genuine archive while passing on every fixture small enough to fit under it.
 #[derive(Debug)]
 struct BuildFactScanner {
     tail: Vec<u8>,
     found: BTreeMap<String, String>,
-    scanned: u64,
 }
-
-/// Longest plausible value; a properties line longer than this is not a fact
-/// this parser will claim.
-const MAX_VALUE_LEN: usize = 256;
 
 impl BuildFactScanner {
     fn new() -> Self {
         BuildFactScanner {
             tail: Vec::new(),
             found: BTreeMap::new(),
-            scanned: 0,
         }
     }
 
     fn push(&mut self, chunk: &[u8]) {
-        if self.scanned >= BUILD_FACT_SCAN_BYTES {
-            return;
-        }
-        self.scanned += chunk.len() as u64;
-
         let mut window = std::mem::take(&mut self.tail);
         window.extend_from_slice(chunk);
         self.scan(&window, false);
@@ -508,32 +501,25 @@ impl BuildFactScanner {
     /// prefix would pin a truncated build string into the manifest.
     fn scan(&mut self, window: &[u8], at_end_of_member: bool) {
         for key in BUILD_FACT_KEYS {
-            let needle = format!("{key}=");
-            let needle = needle.as_bytes();
+            let mut needle = Vec::with_capacity(key.len() + 1);
+            needle.extend_from_slice(key.as_bytes());
+            needle.push(b'=');
             let mut from = 0usize;
-            while let Some(offset) = find(&window[from..], needle) {
+            while let Some(offset) = find(&window[from..], &needle) {
                 let start = from + offset + needle.len();
-                let terminator = window[start..].iter().position(|byte| {
-                    *byte == b'\n' || *byte == b'\r' || *byte == 0 || *byte == b' '
-                });
-                let end = match terminator {
-                    Some(index) => Some(start + index),
-                    None if at_end_of_member => Some(window.len()),
-                    None => None,
-                };
-                if let Some(end) = end {
-                    if end > start && end - start <= MAX_VALUE_LEN {
-                        if let Ok(value) = std::str::from_utf8(&window[start..end]) {
-                            let value = value.trim();
-                            if !value.is_empty() && value.chars().all(|c| !c.is_control()) {
+                if let Some(value) = value_after(window, start, at_end_of_member) {
+                    if !value.is_empty() && value.len() <= MAX_VALUE_LEN {
+                        if let Ok(text) = std::str::from_utf8(value) {
+                            let text = text.trim();
+                            if !text.is_empty() && text.chars().all(|c| !c.is_control()) {
                                 self.found
                                     .entry(key.to_string())
-                                    .or_insert_with(|| value.to_string());
+                                    .or_insert_with(|| text.to_string());
                             }
                         }
                     }
                 }
-                from = from + offset + needle.len();
+                from = start;
             }
         }
     }
@@ -545,13 +531,64 @@ impl BuildFactScanner {
     }
 }
 
+/// The value that follows `key=` at `start`.
+///
+/// Two shapes occur in a real property blob, and both were measured in the
+/// pinned DAYU200 archive (AD-016):
+///
+/// ```text
+/// const.product.model=ohos\n
+/// const.product.name="OpenHarmony 3.2"\n
+/// ```
+///
+/// A bare run ends at whitespace, NUL or newline. A double-quoted run ends at
+/// the closing quote and may contain spaces; terminating it on the first space
+/// would pin `"OpenHarmony` into the manifest as a build fact, and a wrong fact
+/// is worse than no fact when a postflight comparison is built on it.
+///
+/// `None` means "not decidable from these bytes". Mid-stream that is a value
+/// split across two reads; the caller retains a tail and the next window
+/// decides it. At the end of a member it means the bytes never terminated, and
+/// nothing is claimed.
+fn value_after(window: &[u8], start: usize, at_end_of_member: bool) -> Option<&[u8]> {
+    let rest = window.get(start..)?;
+    // +2 leaves room for both quotes around a maximum-length value.
+    let bounded = &rest[..rest.len().min(MAX_VALUE_LEN + 2)];
+    if bounded.first() == Some(&b'"') {
+        let close = bounded[1..].iter().position(|byte| *byte == b'"')?;
+        return Some(&bounded[1..1 + close]);
+    }
+    match bounded
+        .iter()
+        .position(|byte| matches!(byte, b'\n' | b'\r' | 0 | b' ' | b'\t'))
+    {
+        Some(index) => Some(&bounded[..index]),
+        None if at_end_of_member => Some(bounded),
+        None => None,
+    }
+}
+
+/// First occurrence of `needle` in `haystack`.
+///
+/// Skips on the needle's first byte rather than comparing every window: this
+/// runs over whole multi-gigabyte image members now that the scan is unbounded,
+/// and a naive window compare made that cost visible.
 fn find(haystack: &[u8], needle: &[u8]) -> Option<usize> {
     if needle.is_empty() || haystack.len() < needle.len() {
         return None;
     }
-    haystack
-        .windows(needle.len())
-        .position(|window| window == needle)
+    let first = needle[0];
+    let last = haystack.len() - needle.len();
+    let mut index = 0usize;
+    while index <= last {
+        let offset = haystack[index..=last].iter().position(|byte| *byte == first)?;
+        let candidate = index + offset;
+        if &haystack[candidate..candidate + needle.len()] == needle {
+            return Some(candidate);
+        }
+        index = candidate + 1;
+    }
+    None
 }
 
 #[cfg(test)]
@@ -688,6 +725,60 @@ mod tests {
     fn build_fact_scanner_ignores_a_key_with_no_value() {
         let mut scanner = BuildFactScanner::new();
         scanner.push(b"const.product.model=\n");
+        assert!(scanner.finish().is_empty());
+    }
+
+    /// Byte-for-byte the property run measured in the pinned archive's
+    /// `system.img` (AD-016), including the quoted value with a space in it.
+    #[test]
+    fn build_fact_scanner_reads_the_measured_property_run() {
+        let mut scanner = BuildFactScanner::new();
+        scanner.push(
+            b"const.build.characteristics=default\n\
+              const.product.model=ohos\n\
+              const.product.name=\"OpenHarmony 3.2\"\n\
+              const.sandbox=enable\n",
+        );
+        scanner.push(b"const.ohos.fullname=OpenHarmony-7.0.0.36\n\0\0\0\0");
+        let found = scanner.finish();
+        assert_eq!(
+            found.get("const.product.model").map(String::as_str),
+            Some("ohos")
+        );
+        // Not `"OpenHarmony` — the quoted shape is one value, spaces and all.
+        assert_eq!(
+            found.get("const.product.name").map(String::as_str),
+            Some("OpenHarmony 3.2")
+        );
+        assert_eq!(
+            found.get("const.ohos.fullname").map(String::as_str),
+            Some("OpenHarmony-7.0.0.36")
+        );
+    }
+
+    /// AD-016 regression. The facts in the real image sit past byte 320 million
+    /// of a 2 GiB member; a scanner that stops early reports "no build facts"
+    /// on every genuine archive and passes on every small fixture.
+    #[test]
+    fn build_fact_scanner_reaches_a_fact_far_past_any_head_of_file_window() {
+        let mut scanner = BuildFactScanner::new();
+        let filler = vec![0u8; 1024 * 1024];
+        for _ in 0..72 {
+            scanner.push(&filler);
+        }
+        scanner.push(b"const.ohos.fullname=OpenHarmony-7.0.0.36\n");
+        assert_eq!(
+            scanner.finish().get("const.ohos.fullname").map(String::as_str),
+            Some("OpenHarmony-7.0.0.36")
+        );
+    }
+
+    #[test]
+    fn build_fact_scanner_claims_nothing_from_an_unterminated_quoted_value() {
+        let mut scanner = BuildFactScanner::new();
+        let mut blob = b"const.product.name=\"OpenHarmony".to_vec();
+        blob.extend(std::iter::repeat(b'x').take(4096));
+        scanner.push(&blob);
         assert!(scanner.finish().is_empty());
     }
 }

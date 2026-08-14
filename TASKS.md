@@ -1,11 +1,11 @@
 # ArkForge 实施任务台账
 
-> 状态总览(2026-08-14)：AF-V1 完成；AF-V3 软件半完成。任务定义正本是 [docs/architecture.md](docs/architecture.md) 第 22 节；本文件是执行台账，若两处出入，以 architecture.md 为准并回改本文件。
+> 状态总览(2026-08-15)：AF-V1 完成；AF-V3 软件半完成；AF-V2 除写入外全部完成。任务定义正本是 [docs/architecture.md](docs/architecture.md) 第 22 节；本文件是执行台账，若两处出入，以 architecture.md 为准并回改本文件。
 
 | 任务 | 内容 | 依赖 | 状态 |
 |---|---|---|---|
 | AF-V1 | ArkForge Core + DAYU200 read-only parity | — | ✅ 完成([验收证据](docs/evidence/AF-V1-acceptance.md)) |
-| AF-V2 | DAYU200 ArkForge production cutover | AF-V1 | ⛔ 阻塞：需真实 DAYU200 硬件 + ArkDeck 仓变更 |
+| AF-V2 | DAYU200 ArkForge production cutover | AF-V1 | 🟡 除写入外全部完成([彩排证据](docs/evidence/runs/2026-08-15-dayu200-flash-rehearsal.md))；写入待 authority 归属拍板 |
 | AF-V3 | DAYU600 evidence + plan-only | AF-V1(共用 API 面) | 🟡 软件半完成([验收证据](docs/evidence/AF-V3-acceptance.md))；证据半需真机 |
 | AF-V4 | DAYU600 production execute | AF-V3 + AF-V2(engine) + 17.5 证据门全 PASS | ⛔ 阻塞：18 条证据门 0 条 PASS |
 
@@ -64,11 +64,20 @@ artifact import
 
 ## AF-V2：DAYU200 ArkForge production cutover
 
-> **阻塞原因(2026-08-14)**：验收首条即 `real DAYU200 full flash pass`，本环境无该硬件；
-> 且 `ArkDeck adapter` / `generic Runtime integration` / `generic UI` /
-> `compatibility alias` 属 ArkDeck 仓变更，按 7.4 必须走 OpenSpec + 维护者 PR review
-> 并与真实产品能力同车交付。在硬件与该仓授权到位前不应开工——先写代码再补真机，
-> 正是 21.1「migration cutover 必须真实 DAYU200 pass」要防的顺序。
+> **状态(2026-08-15)**：硬件已到位，ArkForge 侧「除写入外的全部」已在真机上跑通，
+> 见 [2026-08-15 彩排](docs/evidence/runs/2026-08-15-dayu200-flash-rehearsal.md)：
+> 真实归档导入、真实计划物化、九个镜像真实落盘并 revalidate、设备自身分区表实测比对、
+> 读域实测(独立复现 AD-006)、九个目标的 readback 三态判定全部来自真机。
+> 九条 `wlx` 与一条 `rd` 被降解成真实 argv、逐项前置校验、然后**不派发**。设备写入次数 0。
+>
+> **剩下的不是代码，是一个决定：谁做 authority。** 一次写入需要 StepPermit，
+> 一张 permit 需要 authority 签发，而本仓刻意做不到——架构守卫禁止 `crates/arkforged`
+> 引用签发函数(8.6)。两条路都要拍板：(a) ArkDeck 做 authority(22 节 AF-V2 原意，
+> 需 ArkDeck 侧 OpenSpec + maintainer review)；(b) 本仓新增 bench authority crate
+> (需在 4.3 crate 边界图与架构守卫允许表里各加一行)。
+>
+> 另有一条独立的门 `RK-M02`：maturity 现为 `hardwareGated`——「AF-V2 要求先有一次
+> 真机全量刷写通过」。它现在正按设计挡着，彩排产出的是 PlanAssessment 而非 Executable plan。
 
 **目标**
 
@@ -85,12 +94,15 @@ inspect
 
 **生产代码**
 
-- [ ] ArkForge durable engine
-- [ ] ArkDeck adapter
-- [ ] StepPermit(含 8.6 完整性与重传信任模型)
-- [ ] ManagedDeviceControlPort
-- [ ] Rockchip fixed-tool Provider
-- [ ] generic Runtime integration
+- [x] ArkForge durable engine(journal 落盘 + fsync policy 随 record kind 固定；
+      撕裂尾部穷举复原；13.3 崩溃处置表由 journal 推导)
+- [ ] ArkDeck adapter — **ArkDeck 仓变更，需拍板**
+- [x] StepPermit(含 8.6 完整性与重传信任模型；single-use 跨重启由 durable ledger 保证，
+      顺序由类型强制：admit → begin_dispatch → record_receipt → checkpoint，逐个 by value 消费)
+- [x] ManagedDeviceControlPort(typed 动作 + Provider 侧「这属于 authority」的显式拒绝)
+- [x] Rockchip fixed-tool Provider(封闭命令面 `ld`/`ppt`/`wlx`/`rl`/`rd`；
+      argv 只在 Provider 内降解；读域三态判定；真机实测见彩排证据)
+- [ ] generic Runtime integration — **ArkDeck 仓变更，需拍板**
 - [ ] generic UI
 - [ ] compatibility alias(flash.dayu200 → generic adapter，不保留 Rockchip lowering)
 - [ ] legacy decoder
@@ -98,10 +110,13 @@ inspect
 
 **验收**
 
-- [ ] real DAYU200 full flash pass
-- [ ] exact identity/multi-device
-- [ ] nine partitions/userdata
-- [ ] read-domain-aware verification(readback/typed-skip)+ build postflight
+- [ ] real DAYU200 full flash pass — **待 authority 归属拍板**；除写入外全部已在真机跑通
+- [x] exact identity(两种人格均 `serialAndTopology`；locationID 跨模式变化第二次复现)
+      / multi-device — 单板环境，多板未验
+- [x] nine partitions/userdata — 九个目标全部降解、前置校验通过、镜像 revalidate 通过(未派发)
+- [x] read-domain-aware verification(readback/typed-skip)— 真机实测：1 Verified / 2 Failed /
+      6 TypedSkip，读窗边界与 AD-006 相容(AD-019)；+ build postflight — 期望值已从
+      真实 `system.img` 提取(`OpenHarmony-7.0.0.36`，AD-016)，比对待写入后执行
 - [ ] rebind 瞬态容忍与 normal 别名真机复验
 - [ ] crash/cancel/fault
 - [ ] outcomeUnknown no replay

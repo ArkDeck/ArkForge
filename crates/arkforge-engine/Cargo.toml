@@ -8,3 +8,4 @@ repository.workspace = true
 
 [dependencies]
 arkforge-core = { path = "../arkforge-core" }
+arkforge-authority-api = { path = "../arkforge-authority-api" }

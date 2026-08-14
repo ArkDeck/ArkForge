@@ -400,11 +400,16 @@ impl RockchipProvider {
                 CborValue::map(vec![
                     ("action", CborValue::text("write-partition")),
                     ("tool", CborValue::text("rkdeveloptool")),
-                    // `wlx` addresses by partition name; the sector offset is
-                    // carried so a fallback `wl` cannot invent an address.
+                    // `wlx` addresses by partition name, resolved from the
+                    // device's own table — which the preceding step has just
+                    // proved equal to this plan's. There is deliberately no
+                    // sector-addressed fallback: the executor's closed command
+                    // surface cannot spell one, so naming one here would be a
+                    // capability the plan claims and the executor does not have.
+                    // `beginSector` is carried as a refusal check, not as an
+                    // address (crate::rockchip_execute).
                     ("command", CborValue::text("wlx")),
                     ("partition", CborValue::text(target.partition.as_str())),
-                    ("fallbackCommand", CborValue::text("wl")),
                     ("beginSector", CborValue::Unsigned(target.offset_sectors)),
                     ("member", CborValue::text(member_name)),
                 ]),
@@ -502,8 +507,13 @@ impl RockchipProvider {
                 expected_mode_after: Some(loader.clone()),
                 private_action_digest: digest_of(&readback)?,
             });
-            actions.push(readback);
+            // Order matters and is not cosmetic: architecture.md 16.2 pairs
+            // VerifyTarget as "CharacterizeReadDomain + ReadbackPartition", and
+            // a readback that ran first would have to classify uniform filler
+            // with no measurement of whether the read face reaches that far —
+            // which is precisely the mistake AD-006 records.
             actions.push(characterize);
+            actions.push(readback);
         }
 
         // 6. Reboot back to normal.

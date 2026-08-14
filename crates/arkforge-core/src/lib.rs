@@ -27,6 +27,7 @@ pub mod digest;
 pub mod effect;
 pub mod identity;
 pub mod ids;
+pub mod outcome;
 pub mod plan;
 pub mod profile;
 pub mod projection;
