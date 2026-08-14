@@ -1,0 +1,10 @@
+[package]
+name = "arkforge-core"
+description = "Device- and authority-neutral ArkForge domain model, digests and projection invariants"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]

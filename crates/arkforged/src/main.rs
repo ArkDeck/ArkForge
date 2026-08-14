@@ -1,0 +1,291 @@
+//! `arkforged` — the ArkForge mechanics daemon.
+//!
+//! architecture.md 15.1/15.2. AF-V1 serves the read-only API over a Unix domain
+//! socket. `startExecution` answers `UNAVAILABLE` on both sockets.
+//!
+//! Two sockets, two capabilities:
+//!
+//! - `public.sock` (0600): inspect, discover, probe, assessment;
+//! - `controller.sock` (0600): the above plus artifact import.
+//!
+//! Windows named pipes are a design reservation, out of AF-V1/AF-V2 acceptance
+//! (architecture.md 15.2).
+
+use arkforged::Service;
+use arkforge_ipc::framing::{read_frame, write_frame};
+use arkforge_ipc::messages::{Hello, HelloAck, Request, Response};
+use arkforge_ipc::{negotiate, Api, SessionKind, Status, PROTOCOL_MAJOR, PROTOCOL_MINOR};
+use std::io::{self, Read, Write};
+use std::os::unix::net::{UnixListener, UnixStream};
+use std::path::{Path, PathBuf};
+use std::sync::{Arc, Mutex};
+
+const DAEMON_VERSION: &str = env!("CARGO_PKG_VERSION");
+
+fn main() {
+    let arguments: Vec<String> = std::env::args().skip(1).collect();
+    match run(&arguments) {
+        Ok(()) => {}
+        Err(message) => {
+            eprintln!("arkforged: {message}");
+            std::process::exit(1);
+        }
+    }
+}
+
+fn usage() -> String {
+    concat!(
+        "usage: arkforged --runtime-dir <dir> [--profile <file>]... [--transcript <file>]...\n",
+        "\n",
+        "  --runtime-dir  where the content store and sockets live\n",
+        "  --profile      a DeviceProfile YAML document (repeatable)\n",
+        "  --transcript   a golden transcript to serve as a replay transport (repeatable)\n",
+        "\n",
+        "This build is the AF-V1 read-only vertical: startExecution is unavailable.\n"
+    )
+    .to_string()
+}
+
+fn run(arguments: &[String]) -> Result<(), String> {
+    let mut runtime_dir: Option<PathBuf> = None;
+    let mut profile_paths: Vec<PathBuf> = Vec::new();
+    let mut transcript_paths: Vec<PathBuf> = Vec::new();
+
+    let mut index = 0usize;
+    while index < arguments.len() {
+        match arguments[index].as_str() {
+            "--runtime-dir" => {
+                index += 1;
+                runtime_dir = Some(PathBuf::from(
+                    arguments.get(index).ok_or_else(|| usage())?,
+                ));
+            }
+            "--profile" => {
+                index += 1;
+                profile_paths.push(PathBuf::from(arguments.get(index).ok_or_else(|| usage())?));
+            }
+            "--transcript" => {
+                index += 1;
+                transcript_paths.push(PathBuf::from(arguments.get(index).ok_or_else(|| usage())?));
+            }
+            "--help" | "-h" => {
+                print!("{}", usage());
+                return Ok(());
+            }
+            other => return Err(format!("unknown argument {other:?}\n\n{}", usage())),
+        }
+        index += 1;
+    }
+
+    let runtime_dir = runtime_dir.ok_or_else(usage)?;
+    std::fs::create_dir_all(&runtime_dir).map_err(|error| error.to_string())?;
+
+    let mut profiles = Vec::new();
+    for path in &profile_paths {
+        let source = std::fs::read_to_string(path)
+            .map_err(|error| format!("{}: {error}", path.display()))?;
+        let profile = arkforge_core::profile::load(&source)
+            .map_err(|error| format!("{}: {error}", path.display()))?;
+        profiles.push(profile);
+    }
+    let mut transcripts = Vec::new();
+    for path in &transcript_paths {
+        transcripts.push(
+            std::fs::read_to_string(path).map_err(|error| format!("{}: {error}", path.display()))?,
+        );
+    }
+
+    let now = now_epoch_ms();
+    let service = Service::new(&runtime_dir.join("store"), profiles, transcripts, now)
+        .map_err(|error| error.to_string())?;
+    let service = Arc::new(Mutex::new(service));
+
+    let public = bind(&runtime_dir.join("public.sock"))?;
+    let controller = bind(&runtime_dir.join("controller.sock"))?;
+    println!(
+        "arkforged {DAEMON_VERSION} listening: public={} controller={}",
+        runtime_dir.join("public.sock").display(),
+        runtime_dir.join("controller.sock").display()
+    );
+    println!("execution: unavailable (AF-V1 read-only vertical)");
+
+    let public_service = Arc::clone(&service);
+    let handle = std::thread::spawn(move || {
+        serve(public, SessionKind::Public, public_service);
+    });
+    serve(controller, SessionKind::Controller, service);
+    let _ = handle.join();
+    Ok(())
+}
+
+fn bind(path: &Path) -> Result<UnixListener, String> {
+    // A stale socket from a previous run would otherwise make bind fail.
+    let _ = std::fs::remove_file(path);
+    let listener = UnixListener::bind(path).map_err(|error| format!("{}: {error}", path.display()))?;
+    set_private(path)?;
+    Ok(listener)
+}
+
+#[cfg(unix)]
+fn set_private(path: &Path) -> Result<(), String> {
+    use std::os::unix::fs::PermissionsExt;
+    std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o600))
+        .map_err(|error| format!("{}: {error}", path.display()))
+}
+
+fn serve(listener: UnixListener, kind: SessionKind, service: Arc<Mutex<Service>>) {
+    for stream in listener.incoming() {
+        match stream {
+            Ok(stream) => {
+                let service = Arc::clone(&service);
+                std::thread::spawn(move || {
+                    if let Err(error) = handle_connection(stream, kind, service) {
+                        eprintln!("arkforged: {kind:?} connection ended: {error}");
+                    }
+                });
+            }
+            Err(error) => {
+                eprintln!("arkforged: accept failed: {error}");
+                return;
+            }
+        }
+    }
+}
+
+fn handle_connection(
+    stream: UnixStream,
+    kind: SessionKind,
+    service: Arc<Mutex<Service>>,
+) -> Result<(), String> {
+    let mut reader = stream.try_clone().map_err(|error| error.to_string())?;
+    let mut writer = stream;
+
+    // Handshake first: an unversioned peer never reaches a handler.
+    let Some(frame) = read_frame(&mut reader).map_err(|error| error.to_string())? else {
+        return Ok(());
+    };
+    let hello = Hello::decode(&frame).map_err(|error| error.to_string())?;
+    let refusal = match negotiate(hello.protocol_major, hello.protocol_minor) {
+        Ok(()) if hello.session_kind == kind => None,
+        Ok(()) => Some(format!(
+            "this socket serves {kind:?} sessions, peer announced {:?}",
+            hello.session_kind
+        )),
+        Err(message) => Some(message),
+    };
+    let ack = HelloAck {
+        protocol_major: PROTOCOL_MAJOR,
+        protocol_minor: PROTOCOL_MINOR,
+        session_kind: kind,
+        daemon_version: DAEMON_VERSION.to_string(),
+        refusal: refusal.clone(),
+    };
+    write_frame(&mut writer, &ack.encode()).map_err(|error| error.to_string())?;
+    if refusal.is_some() {
+        return Ok(());
+    }
+
+    while let Some(frame) = read_frame(&mut reader).map_err(|error| error.to_string())? {
+        let request = match Request::decode(&frame) {
+            Ok(request) => request,
+            Err(error) => {
+                // A malformed request is answered, then the connection closes:
+                // a peer that cannot frame a request cannot be trusted to frame
+                // the next one either.
+                let response = Response {
+                    request_id: String::new(),
+                    api: Api::InspectArtifact,
+                    status: Status::InvalidArgument,
+                    payload: arkforge_ipc::messages::ErrorBody {
+                        code: "MALFORMED_REQUEST".into(),
+                        message: error.to_string(),
+                    }
+                    .encode(),
+                    stream_sequence: 0,
+                    stream_end: true,
+                };
+                write_frame(&mut writer, &response.encode()).map_err(|e| e.to_string())?;
+                return Ok(());
+            }
+        };
+
+        let response = if request.api == Api::ImportArtifact && kind == SessionKind::Controller {
+            let mut content = ContentStream::new(&mut reader);
+            let mut guard = service.lock().map_err(|_| "service lock poisoned")?;
+            guard.handle(kind, &request, Some(&mut content))
+        } else {
+            let mut guard = service.lock().map_err(|_| "service lock poisoned")?;
+            guard.handle(kind, &request, None)
+        };
+        write_frame(&mut writer, &response.encode()).map_err(|error| error.to_string())?;
+    }
+    Ok(())
+}
+
+/// Reads artifact content from the controller stream as a sequence of frames,
+/// ending at a zero-length frame.
+///
+/// architecture.md 10.1 permits controller-only streaming for the first
+/// version; what it forbids is the daemon reopening a path the caller named,
+/// and this reads only from the already-authenticated connection.
+struct ContentStream<'a> {
+    source: &'a mut UnixStream,
+    buffer: Vec<u8>,
+    position: usize,
+    finished: bool,
+}
+
+impl<'a> ContentStream<'a> {
+    fn new(source: &'a mut UnixStream) -> Self {
+        ContentStream {
+            source,
+            buffer: Vec::new(),
+            position: 0,
+            finished: false,
+        }
+    }
+}
+
+impl<'a> Read for ContentStream<'a> {
+    fn read(&mut self, out: &mut [u8]) -> io::Result<usize> {
+        while self.position == self.buffer.len() {
+            if self.finished {
+                return Ok(0);
+            }
+            match read_frame(self.source) {
+                Ok(Some(frame)) if frame.is_empty() => {
+                    self.finished = true;
+                    return Ok(0);
+                }
+                Ok(Some(frame)) => {
+                    self.buffer = frame;
+                    self.position = 0;
+                }
+                Ok(None) => {
+                    self.finished = true;
+                    return Ok(0);
+                }
+                Err(error) => {
+                    return Err(io::Error::new(io::ErrorKind::InvalidData, error.to_string()))
+                }
+            }
+        }
+        let count = (self.buffer.len() - self.position).min(out.len());
+        out[..count].copy_from_slice(&self.buffer[self.position..self.position + count]);
+        self.position += count;
+        Ok(count)
+    }
+}
+
+fn now_epoch_ms() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|delta| delta.as_millis() as u64)
+        .unwrap_or(0)
+}
+
+/// Keeps `Write` in the import path honest about flushing.
+#[allow(dead_code)]
+fn flush<W: Write>(writer: &mut W) -> io::Result<()> {
+    writer.flush()
+}

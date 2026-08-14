@@ -1,13 +1,13 @@
 # ArkForge 实施任务台账
 
-> 状态总览(2026-08-14)：四个垂直任务全部未开工。任务定义正本是 [docs/architecture.md](docs/architecture.md) 第 22 节；本文件是执行台账，若两处出入，以 architecture.md 为准并回改本文件。
+> 状态总览(2026-08-14)：AF-V1 完成。任务定义正本是 [docs/architecture.md](docs/architecture.md) 第 22 节；本文件是执行台账，若两处出入，以 architecture.md 为准并回改本文件。
 
 | 任务 | 内容 | 依赖 | 状态 |
 |---|---|---|---|
-| AF-V1 | ArkForge Core + DAYU200 read-only parity | — | ⬜ 未开工 |
-| AF-V2 | DAYU200 ArkForge production cutover | AF-V1 | ⬜ 未开工 |
-| AF-V3 | DAYU600 evidence + plan-only | AF-V1(共用 API 面) | ⬜ 未开工 |
-| AF-V4 | DAYU600 production execute | AF-V3 + AF-V2(engine) + 17.5 证据门全 PASS | ⬜ 未开工 |
+| AF-V1 | ArkForge Core + DAYU200 read-only parity | — | ✅ 完成([验收证据](docs/evidence/AF-V1-acceptance.md)) |
+| AF-V2 | DAYU200 ArkForge production cutover | AF-V1 | ⛔ 阻塞：需真实 DAYU200 硬件 + ArkDeck 仓变更 |
+| AF-V3 | DAYU600 evidence + plan-only | AF-V1(共用 API 面) | ⬜ 未开工(软件半可做，证据半需真机) |
+| AF-V4 | DAYU600 production execute | AF-V3 + AF-V2(engine) + 17.5 证据门全 PASS | ⛔ 阻塞：18 条证据门 0 条 PASS |
 
 ## 全局规矩(摘自 architecture.md 7.4 / 21)
 
@@ -34,30 +34,41 @@ artifact import
 
 **生产代码**
 
-- [ ] Rust workspace(八个边界 crate，见 architecture.md 4.2)
-- [ ] neutral Authority API
-- [ ] Artifact/CAS
-- [ ] DAYU200 parser/profile
-- [ ] Rockchip read-only probe
-- [ ] PlanAssessment/FlashPlan
-- [ ] deterministic digest(RFC 8949 CBOR + SHA-256)
-- [ ] projection validator
-- [ ] daemon read-only API
-- [ ] golden transcript 库(GJ-4 campaign receipts ECAMP-96EFFF15 / ECAMP-31E041BC 为种子)
+- [x] Rust workspace(八个边界 crate，见 architecture.md 4.2)
+- [x] neutral Authority API
+- [x] Artifact/CAS
+- [x] DAYU200 parser/profile
+- [x] Rockchip read-only probe
+- [x] PlanAssessment/FlashPlan
+- [x] deterministic digest(RFC 8949 CBOR + SHA-256)
+- [x] projection validator
+- [x] daemon read-only API
+- [x] golden transcript 库(GJ-4 campaign receipts ECAMP-96EFFF15 / ECAMP-31E041BC 为种子)
 
 **验收**
 
-- [ ] Core 不依赖 ArkDeck/vendor
-- [ ] current DAYU200 archive facts parity
-- [ ] unknown member/partition fail closed
-- [ ] private action digest 覆盖
-- [ ] startExecution disabled
-- [ ] unit/fuzz/transcript tests
-- [ ] Profile 含 readDomain 与 per-target 验证强度，与 AD-006 一致
-- [ ] DAYU200 整包 CAS 导入在声明预算内(architecture.md 10.2)
-- [ ] 无设备 mutation
+- [x] Core 不依赖 ArkDeck/vendor(依赖图守卫为主，词法扫描为辅)
+- [x] current DAYU200 archive facts parity(结构等价；厂商归档字节级比对待归档到位)
+- [x] unknown member/partition fail closed
+- [x] private action digest 覆盖
+- [x] startExecution disabled(类型层 / 服务层 / 线上 UDS 三层)
+- [x] unit/fuzz/transcript tests(277 tests + 18000 变异输入)
+- [x] Profile 含 readDomain 与 per-target 验证强度，与 AD-006 一致
+- [x] DAYU200 整包 CAS 导入在声明预算内(实测 3.07 s / 227 MiB/s，预算 60 s)
+- [x] 无设备 mutation
+
+**额外交付**：`adapters/arkforge-arkdeck-adapter` 的 published step 映射表(5.4)、
+`proto/arkforge.proto`、`arkforge-cli` 只读诊断。
+
+**边界**：见[验收证据](docs/evidence/AF-V1-acceptance.md)第 4 节。
 
 ## AF-V2：DAYU200 ArkForge production cutover
+
+> **阻塞原因(2026-08-14)**：验收首条即 `real DAYU200 full flash pass`，本环境无该硬件；
+> 且 `ArkDeck adapter` / `generic Runtime integration` / `generic UI` /
+> `compatibility alias` 属 ArkDeck 仓变更，按 7.4 必须走 OpenSpec + 维护者 PR review
+> 并与真实产品能力同车交付。在硬件与该仓授权到位前不应开工——先写代码再补真机，
+> 正是 21.1「migration cutover 必须真实 DAYU200 pass」要防的顺序。
 
 **目标**
 
@@ -99,6 +110,13 @@ inspect
 
 ## AF-V3：DAYU600 evidence + plan-only
 
+> **可做/不可做拆分(2026-08-14)**：软件半可做——PAC ResearchOnly parser、
+> exact unknown list、parser fuzz、DAYU600 Profile(execute unavailable)、
+> startExecution 无 bypass、bluetool 静态证据入 ledger。
+> 证据半不可做——`descriptor/transcript capture` 需真实 DAYU600；
+> 且无 PAC 样本与格式规范(UNI-U01 = missing)时，parser 只能做通用结构扫描，
+> 这本就是 10.5 对 ResearchOnly 的定义。
+
 **目标**
 
 ~~~text
@@ -122,6 +140,11 @@ PAC inspect
 - [ ] 未把 plan-only 记为真机刷写通过
 
 ## AF-V4：DAYU600 production execute
+
+> **阻塞原因(2026-08-14)**：17.5 的十八条证据门 0 条 PASS。第 1 条(PAC format/version)
+> 到第 8 条(每个 destructive step 的断连结果)都需要 PAC 样本、官方工具观察与合法授权的
+> USB capture；第 16 条需真实 DAYU600 验收。任一条未过即不得出现 executable planID
+> (25.17)。
 
 **前置条件**
 

@@ -1,0 +1,30 @@
+[workspace]
+resolver = "2"
+members = [
+    "crates/arkforge-core",
+    "crates/arkforge-authority-api",
+    "crates/arkforge-artifact",
+    "crates/arkforge-transport",
+    "crates/arkforge-provider",
+    "crates/arkforge-engine",
+    "crates/arkforge-ipc",
+    "crates/arkforged",
+    "adapters/arkforge-arkdeck-adapter",
+]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.68"
+license = "Apache-2.0"
+repository = "https://github.com/fuhanfeng/ArkForge"
+
+# ArkForge carries no third-party runtime dependencies. Every primitive the
+# security model rests on (SHA-256, RFC 8949 deterministic CBOR, DEFLATE, tar,
+# the Protobuf wire codec) is vendored in-tree with its own published test
+# vectors, so a plan digest never depends on a crate the audit did not read.
+# See docs/decisions/AFD-0001-zero-dependency-core.md.
+
+[profile.release]
+overflow-checks = true
+panic = "abort"

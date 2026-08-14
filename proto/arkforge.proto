@@ -1,0 +1,265 @@
+// ArkForge local IPC — normative wire schema.
+//
+// architecture.md 15. Protobuf carries wire compatibility; deterministic CBOR
+// carries security digests (15.4). Nothing in this file is a security digest:
+// digests travel as opaque 32-byte fields that were computed elsewhere.
+//
+// The codec in `crates/arkforge-ipc/src/messages.rs` is hand-written against
+// this file (see docs/decisions/AFD-0001-zero-dependency-core.md). This file is
+// the contract; the codec's tests assert it round-trips.
+//
+// Evolution rules (IPC-001, protobuf.dev):
+//   - field numbers are never reused;
+//   - a new field is optional and additive;
+//   - an unknown FIELD is skipped (forward compatibility);
+//   - an unknown ENUM VALUE is a hard error, not a default
+//     (architecture.md 15.2 "unknown enum fail closed").
+
+syntax = "proto3";
+
+package arkforge.ipc.v1;
+
+// ---------------------------------------------------------------------------
+// Session
+// ---------------------------------------------------------------------------
+
+// Which socket a peer connected on. The public socket never carries
+// startExecution (architecture.md 15.2).
+enum SessionKind {
+  SESSION_KIND_UNSPECIFIED = 0;
+  // Read-only. Inspect, discover, probe, and assessment-only materialization.
+  SESSION_KIND_PUBLIC = 1;
+  // Holds the handle/secret the authority passed when it started the daemon.
+  SESSION_KIND_CONTROLLER = 2;
+}
+
+message Hello {
+  uint32 protocol_major = 1;
+  uint32 protocol_minor = 2;
+  SessionKind session_kind = 3;
+}
+
+message HelloAck {
+  uint32 protocol_major = 1;
+  uint32 protocol_minor = 2;
+  SessionKind session_kind = 3;
+  string daemon_version = 4;
+  // Set when the daemon refuses the handshake.
+  string refusal = 5;
+}
+
+// ---------------------------------------------------------------------------
+// API surface (architecture.md 15.3)
+// ---------------------------------------------------------------------------
+
+enum Api {
+  API_UNSPECIFIED = 0;
+  API_IMPORT_ARTIFACT = 1;
+  API_INSPECT_ARTIFACT = 2;
+  API_DISCOVER_DEVICES = 3;
+  API_PROBE_DEVICE = 4;
+  API_MATERIALIZE_PLAN = 5;
+  API_START_EXECUTION = 6;
+  API_WATCH_JOB = 7;
+  API_CANCEL_JOB = 8;
+  API_RECONCILE_JOB = 9;
+  API_PLAN_SUPERSEDING_RECOVERY = 10;
+  API_GET_RECOVERY_GUIDE = 11;
+}
+
+message Request {
+  string request_id = 1;
+  Api api = 2;
+  // Encoded payload for `api`. Kept opaque so one framing serves every call.
+  bytes payload = 3;
+}
+
+message Response {
+  string request_id = 1;
+  Api api = 2;
+  Status status = 3;
+  bytes payload = 4;
+  // Position in a streamed response; 0 for a single reply.
+  uint64 stream_sequence = 5;
+  bool stream_end = 6;
+}
+
+enum Status {
+  STATUS_UNSPECIFIED = 0;
+  STATUS_OK = 1;
+  // The request was understood and refused.
+  STATUS_REFUSED = 2;
+  // The capability does not exist in this build. Used for every execute-side
+  // API in the AF-V1 read-only vertical.
+  STATUS_UNAVAILABLE = 3;
+  STATUS_INVALID_ARGUMENT = 4;
+  STATUS_NOT_FOUND = 5;
+  STATUS_INTERNAL = 6;
+}
+
+message Error {
+  string code = 1;
+  string message = 2;
+}
+
+// ---------------------------------------------------------------------------
+// Payloads
+// ---------------------------------------------------------------------------
+
+message ImportArtifactRequest {
+  uint64 expected_size_bytes = 1;
+  // Lowercase hex, when the authority already knows it.
+  string expected_sha256 = 2;
+}
+
+message ImportArtifactResponse {
+  string artifact_id = 1;
+  string sha256 = 2;
+  uint64 size_bytes = 3;
+  bool deduplicated = 4;
+}
+
+message InspectArtifactRequest {
+  string artifact_id = 1;
+}
+
+message ArchiveMember {
+  string path = 1;
+  uint64 size_bytes = 2;
+  string sha256 = 3;
+  string role = 4;
+}
+
+message PartitionEntry {
+  uint32 index = 1;
+  string name = 2;
+  uint64 offset_sectors = 3;
+  // Absent for a remainder partition.
+  uint64 size_sectors = 4;
+  bool has_size = 5;
+  string attribute = 6;
+  string grammar_branch = 7;
+}
+
+message KeyValue {
+  string key = 1;
+  string value = 2;
+}
+
+message InspectArtifactResponse {
+  string format_id = 1;
+  string content_sha256 = 2;
+  uint64 size_bytes = 3;
+  repeated ArchiveMember members = 4;
+  repeated PartitionEntry partitions = 5;
+  repeated KeyValue build_facts = 6;
+  repeated string unclassified_members = 7;
+  repeated KeyValue execution_relevant_unknowns = 8;
+  string confidence = 9;
+  string manifest_sha256 = 10;
+}
+
+message DiscoverDevicesRequest {
+  repeated string modes = 1;
+  repeated string provider_ids = 2;
+  string minimum_identity_strength = 3;
+  uint64 deadline_epoch_ms = 4;
+}
+
+message DeviceObservationMessage {
+  string observation_id = 1;
+  uint64 observed_at_epoch_ms = 2;
+  string mode = 3;
+  string topology_sha256 = 4;
+  string descriptor_sha256 = 5;
+  string identity_strength = 6;
+  bool malformed_descriptor = 7;
+  repeated KeyValue protocol_identity = 8;
+}
+
+message DiscoverDevicesResponse {
+  repeated DeviceObservationMessage observations = 1;
+}
+
+message ProbeDeviceRequest {
+  string observation_id = 1;
+  string profile_id = 2;
+}
+
+message ProbeDeviceResponse {
+  DeviceObservationMessage observation = 1;
+  repeated KeyValue protocol_facts = 2;
+  string profile_id = 3;
+  string facts_sha256 = 4;
+}
+
+message MaterializePlanRequest {
+  string artifact_id = 1;
+  string profile_id = 2;
+  string observation_id = 3;
+  string intent = 4;
+  string toolchain_id = 5;
+}
+
+message PublicStepMessage {
+  string step_id = 1;
+  string kind = 2;
+  string effect = 3;
+  string cancellation = 4;
+  string binding = 5;
+  string semantic_target = 6;
+  string content_sha256 = 7;
+  string expected_mode_before = 8;
+  string expected_mode_after = 9;
+  string private_action_sha256 = 10;
+}
+
+message EffectMessage {
+  string kind = 1;
+  string target = 2;
+  uint64 range_start = 3;
+  uint64 range_length = 4;
+  string content_sha256 = 5;
+}
+
+message MaterializePlanResponse {
+  // Exactly one of `plan` or `assessment` is set.
+  ExecutablePlan plan = 1;
+  Assessment assessment = 2;
+}
+
+message ExecutablePlan {
+  string plan_id = 1;
+  string plan_sha256 = 2;
+  string provider_execution_plan_sha256 = 3;
+  string public_projection_sha256 = 4;
+  repeated PublicStepMessage public_steps = 5;
+  repeated EffectMessage persistent_effects = 6;
+  repeated EffectMessage transient_effects = 7;
+  repeated KeyValue data_impact = 8;
+  uint64 expires_at_epoch_ms = 9;
+}
+
+message Assessment {
+  // An assessment carries no plan id and no plan digest, by construction.
+  repeated PublicStepMessage would_be_steps = 1;
+  repeated EffectMessage known_persistent_effects = 2;
+  repeated KeyValue unknowns = 3;
+  repeated KeyValue evidence_requirements = 4;
+  string availability = 5;
+  string unavailable_reason = 6;
+  repeated KeyValue data_impact = 7;
+}
+
+message StartExecutionRequest {
+  // Internal identifiers only. No partition, address, tool, FDL, timeout or
+  // effect override exists in this message (architecture.md 15.3).
+  string plan_id = 1;
+  string plan_sha256 = 2;
+  string execution_purpose = 3;
+  string controller_session_id = 4;
+}
+
+message StartExecutionResponse {
+  string job_id = 1;
+}

@@ -1,0 +1,12 @@
+[package]
+name = "arkforge-provider"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+arkforge-core = { path = "../arkforge-core" }
+arkforge-artifact = { path = "../arkforge-artifact" }
+arkforge-transport = { path = "../arkforge-transport" }

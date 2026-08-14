@@ -1,0 +1,218 @@
+# DAYU200 (Rockchip RK3568 / RockUSB) DeviceProfile
+#
+# Schema: architecture.md 18.2. Values are pinned to the ArkDeck audit baseline
+# and are data, not policy this file may relax:
+#
+#   - the 9 mapped partitions, their write order and their sector offsets come
+#     from ArkDeck `RockchipFlashProfile.dayu200` and the pinned decode in
+#     `partition-mapping.json` (schema arkdeck-dayu200-partition-mapping-1.0.0,
+#     archive fc7637f3…);
+#   - `protectedTargets` is the membership-less set: partitions the device's own
+#     table declares that no archive member supplies, which are therefore
+#     write-forbidden (architecture.md 16.3);
+#   - `readDomain` is the AD-006 finding: the RockUSB write face reaches the
+#     whole medium while the `rl` read face does not, so read reach is measured
+#     at runtime and never assumed here.
+#
+# Maturity note: this profile is the AF-V1 read-only shape. `recovery` declares
+# no complete-overwrite support because the durable engine that would execute it
+# is AF-V2 work; a coverage claim ahead of the code would be a claim the
+# evidence does not carry (architecture.md 12.3, 24.1).
+
+schemaVersion: arkforge.device-profile/v1
+
+profile:
+  id: org.openharmony.dayu200
+  version: 1.0.0
+
+identity:
+  productModels: [DAYU200]
+  soc:
+    vendor: rockchip
+    family: rk3568
+  hardwareRevisions:
+    # No wildcard: architecture.md 18.1 requires a production profile to name
+    # the revisions it was measured on. This is the revision the GJ-4 campaign
+    # ran against (ECAMP-96EFFF15 / ECAMP-31E041BC).
+    allow: [dayu200-gj4-2026-08]
+
+providers:
+  - id: arkforge.rockchip
+    backend: rkdeveloptool-fixed
+    minimumVersion: 1.32.0
+    maximumVersionExclusive: 2.0.0
+  # The transcript backend exists so contract tests can run the whole vertical
+  # without a device. It can never be ProductionVerified — see
+  # ToolchainKind::Replay.
+  - id: arkforge.rockchip
+    backend: transcript-replay
+    minimumVersion: 1.0.0
+    maximumVersionExclusive: 2.0.0
+
+artifactCompatibility:
+  formats: [rockchip-images-targz]
+  # `updater_binary` has no extension the container format recognizes, so the
+  # parser reports it unclassified rather than guessing. It is the updater
+  # executable that ships beside `updater.img`; ArkDeck's pinned inventory
+  # classifies it `nonPartitionMetadata`. Declaring it here is what discharges
+  # the parser's unknown — a member that is NOT on this list still blocks.
+  knownMetadataMembers: [updater_binary]
+
+modes:
+  - id: hdc-normal
+    # `normal` is what the observation surface reports; the equivalence is a
+    # Profile fact, not a Transport improvisation (architecture.md 11.3).
+    aliases: [normal]
+  - id: rockusb-loader
+    aliases: [loader]
+  - id: rockusb-maskrom
+    aliases: [maskrom]
+
+modeTransitions:
+  - from: hdc-normal
+    to: rockusb-loader
+    action: enter-updater
+    rebind:
+      requireDisconnect: true
+      # Re-enumeration into Loader showed transient malformed descriptors on
+      # real hardware (#1068); inside this window they are evidence, not a
+      # fatal error.
+      toleranceWindowMs: 30000
+      tolerateTransientMalformed: true
+  - from: rockusb-loader
+    to: hdc-normal
+    action: reboot-to-normal
+    rebind:
+      requireDisconnect: true
+      # A full boot to HDC-normal takes considerably longer than entering the
+      # loader. No global short constant (architecture.md 8.3).
+      toleranceWindowMs: 180000
+      tolerateTransientMalformed: true
+
+storage:
+  kind: emmc
+  logicalBlockSize: 512
+
+readDomain:
+  # AD-006: `wlx` reaches the whole medium. A short read window does NOT imply
+  # a short write window.
+  write: full-disk
+  # AD-006: the `rl` read window is measured every execution. On 2026-08-04 it
+  # ended at sector 65536 (32 MiB); that number is an observation of one
+  # session, never a constant this file may pin.
+  read: characterize-at-runtime
+  # Erased medium, and anything past the read window, reads as this byte.
+  erasedMediumFiller: 0xCC
+
+# The nine writable targets, in ArkDeck's write order. Every target that is not
+# listed here is not writable, whatever the archive happens to contain
+# (architecture.md 16.3).
+#
+# `maxStrengthWhenReadable` is what a readback may claim *if* the runtime
+# characterization says the read face covers the target. Every target also
+# carries fallback evidence, because most of these offsets (system at 245760,
+# vendor at 4440064, …) sit far past the window observed on real hardware, and
+# a Profile may not declare readback strength it cannot reach
+# (architecture.md 18.3).
+allowedTargets:
+  - partition: uboot
+    writeOrder: 1
+    offsetSectors: 8192
+    sourceMember: uboot.img
+    verification:
+      maxStrengthWhenReadable: fullHash
+      fallback:
+        writeCompletionSemantics: true
+        buildPostflight: true
+  - partition: resource
+    writeOrder: 2
+    offsetSectors: 28672
+    sourceMember: resource.img
+    verification:
+      maxStrengthWhenReadable: fullHash
+      fallback:
+        writeCompletionSemantics: true
+        buildPostflight: true
+  - partition: boot_linux
+    writeOrder: 3
+    offsetSectors: 40960
+    sourceMember: boot_linux.img
+    verification:
+      maxStrengthWhenReadable: fullHash
+      fallback:
+        writeCompletionSemantics: true
+        buildPostflight: true
+  - partition: ramdisk
+    writeOrder: 4
+    offsetSectors: 237568
+    sourceMember: ramdisk.img
+    verification:
+      maxStrengthWhenReadable: fullHash
+      fallback:
+        writeCompletionSemantics: true
+        buildPostflight: true
+  - partition: system
+    writeOrder: 5
+    offsetSectors: 245760
+    sourceMember: system.img
+    verification:
+      maxStrengthWhenReadable: fullHash
+      fallback:
+        writeCompletionSemantics: true
+        buildPostflight: true
+  - partition: vendor
+    writeOrder: 6
+    offsetSectors: 4440064
+    sourceMember: vendor.img
+    verification:
+      maxStrengthWhenReadable: fullHash
+      fallback:
+        writeCompletionSemantics: true
+        buildPostflight: true
+  - partition: updater
+    writeOrder: 7
+    offsetSectors: 6742016
+    sourceMember: updater.img
+    verification:
+      maxStrengthWhenReadable: fullHash
+      fallback:
+        writeCompletionSemantics: true
+        buildPostflight: true
+  - partition: chip_ckm
+    writeOrder: 8
+    offsetSectors: 6938624
+    sourceMember: chip_ckm.img
+    verification:
+      maxStrengthWhenReadable: fullHash
+      fallback:
+        writeCompletionSemantics: true
+        buildPostflight: true
+  - partition: userdata
+    writeOrder: 9
+    offsetSectors: 19955712
+    sourceMember: userdata.img
+    verification:
+      maxStrengthWhenReadable: fullHash
+      fallback:
+        writeCompletionSemantics: true
+        buildPostflight: true
+
+# Partitions the device's table declares that no archive member supplies.
+# Writing them is forbidden (ArkDeck `membershiplessPartitionsWriteForbidden`).
+protectedTargets: [misc, bootctrl, sys-prod, chip-prod, eng_system, eng_chipset]
+
+dataImpact:
+  # userdata.img is written, so user data does not survive a full restore.
+  userdata: overwritten
+  calibration: preserved
+  nonVolatileConfig: preserved
+  secureStorage: preserved
+
+recovery:
+  supportsCompleteOverwrite: false
+  version: 0.1.0
+  coveredEffects: []
+  unsupportedStates:
+    - "complete-overwrite recovery requires the AF-V2 durable engine; AF-V1 is read-only"
+
+evidenceRefs: [AD-003, AD-005, AD-006]

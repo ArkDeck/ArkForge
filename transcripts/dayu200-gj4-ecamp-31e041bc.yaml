@@ -1,0 +1,246 @@
+# Golden transcript — DAYU200 GJ-4 real-device campaign ECAMP-31E041BC0F6FC563BCEF7563
+#
+# Provenance: derived-from-published-receipts.
+#
+# This file is a faithful record of what ArkDeck's GJ-4 campaign *reported*:
+# the 13-step receipt chain, its ordering, its dispositions, and the semantic
+# facts each step published (ArkDeck
+# `openspec/changes/chg-2026-049-diagnostics-and-hap/evidence/runs/TASK-DHA-001/
+# gj4-flash-recovery-current-digest-2026-08-05.md`).
+#
+# It is NOT a byte-level wire capture. No USB payload, tool stdout or image
+# byte was recorded on that campaign in a form this repository holds, so every
+# digest below is derived, not observed:
+#
+#     digest = SHA-256("arkforge/derived-transcript/v1|<transcript id>|<field>|<basis>")
+#
+# `tests/golden_transcript_parity.rs` recomputes every one of them, so the file
+# cannot drift into looking like a capture. `TranscriptProvenance::
+# supports_protocol_claims()` returns false for this provenance: nothing here
+# may be cited as evidence of how the RockUSB protocol behaves
+# (architecture.md 24.1, 11.4).
+#
+# Campaign facts this transcript is bound to:
+#   job                     job-9e393b2c7bd9745a10e0fa6fe965ba18
+#   materialized plan       88b2237082638e83…e93561
+#   catalog digest          e2f8eb6592aaeeec…2cfd0aa
+#   target                  TGT-958780b2ffb7, binding revision 2
+#   admission               evolutionCampaignConfirmation ain019-2fb1422e…
+#   disposition             succeeded, attempt ordinal 1, outcomeUnknown false
+#   actual effect           destructive
+
+schemaVersion: arkforge.transcript/v1
+
+transcript:
+  id: ECAMP-31E041BC0F6FC563BCEF7563
+  provenance: derived-from-published-receipts
+  source: "ArkDeck GJ-4 flash campaign ECAMP-31E041BC0F6FC563BCEF7563 (job-9e393b2c7bd9745a10e0fa6fe965ba18); 13-step receipt chain published 2026-08-05"
+  profileId: org.openharmony.dayu200
+
+records:
+
+  # 1. host-side bundle hashing, before any device contact
+  - sequence: 1
+    kind: invocation
+    atEpochMs: 1754380800000
+    durationMs: 41000
+    status: ok
+    action: verify-image-bundle
+    responseDigest: b5c11b403d51ebdff765b39379b5d4fcc4b9b35734918f743d0b6aad45e4c160
+    semantic:
+      - key: step
+        value: "verify-image-bundle / hash-images"
+      - key: scope
+        value: "host"
+      - key: profile
+        value: "dayu200@2"
+  # 2. authority confirms intent — ArkForge never mints this
+  - sequence: 2
+    kind: invocation
+    atEpochMs: 1754380841000
+    durationMs: 120
+    status: ok
+    action: confirm-flash-intent
+    responseDigest: a651236d94752dc35aaae1d35dd8fab4c02db148ba8b59f5620ef9ac2f95d5c7
+    semantic:
+      - key: step
+        value: "flash intent confirmed by campaign reservation"
+      - key: reservation
+        value: "ain019-2fb1422e"
+  # 3. the bound target is observed before the first mutation
+  - sequence: 3
+    kind: observation
+    atEpochMs: 1754380841500
+    status: ok
+    observation:
+      id: OBS-PREFLIGHT
+      mode: hdc-normal
+      topologyDigest: 335e48ad06209b9657a533b5f409a43bd0d87ae8471045666466343a8d6f1ea4
+      descriptorDigest: 2b0fa164e881e1a4a1e43016ce8a5ae857ad02052432ada7cf32d5edc32ab336
+      serialKind: descriptor
+      serialDigest: 6223ef79a6a92dace933e67dea3365f75dd4d846da7a1da522cef3b22c4ae746
+      identityStrength: protocolConfirmed
+    semantic:
+      - key: step
+        value: "campaign reservation verified before first mutation"
+      - key: targetId
+        value: "TGT-958780b2ffb7"
+      - key: bindingRevision
+        value: "2"
+  # 4. mode transition through the ArkDeck-managed control port
+  - sequence: 4
+    kind: invocation
+    atEpochMs: 1754380842000
+    durationMs: 2400
+    status: ok
+    action: enter-loader-mode
+    responseDigest: 79af3d6f9fddfe7a2596bac8796a6f17735fec2dc5f5d3894081212d4074698d
+    semantic:
+      - key: step
+        value: "enter-loader-mode"
+      - key: controlPort
+        value: "managed-hdc"
+  # 5. the expected disconnect
+  - sequence: 5
+    kind: detach
+    atEpochMs: 1754380844400
+    status: ok
+    semantic:
+      - key: step
+        value: "wait-loader-disconnect"
+  # 6. re-enumeration into Loader
+  - sequence: 6
+    kind: attach
+    atEpochMs: 1754380847100
+    status: ok
+    observation:
+      id: OBS-LOADER
+      mode: rockusb-loader
+      topologyDigest: 763f49f32c052349e98906b44a087f5b3277744ee0b6430259a7e8ac6fccf63c
+      descriptorDigest: 180a3870d942afa9227222433c94418c4a75d6ba2114f065647e65eb095be75e
+      serialKind: descriptor
+      serialDigest: 843f872a159052379ec7aec3d231f0eed954860c05aa65265c864fe3a39c9fff
+      identityStrength: serialAndTopology
+    semantic:
+      - key: step
+        value: "wait-loader-reconnect"
+  # 7. lineage across the mode change, on a stable observation
+  - sequence: 7
+    kind: rebind
+    atEpochMs: 1754380847600
+    status: ok
+    observation:
+      id: OBS-LOADER
+      mode: rockusb-loader
+      topologyDigest: 763f49f32c052349e98906b44a087f5b3277744ee0b6430259a7e8ac6fccf63c
+      descriptorDigest: 180a3870d942afa9227222433c94418c4a75d6ba2114f065647e65eb095be75e
+      serialKind: descriptor
+      serialDigest: 843f872a159052379ec7aec3d231f0eed954860c05aa65265c864fe3a39c9fff
+      identityStrength: serialAndTopology
+    semantic:
+      - key: step
+        value: "rebind-loader-identity"
+  # 8. the nine writes; wlx reaches the whole medium (AD-006)
+  - sequence: 8
+    kind: invocation
+    atEpochMs: 1754380848000
+    durationMs: 903000
+    status: ok
+    action: flash-partitions
+    responseDigest: 2c2922b4cb6438b5db532b1fea7848304bc462b456d0b979df1dab9e1a1aebfc
+    semantic:
+      - key: step
+        value: "flash-partitions"
+      - key: partitionCount
+        value: "9"
+      - key: writeFace
+        value: "wlx"
+      - key: dataImpact
+        value: "userdata-overwritten"
+  # 9. read-domain-aware verification: typed skip, never counted as verified (AD-006)
+  - sequence: 9
+    kind: invocation
+    atEpochMs: 1754381751000
+    durationMs: 6100
+    status: ok
+    action: verify-flash-readback
+    responseDigest: 1abbc7c481795be0f25a52223e595c2eba154aa6c5231f16c4236d225db99e2d
+    semantic:
+      - key: step
+        value: "verify-flash-readback"
+      - key: readDomain
+        value: "windowed"
+      - key: readback
+        value: "skipped-lba-read-window"
+      - key: readDomainDetail
+        value: "the backup GPT header does not read back; rl-based verification is blind past the window, so boot-side verification is the authority for partitions beyond it"
+      - key: verificationOutcome
+        value: "typedSkip"
+  # 10. reset out of Loader
+  - sequence: 10
+    kind: invocation
+    atEpochMs: 1754381757100
+    durationMs: 1800
+    status: ok
+    action: reboot-device
+    responseDigest: be667d26a38be45e076594b28368c6b9e2a781455e7af2ea0a04278f03956d5e
+    semantic:
+      - key: step
+        value: "reboot-device"
+      - key: targetMode
+        value: "hdc-normal"
+  # 11. the board comes back on HDC — a full boot, far longer than the loader transition
+  - sequence: 11
+    kind: attach
+    atEpochMs: 1754381802000
+    status: ok
+    observation:
+      id: OBS-POSTFLIGHT
+      mode: hdc-normal
+      topologyDigest: 335e48ad06209b9657a533b5f409a43bd0d87ae8471045666466343a8d6f1ea4
+      descriptorDigest: 2b0fa164e881e1a4a1e43016ce8a5ae857ad02052432ada7cf32d5edc32ab336
+      serialKind: descriptor
+      serialDigest: 6223ef79a6a92dace933e67dea3365f75dd4d846da7a1da522cef3b22c4ae746
+      identityStrength: protocolConfirmed
+    semantic:
+      - key: step
+        value: "wait-for-hdc"
+  # 12. boot-side verification — the authority for every target past the read window
+  - sequence: 12
+    kind: rebind
+    atEpochMs: 1754381802500
+    status: ok
+    observation:
+      id: OBS-POSTFLIGHT
+      mode: hdc-normal
+      topologyDigest: 335e48ad06209b9657a533b5f409a43bd0d87ae8471045666466343a8d6f1ea4
+      descriptorDigest: 2b0fa164e881e1a4a1e43016ce8a5ae857ad02052432ada7cf32d5edc32ab336
+      serialKind: descriptor
+      serialDigest: 6223ef79a6a92dace933e67dea3365f75dd4d846da7a1da522cef3b22c4ae746
+      identityStrength: protocolConfirmed
+    semantic:
+      - key: step
+        value: "rebind-and-verify-build"
+      - key: const.product.model
+        value: "ohos"
+      - key: const.ohos.fullname
+        value: "OpenHarmony-7.0.0.36"
+      - key: artifact
+        value: "post-flash-facts.json"
+      - key: artifactId
+        value: "ART-eafa6ea3ce5a211545fb861fe5b9eaf4"
+  # 13. the campaign's closing capture
+  - sequence: 13
+    kind: invocation
+    atEpochMs: 1754381804000
+    durationMs: 5200
+    status: ok
+    action: capture-post-flash-diagnostics
+    responseDigest: 556e5795124637a1a125311706972eaee11ff9a7ab049097d05923cfc31966a9
+    semantic:
+      - key: step
+        value: "capture-post-flash-diagnostics"
+      - key: disposition
+        value: "succeeded"
+      - key: outcomeUnknown
+        value: "false"
