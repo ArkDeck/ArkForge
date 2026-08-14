@@ -191,34 +191,46 @@ bookmark 策略。这正是 ArkForge maturity 组合键把 toolchain backend dig
 `231a05ef…` 与 `1e54a0cd…`。但这与 pin 无关:捆绑件剥签名后是 `c31e8a3f…`,而
 rehearsal 构建剥签名后是 `2081fb90…`,**两者本就是不同构建**,不是同一构建的签名差异。
 
-### 6.2 仍然开着的三条
+### 6.2 另外三条,逐条追到底后全部收口
 
-**AD-011 — 只读发现所钉的二进制在本机不可用。** `/opt/homebrew/bin/rkdeveloptool`
-即 `pinnedReadOnlyDiscovery`,但它 `ld` 与 `-v` 都挂起,设备在 HDC-normal 或 Loader
-皆然——**无设备操作也挂起**,所以不是设备状态所致。ArkDeck 的只读发现路径钉的正是
-这个二进制。
+写下它们时我以为都是 ArkDeck 侧待处理项。逐条查 ArkDeck 源码与 openspec 后,**没有一条
+构成可提交的缺陷**。记录在此,连同判定依据。
 
-**AD-012 — 捆绑组件与两个 pin 都不符。** ArkDeck.app 里的那个是第三个构建。
-本次全部读操作由它完成(因为它能跑),但按声明门 `tool.sha256 == profile.executableSHA256`
-它两个 pin 都过不了。捆绑组件(CHG-2026-036)与 pin 的关系需要声明。
-
-**AD-013 — `ld` 的 Mode 字段会把 HDC-normal 误报为 Maskrom。** 连续三次复现:
+**AD-013(原判「最要紧」)— 已知,且早有夹具。** `rkdeveloptool ld` 对处于 HDC-normal
+的板子报 `Mode=Maskrom`:
 
 ```text
-DevNo=1	Vid=0x2207,Pid=0x5000,LocationID=102	Maskrom
+本次实测   DevNo=1	Vid=0x2207,Pid=0x5000,LocationID=102	Maskrom
+ArkDeck 夹具 DevNo=1	Vid=0x2207,Pid=0x5000,LocationID=2	Maskrom
 ```
 
-而设备此刻 PID `0x5000`、产品串 "HDC Device"、HDC 正常应答 `param get`。
-Loader 模式下 `ld` 报 `Mode=Loader` 是对的,所以只有 HDC-normal 这一档被误报。
+`Tests/ArkDeckContractTests/Fixtures/Rockchip/Discovery/1.0.0/maskrom.stdout.bin` 与本次
+实测**同形**,registry 记 `{"mode":"Maskrom","reason":"providerDoesNotSupportMaskrom"}`,
+契约测试 `testTEST_AC_FLASH_001_01_…BlockWithoutGuessing` 覆盖。
 
-这条最要紧。Maskrom 是往 SRAM 写 loader 的阶段;把一台**正在运行系统**的板子
-判成 Maskrom 并据此动作,正是「精确身份」规则要防的那类事故。ArkDeck 记录的
-BlueTool 正则(`…\tMode=(?P<mode>\S+)`)取的就是这个字段。
+更要紧的是 ArkDeck 的判定顺序本就正确
+(`RockchipDeviceObservation.providerPreflightDisposition`):
 
-ArkForge 对此免疫,而且是结构性的:模式来自 **Profile 声明的、实测的 VID/PID**
-(`usbIdentities`),transport 从不读厂商工具的 mode 词。
-`crates/arkforge-transport/src/usb.rs::a_pid_the_vendor_tool_misreports_still_resolves_by_profile`
-把这条钉住。
+```swift
+guard usbVendorID == 0x2207, usbProductID == 0x350a else { return .blocked(.deviceNotExpectedRockUSB) }
+guard mode == .loader else { return .blocked(.maskromNotSupported) }
+```
+
+**先判 VID/PID,再判 mode。** 一台 `0x5000` 的板子在 mode 字段被读到之前就已被拦下。
+ArkDeck 与 ArkForge 用的是同一道防线,各自独立到达。
+
+**AD-012 — 非缺陷。** 捆绑组件走的是另一条声明线:CHG-2026-036 的
+`package-receipt.json` 逐包声明
+`component.signedSHA256` / `component.unsignedSHA256` **成对**身份。也就是说,「签名前
+还是签名后」这个问题 ArkDeck 早就分开记了。本机安装的是比归档收据更新的一个包,所以
+两个哈希都对不上归档值——这是版本差异,不是声明缺失。
+
+**AD-011 — 环境事实,非 ArkDeck 缺陷。** `pinnedReadOnlyDiscovery` 那个二进制在本机挂起
+属实,但 discovery profile 自带 `timeout: 5`,registry 的 `accessDiagnostics` 也覆盖
+libusb 类失败,挂起会被超时收口为可诊断结果。对本机的实际影响是只读发现路径不可用,
+需要在本机换一个可用的构建;这是环境问题。
+
+**结论:无 OpenSpec change 可提。** 三条里两条 ArkDeck 已覆盖,一条是本机环境。
 
 ### 6.3 ArkDeck 已知的相邻缺陷
 
