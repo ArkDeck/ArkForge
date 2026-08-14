@@ -166,14 +166,23 @@ ArkForge 自己不持有 authority(architecture.md 3、8)。一次写入需要 S
 一张 permit 需要一个 authority 去签发，而本仓**刻意做不到**：
 架构守卫禁止 `crates/arkforged` 引用签发函数(`the_daemon_never_mints_a_permit`)。
 
-因此这里缺的不是代码，是一个决定：谁来做 authority。两条路都是真的：
+因此这里缺的不是代码，是一个决定：谁来做 authority。
 
-1. **ArkDeck 做 authority**(architecture.md 22 AF-V2 原意) —— 需要 ArkDeck 侧的
-   adapter/Runtime/UI 改动，走 OpenSpec + maintainer review；
-2. **本仓新增一个 bench authority crate** —— 需要在 architecture.md 4.3 的
-   crate 边界图里加一个成员，并在架构守卫的允许表里给它一行理由。
+**2026-08-15 已定：ArkDeck 做 authority**，即 architecture.md 22 节 AF-V2 的原意。
+ArkForge 这一侧需要的东西已经全部就位：
 
-两条都要拍板，不是我能自行决定的。
+- `adapters/arkforge-arkdeck-adapter/src/lib.rs` —— step 映射表；
+- `adapters/arkforge-arkdeck-adapter/src/control.rs` —— 控制动作映射表，
+  以及 ArkDeck 每一个 `RockchipProviderAction` 的归属(keptByAuthority /
+  keptInternal / delegatedToArkForge)，有测试断言三类之和穷尽 baseline；
+- `docs/openspec/chg-arkdeck-arkforge-authority/` —— 可整个目录贴进 ArkDeck 的提案，
+  含 permit 交叉验证向量。
+
+被否掉的另一条是「本仓新增 bench authority crate」。它能更快刷上一次机，
+但要在 architecture.md 4.3 的 crate 边界图里加一个成员，
+且会让「本机台架签的 permit」和「ArkDeck 签的 permit」在记账上难以区分。
+
+不论走哪条，一次通过只发布它自己那一个 maturity 组合——maturity 是组合键。
 
 另有一条与之独立的门：`RK-M02`。maturity 目前是 `hardwareGated`——
 「AF-V2 要求先有一次真机全量刷写通过，这个组合才能是 ProductionVerified」。
@@ -183,11 +192,45 @@ ArkForge 自己不持有 authority(architecture.md 3、8)。一次写入需要 S
 
 ---
 
+## 7bis. Rebind 瞬态与身份变化(AD-020)
+
+`arkforge-capture watch-rebind` 连续采样两次模式切换，两个方向各一次：
+
+| 方向 | 采样数 | 认不出任何设备的时长 | 单次采样最多匹配数 | serial | topology |
+|---|---:|---:|---:|---|---|
+| normal → loader | 18 | **3,725 ms** | 1 | **变了** | **变了** |
+| loader → normal | 68 | **15,579 ms** | 1 | **变了** | **变了** |
+
+三件事：
+
+1. **回 normal 的空窗有 15.6 秒。** 任何短于此的 deadline 都会误判「设备没回来」。
+   ArkDeck 计划里的 `reconnectDeadlineMilliseconds: 120_000` 有充足余量。
+   这个数以前没人量过——它是硬件事实，不是可以估的常数。
+2. **serial digest 也变，不只是 topology。** Profile 在 AD-008 之后声明的
+   `serialPolicy: may-change` / `topologyPolicy: may-change` 两条都被独立复现。
+   把 USB serial 当作跨模式稳定标识的实现会在这里认不出同一块板子。
+3. **任何一次采样都只匹配到一台。** 「恰好一台设备重新绑定」在整个窗口内成立，
+   不只是在结束时成立。
+
+### 这次**没有**验的
+
+`normal` 别名。Profile 写的是 `hdc-normal <- normal`，而 `normal` 是 **hdc 的词汇**，
+不是 ioreg 的。USB transport 走的是 VID/PID → Profile → mode，它从头到尾没见过
+别名要重命名的那个字符串。要验它得走 `ManagedDeviceControlPort`，
+而那一侧是 authority 的(architecture.md 9.2、11.3)。工具现在把这句话打出来，
+免得一次通过的运行被读成「别名也验过了」。
+
+---
+
 ## 8. 复现
 
 ~~~bash
 # Loader 模式(会改设备状态)
 arkforge-capture enter-loader --profile profiles/dayu200.yaml \
+  --target <connect-key> --i-am-changing-device-mode
+
+# rebind 瞬态测量(会改设备状态,两次)
+arkforge-capture watch-rebind --profile profiles/dayu200.yaml \
   --target <connect-key> --i-am-changing-device-mode
 
 # 彩排(只读)

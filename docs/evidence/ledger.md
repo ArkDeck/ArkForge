@@ -41,6 +41,7 @@
 | AD-017 | **本仓的 fsync 只证明到进程死亡为止。** journal 对 dispatch 相关记录在返回前 `sync_all()`，且 `every_torn_tail_replays_as_a_prefix_or_is_refused` 穷举了每一个可能的撕裂位点;但 macOS `fsync(2)` 不冲刷盘内缓存(那要 `F_FULLFSYNC`)，而 `F_FULLFSYNC` 需要 libc，AFD-0001 不允许 | `crates/arkforge-engine/src/durable.rs` 模块文档 | A(仓内)/D(未做掉电实验) | **open** — 记为已知边界，不记为已通过的门 |
 | AD-018 | **`rkdeveloptool ppt` 的真实输出是三列、CRLF、裸十六进制、无 size 列**(`00  00002000  uboot`)。设备的表只声明每个分区的**起点**;可写入的上界只能由「到下一个分区起点的距离」推出，而它与归档声明的大小并不相同(`chip_ckm` 归档 131072 扇区，到下一分区 13017088 扇区) | [同上](runs/2026-08-15-dayu200-flash-rehearsal.md) §3 | A(本机实测) | confirmed；我按文档写的四列带 `0x` 解析器在真机上零行命中，已按实测重写 |
 | AD-019 | **AD-006 的读窗被独立复现。** 与 AF-V1 capture 完全不同的代码路径实测：sector 1 读到真实数据、sector 19955712 读到 uniform `0xCC`;九个目标的三态判定中 `uboot`(8192)Verified、`resource`(28672)/`boot_linux`(40960)Failed(读到真实内容)、`ramdisk`(237568)起全部 TypedSkip。边界落在 40960 与 237568 之间，与 AD-006 记录的 65536 相容 | [同上](runs/2026-08-15-dayu200-flash-rehearsal.md) §4 | A(本机实测) | confirmed |
+| AD-020 | **模式切换的空窗与身份变化实测。** normal→loader 空窗 3,725 ms;loader→normal 空窗 **15,579 ms**——任何短于此的 reconnect deadline 都会误判「设备没回来」。两个方向的 **serial digest 与 topology digest 都变**，AD-008 之后声明的 `serialPolicy`/`topologyPolicy: may-change` 两条各被独立复现一次。整个窗口内任一次采样都只匹配到一台设备 | [同上](runs/2026-08-15-dayu200-flash-rehearsal.md) §7bis | A(本机实测) | confirmed;`normal` 别名**未**在此路径验证(它是 hdc 的词汇，不是 ioreg 的) |
 | DIG-001 | deterministic CBOR | RFC 8949 §4.2 | A | confirmed(仓内实现对 Appendix A 向量) |
 | IPC-001 | Protobuf 演进规则 | protobuf.dev proto3 guide | A | confirmed |
 

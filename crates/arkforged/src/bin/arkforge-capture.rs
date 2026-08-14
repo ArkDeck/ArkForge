@@ -54,6 +54,7 @@ fn usage() -> String {
         "\n",
         "mode-changing commands (require --i-am-changing-device-mode):\n",
         "  enter-loader --target <key>   hdc target boot loader\n",
+        "  watch-rebind --target <key>   drive both transitions and measure the rebind window\n",
         "  reboot-normal                 rkdeveloptool rd\n",
         "\n",
         "options:\n",
@@ -140,6 +141,7 @@ fn run(arguments: &[String]) -> Result<(), String> {
         "partition-table" => partition_table(&options),
         "read-domain" => read_domain(&options),
         "enter-loader" => enter_loader(&options),
+        "watch-rebind" => watch_rebind(&options, &profile),
         "reboot-normal" => reboot_normal(&options),
         other => Err(format!("unknown command {other:?}\n\n{}", usage())),
     }
@@ -569,6 +571,208 @@ fn enter_loader(options: &Options) -> Result<(), String> {
     );
     println!("\nThe device should now drop off HDC and re-enumerate in Loader mode.");
     Ok(())
+}
+
+/// Drives both mode transitions while watching the USB surface continuously.
+///
+/// architecture.md 22 AF-V2 asks for "rebind 瞬态容忍与 normal 别名真机复验".
+/// Both halves are measurements, not opinions:
+///
+/// - **Transient tolerance** — between the old identity leaving and the new one
+///   arriving, the profile recognizes zero devices. How long that lasts is a
+///   hardware fact, and a deadline chosen without measuring it is a deadline
+///   that will expire on a slower board. This measures it.
+/// - **Unique rebind** — at no point during the window may more than one device
+///   match, because "exactly one device rebound" is what makes the new identity
+///   the same device (architecture.md 16.2). Sampled throughout, not just at
+///   the end, so a moment where two matched could not be missed.
+///
+/// The `normal` alias is checked on the way back: the observation surface calls
+/// the mode `normal`, and the Profile is what says that is `hdc-normal`
+/// (architecture.md 11.3). A Transport that made that equivalence itself would
+/// be a Transport holding a device fact.
+fn watch_rebind(options: &Options, profile: &DeviceProfile) -> Result<(), String> {
+    require_acknowledgement(options, "watch-rebind")?;
+    let target = options
+        .target
+        .as_ref()
+        .ok_or("watch-rebind requires --target <connect key>")?;
+
+    println!("profile        {}", profile.id);
+    println!("aliases        {}", declared_aliases(profile).join(", "));
+
+    let transport = UsbTransport::with_ioreg(profile);
+    let sample = |transport: &UsbTransport| -> Vec<DeviceObservation> {
+        transport.observe_now(now_epoch_ms()).unwrap_or_default()
+    };
+
+    let before = sample(&transport);
+    println!("\nbefore         {}", describe(&before));
+    if before.len() != 1 {
+        return Err(format!(
+            "watch-rebind needs exactly one recognized device to start from; saw {}",
+            before.len()
+        ));
+    }
+
+    let port = HostHdcControlPort {
+        hdc: options.hdc.clone(),
+        target: target.clone(),
+    };
+    let receipt = port.execute(ManagedDeviceControlAction::EnterUpdater)?;
+    println!("enterUpdater   accepted={}", receipt.accepted);
+    let into_loader = watch_until(&transport, "rockusb-loader", 120_000)?;
+    report_window("normal -> loader", &before, &into_loader);
+
+    println!("\nrebooting back with rkdeveloptool rd");
+    let (text, ok) = rkdeveloptool(options, &["rd"])?;
+    println!("resetDevice    accepted={ok} stdout={:?}", text.trim());
+    let into_normal = watch_until(&transport, "hdc-normal", 180_000)?;
+    report_window("loader -> normal", &into_loader.settled, &into_normal);
+
+    let settled_mode = into_normal
+        .settled
+        .first()
+        .map(|observation| observation.mode.as_str().to_string())
+        .unwrap_or_default();
+    println!("\nmode resolved  {settled_mode:?}");
+    println!(
+        "  from         measured USB identity via the Profile, not from any surface string"
+    );
+    println!("  declared     {}", declared_aliases(profile).join(", "));
+    // Said out loud rather than left to be assumed from a passing run: this
+    // path resolves a mode from VID/PID, so it never sees the string the alias
+    // renames.
+    println!("  not verified here:");
+    println!("    the `normal` alias is hdc's vocabulary, not ioreg's. Exercising it needs");
+    println!("    the ManagedDeviceControlPort, whose other side is the authority's");
+    println!("    (architecture.md 9.2, 11.3).");
+    Ok(())
+}
+
+/// What one transition looked like.
+struct RebindWindow {
+    /// Milliseconds during which the profile recognized nothing.
+    absent_ms: u64,
+    /// The largest number of devices that matched at any single sample.
+    peak_matches: usize,
+    /// How many samples were taken.
+    samples: usize,
+    settled: Vec<DeviceObservation>,
+}
+
+fn watch_until(
+    transport: &UsbTransport,
+    wanted_mode: &str,
+    deadline_ms: u64,
+) -> Result<RebindWindow, String> {
+    let started = std::time::Instant::now();
+    let mut first_absent: Option<std::time::Instant> = None;
+    let mut last_absent: Option<std::time::Instant> = None;
+    let mut peak_matches = 0usize;
+    let mut samples = 0usize;
+
+    loop {
+        let observations = transport.observe_now(now_epoch_ms()).unwrap_or_default();
+        samples += 1;
+        peak_matches = peak_matches.max(observations.len());
+        if observations.is_empty() {
+            first_absent.get_or_insert_with(std::time::Instant::now);
+            last_absent = Some(std::time::Instant::now());
+        } else if observations
+            .iter()
+            .any(|observation| observation.mode.as_str() == wanted_mode)
+        {
+            return Ok(RebindWindow {
+                absent_ms: match (first_absent, last_absent) {
+                    (Some(first), Some(last)) => last.duration_since(first).as_millis() as u64,
+                    _ => 0,
+                },
+                peak_matches,
+                samples,
+                settled: observations,
+            });
+        }
+        if started.elapsed().as_millis() as u64 > deadline_ms {
+            return Err(format!(
+                "no device reached {wanted_mode} within {deadline_ms} ms ({samples} samples)"
+            ));
+        }
+        std::thread::sleep(std::time::Duration::from_millis(200));
+    }
+}
+
+fn report_window(label: &str, before: &[DeviceObservation], window: &RebindWindow) {
+    println!("\n{label}");
+    println!("  samples      {}", window.samples);
+    println!("  absent for   {} ms", window.absent_ms);
+    println!(
+        "  peak matches {} (more than one at any sample would break unique rebind)",
+        window.peak_matches
+    );
+    println!("  settled      {}", describe(&window.settled));
+    let (Some(from), Some(to)) = (before.first(), window.settled.first()) else {
+        return;
+    };
+    println!(
+        "  identity     serial {} topology {}",
+        if serial_digest(from) == serial_digest(to) {
+            "unchanged"
+        } else {
+            "CHANGED"
+        },
+        if from.topology_digest == to.topology_digest {
+            "unchanged"
+        } else {
+            "CHANGED"
+        }
+    );
+}
+
+/// The serial digest, whatever kind of evidence produced it. `None` when the
+/// device offers no serial at all — which is a fact about the device, not a
+/// missing value to be filled in.
+fn serial_digest(observation: &DeviceObservation) -> Option<Sha256Digest> {
+    match &observation.serial_evidence {
+        SerialEvidence::Absent => None,
+        SerialEvidence::Descriptor { digest } | SerialEvidence::ProtocolUnique { digest } => {
+            Some(*digest)
+        }
+    }
+}
+
+fn describe(observations: &[DeviceObservation]) -> String {
+    if observations.is_empty() {
+        return "(nothing the profile recognizes)".into();
+    }
+    observations
+        .iter()
+        .map(|observation| {
+            format!(
+                "{} mode={} strength={}",
+                observation.observation_id,
+                observation.mode.as_str(),
+                observation.identity_strength.as_str()
+            )
+        })
+        .collect::<Vec<_>>()
+        .join(", ")
+}
+
+fn declared_aliases(profile: &DeviceProfile) -> Vec<String> {
+    profile
+        .modes
+        .iter()
+        .map(|mode| {
+            if mode.aliases.is_empty() {
+                mode.id.to_string()
+            } else {
+                let aliases: Vec<&str> =
+                    mode.aliases.iter().map(|alias| alias.as_str()).collect();
+                format!("{} <- {}", mode.id, aliases.join("/"))
+            }
+        })
+        .collect()
 }
 
 fn reboot_normal(options: &Options) -> Result<(), String> {
