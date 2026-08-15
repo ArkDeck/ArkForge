@@ -5,7 +5,11 @@
 //! socket path is covered by `socket_roundtrip.rs`.
 
 use arkforge_artifact::fixture;
+use arkforge_authority_api::{ControllerPairingSecret, PairingEpoch};
+use arkforge_core::digest::sha256;
+use arkforge_core::ids::OpaqueId;
 use arkforge_core::profile;
+use arkforge_engine::BoundToolchain;
 use arkforged::Service;
 use arkforge_ipc::messages::{
     ErrorBody, InspectArtifactResponse, MaterializePlanResponse, Request, Response,
@@ -89,10 +93,14 @@ fn decode_error(response: &Response) -> Option<ErrorBody> {
     ErrorBody::decode(&response.payload).ok()
 }
 
+/// A daemon with neither an authority nor a tool reports **both**, so an
+/// operator fixing one does not have to discover the second by trying again.
 #[test]
-fn start_execution_is_unavailable_on_the_controller_socket() {
+fn start_execution_reports_every_standing_blocker_at_once() {
     let root = TempRoot::new("start-controller");
     let mut service = service(&root);
+    assert!(!service.readiness().is_ready());
+
     let response = service.handle(
         SessionKind::Controller,
         &request(Api::StartExecution, Vec::new()),
@@ -100,14 +108,64 @@ fn start_execution_is_unavailable_on_the_controller_socket() {
     );
     assert_eq!(response.status, Status::Unavailable);
     let error = decode_error(&response).unwrap();
-    assert_eq!(error.code, "EXECUTION_DISABLED");
-    // The refusal names what is still missing, so an operator reading it is not
-    // sent to look for a stage that has already shipped.
+    // The code is the first blocker; the message carries them all.
+    assert_eq!(error.code, "NO_PAIRED_AUTHORITY");
+    assert!(error.message.contains("NO_PAIRED_AUTHORITY"), "{}", error.message);
+    assert!(error.message.contains("NO_DISPATCHER"), "{}", error.message);
+}
+
+/// Pairing alone is not readiness. A daemon that reported ready here would let
+/// a job walk to its first dispatch, spend a permit, and stop with nothing to
+/// run it — which has to be reconciled rather than simply not started.
+#[test]
+fn a_paired_daemon_with_no_tool_still_refuses_and_says_which_half_is_missing() {
+    let root = TempRoot::new("paired-no-tool");
+    let mut service = service(&root);
+    service.pair_authority(ControllerPairingSecret::new(
+        PairingEpoch(1),
+        b"a-pairing-secret-long-enough-to-be-a-key".to_vec(),
+    ));
+    assert!(!service.readiness().is_ready());
+
+    let response = service.handle(
+        SessionKind::Controller,
+        &request(Api::StartExecution, Vec::new()),
+        None,
+    );
+    assert_eq!(response.status, Status::Unavailable);
+    let error = decode_error(&response).unwrap();
+    assert_eq!(error.code, "NO_DISPATCHER");
+    assert!(!error.message.contains("NO_PAIRED_AUTHORITY"), "{}", error.message);
     assert!(
-        error.message.contains("no authority is paired"),
-        "{}",
+        error.message.contains("permit would be spent"),
+        "the refusal must say why it refuses now rather than later: {}",
         error.message
     );
+}
+
+/// Both halves bound: readiness is a standing fact a client can read.
+#[test]
+fn a_paired_and_tool_bound_daemon_is_ready() {
+    let root = TempRoot::new("ready");
+    let mut service = service(&root);
+    service.pair_authority(ControllerPairingSecret::new(
+        PairingEpoch(1),
+        b"a-pairing-secret-long-enough-to-be-a-key".to_vec(),
+    ));
+    service.bind_dispatcher(BoundToolchain {
+        id: OpaqueId::new("example-tool-fixed").unwrap(),
+        backend_digest: sha256(b"the bound tool"),
+    });
+    assert!(service.readiness().is_ready());
+    assert!(service.readiness().standing_blockers().is_empty());
+
+    // Ready is not "any plan will run": an unknown plan is still unknown.
+    let response = service.handle(
+        SessionKind::Controller,
+        &request(Api::StartExecution, Vec::new()),
+        None,
+    );
+    assert_eq!(response.status, Status::InvalidArgument);
 }
 
 #[test]
@@ -211,7 +269,7 @@ fn an_unpaired_daemon_accepts_no_permit() {
     );
     assert_eq!(response.status, Status::Unavailable);
     let error = decode_error(&response).unwrap();
-    assert_eq!(error.code, "EXECUTION_DISABLED");
+    assert_eq!(error.code, "NO_PAIRED_AUTHORITY");
     assert!(error.message.contains("no authority is paired"), "{}", error.message);
 }
 

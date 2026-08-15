@@ -81,6 +81,11 @@ impl Daemon {
     }
 
     fn connect(&self, kind: SessionKind) -> Result<UnixStream, String> {
+        self.connect_with_ack(kind).map(|(stream, _)| stream)
+    }
+
+    /// The handshake plus what the daemon said about itself.
+    fn connect_with_ack(&self, kind: SessionKind) -> Result<(UnixStream, HelloAck), String> {
         let path = match kind {
             SessionKind::Public => self.public_socket(),
             SessionKind::Controller => self.controller_socket(),
@@ -96,9 +101,9 @@ impl Daemon {
             .map_err(|error| error.to_string())?
             .ok_or("closed during handshake")?;
         let ack = HelloAck::decode(&frame).map_err(|error| error.to_string())?;
-        match ack.refusal {
-            Some(refusal) => Err(refusal),
-            None => Ok(stream),
+        match &ack.refusal {
+            Some(refusal) => Err(refusal.clone()),
+            None => Ok((stream, ack)),
         }
     }
 }
@@ -183,12 +188,34 @@ fn the_daemon_serves_the_read_only_vertical_over_unix_sockets() {
     }
 
     // startExecution is unavailable on the wire, from the controller socket.
+    // This daemon has no authority and no tool bound, so it says so by code.
     let response = call(&mut controller, Api::StartExecution, Vec::new());
     assert_eq!(response.status, Status::Unavailable);
     assert_eq!(
         ErrorBody::decode(&response.payload).unwrap().code,
-        "EXECUTION_DISABLED"
+        "NO_PAIRED_AUTHORITY"
     );
+}
+
+/// Readiness reaches a client on the handshake, before it materializes a plan
+/// it could not run.
+#[test]
+fn the_handshake_reports_execution_readiness() {
+    let Some(daemon) = Daemon::start("readiness-handshake") else {
+        eprintln!("skipped: the daemon did not come up");
+        return;
+    };
+    let (_stream, ack) = daemon.connect_with_ack(SessionKind::Controller).unwrap();
+
+    assert!(!ack.execution_ready);
+    assert_eq!(
+        ack.execution_blockers,
+        vec!["NO_PAIRED_AUTHORITY".to_string(), "NO_DISPATCHER".to_string()],
+        "both halves are reported, not just the first"
+    );
+    // No tool is bound, so there is no identity to compare a plan against.
+    assert!(ack.toolchain_id.is_empty());
+    assert!(ack.toolchain_sha256.is_empty());
 }
 
 #[test]

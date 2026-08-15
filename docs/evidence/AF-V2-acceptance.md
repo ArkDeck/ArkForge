@@ -11,7 +11,7 @@
 > 之所以现在写，是为了把「已经证明了什么」钉住。一份等到全绿才写的验收文档，
 > 会让中途的部分结论无处安放，最后被整体读成通过。
 >
-> 复现：`cargo test --workspace --offline`(432 tests，全绿)。
+> 复现：`cargo test --workspace --offline`(438 tests，全绿)。
 > 真机部分见 [2026-08-15 彩排](runs/2026-08-15-dayu200-flash-rehearsal.md)。
 
 ---
@@ -37,6 +37,7 @@ ArkForge 这侧要交的东西已经全部交付，提案在
 | StepPermit（含 8.6 完整性与重传信任模型） | ✅ | `arkforge-engine::step`；交叉验证向量 `docs/openspec/…/permit-vectors.md` |
 | ManagedDeviceControlPort | ✅ | typed 动作 + Provider 侧显式拒绝 + 发布的映射表 + daemon 侧 API 13 |
 | controller execution/admission surface | ✅ | API 6/7/8/12/13 全部实现;`crates/arkforged/src/jobs.rs` |
+| execution readiness（机器可读） | ✅ | 两个常驻事实(配对 + 工具绑定)在握手里报出;工具摘要**强制**与 `--rkdeveloptool-sha256` 比对，不符拒绝启动;计划的 toolchain 摘要不符拒为 `TOOLCHAIN_DIGEST_MISMATCH` |
 | dispatch（执行侧接线） | ✅ 软件层 | `crates/arkforged/src/dispatch.rs`;服务锁之外运行，十一条端到端测试用脚本化 tool port 跑完整个计划（九条 `wlx` + 读域三态）。**未在真机上跑过** |
 | Rockchip fixed-tool Provider | ✅ | `arkforge-provider::rockchip_execute` |
 | generic Runtime integration | ⛔ | ArkDeck 仓 |

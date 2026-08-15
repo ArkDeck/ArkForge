@@ -235,9 +235,13 @@ fn start_execution_is_unavailable_for_dayu600_at_every_layer() {
             None,
         );
         assert_eq!(response.status, Status::Unavailable);
+        // The daemon has neither an authority nor a tool, so it refuses on the
+        // standing facts before it ever looks at a DAYU600 plan. That the
+        // refusal is not DAYU600-specific is the point: no payload reaches a
+        // path that could produce an executable plan for it.
         assert_eq!(
             decode_error(&response).unwrap().code,
-            "EXECUTION_DISABLED"
+            "NO_PAIRED_AUTHORITY"
         );
     }
 }

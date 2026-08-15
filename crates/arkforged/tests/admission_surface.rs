@@ -1036,3 +1036,55 @@ fn stage_archive_into(store_root: &std::path::Path) {
         .import(archive.as_slice(), archive.len() as u64, None)
         .unwrap();
 }
+
+/// A plan materialized for one tool must not run against another.
+///
+/// The toolchain digest is part of the maturity combination
+/// (architecture.md 12.3): a daemon with different bytes bound would be
+/// executing a combination nobody published, and it would look like success.
+#[test]
+fn a_plan_built_for_another_toolchain_is_refused_by_digest() {
+    let fixture = plan_fixture();
+    let mut engine = arkforge_engine::Engine::new();
+    engine
+        .plans_mut()
+        .insert(arkforge_engine::StoredPlan {
+            envelope: fixture.envelope.clone(),
+            private_plan: fixture.private_plan.clone(),
+        })
+        .unwrap();
+
+    let plan_id = arkforge_core::PlanId::new(fixture.envelope.plan_id.as_str()).unwrap();
+    let digest = fixture.envelope.plan_digest;
+
+    // The tool the plan was built for.
+    let matching = arkforge_engine::ExecutionReadiness {
+        authority_paired: true,
+        dispatcher: Some(arkforge_engine::BoundToolchain {
+            id: OpaqueId::new("example-tool-fixed").unwrap(),
+            backend_digest: fixture.envelope.toolchain.backend_digest,
+        }),
+    };
+    assert!(engine.start_execution(&plan_id, digest, &matching).is_ok());
+
+    // A different one, with everything else in place.
+    let other = arkforge_engine::ExecutionReadiness {
+        authority_paired: true,
+        dispatcher: Some(arkforge_engine::BoundToolchain {
+            id: OpaqueId::new("example-tool-fixed").unwrap(),
+            backend_digest: sha256(b"some other build of the tool"),
+        }),
+    };
+    // Standing readiness is satisfied — the refusal is specific to this plan.
+    assert!(other.is_ready());
+    let error = engine
+        .start_execution(&plan_id, digest, &other)
+        .unwrap_err();
+    match error {
+        arkforge_engine::EngineError::ExecutionDisabled(blockers) => {
+            assert_eq!(blockers.len(), 1);
+            assert_eq!(blockers[0].code(), "TOOLCHAIN_DIGEST_MISMATCH");
+        }
+        other => panic!("expected a toolchain refusal, got {other}"),
+    }
+}

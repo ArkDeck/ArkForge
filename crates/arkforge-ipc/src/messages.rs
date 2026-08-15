@@ -57,6 +57,18 @@ pub struct HelloAck {
     pub session_kind: SessionKind,
     pub daemon_version: String,
     pub refusal: Option<String>,
+    /// Whether this daemon could execute any plan at all. Standing facts,
+    /// established at startup and unchangeable by a request, which is why they
+    /// belong on the handshake rather than behind a call.
+    pub execution_ready: bool,
+    /// Stable codes for what is missing. Empty exactly when ready.
+    pub execution_blockers: Vec<String>,
+    /// The bound tool's identity; empty when none is bound.
+    ///
+    /// Byte equality is not a promise the tool runs: a quarantined executable
+    /// with the right digest hangs in dyld (AD-015), and nothing here shows it.
+    pub toolchain_id: String,
+    pub toolchain_sha256: String,
 }
 
 impl HelloAck {
@@ -69,6 +81,12 @@ impl HelloAck {
         if let Some(refusal) = &self.refusal {
             wire::write_string(&mut out, 5, refusal);
         }
+        wire::write_bool(&mut out, 6, self.execution_ready);
+        for blocker in &self.execution_blockers {
+            wire::write_string(&mut out, 7, blocker);
+        }
+        wire::write_string(&mut out, 8, &self.toolchain_id);
+        wire::write_string(&mut out, 9, &self.toolchain_sha256);
         out
     }
 
@@ -79,6 +97,10 @@ impl HelloAck {
             session_kind: SessionKind::Public,
             daemon_version: String::new(),
             refusal: None,
+            execution_ready: false,
+            execution_blockers: Vec::new(),
+            toolchain_id: String::new(),
+            toolchain_sha256: String::new(),
         };
         let mut reader = Reader::new(input);
         while let Some((field, value)) = reader.next_field()? {
@@ -88,6 +110,10 @@ impl HelloAck {
                 3 => ack.session_kind = decode_enum(3, &value, SessionKind::from_wire)?,
                 4 => ack.daemon_version = value.as_str(4)?.to_string(),
                 5 => ack.refusal = Some(value.as_str(5)?.to_string()),
+                6 => ack.execution_ready = value.as_bool()?,
+                7 => ack.execution_blockers.push(value.as_str(7)?.to_string()),
+                8 => ack.toolchain_id = value.as_str(8)?.to_string(),
+                9 => ack.toolchain_sha256 = value.as_str(9)?.to_string(),
                 _ => {}
             }
         }
@@ -1716,6 +1742,34 @@ mod tests {
         assert!(!rejected.rejection_code.is_empty());
         assert!(!rejected.rejection_message.is_empty());
         assert_eq!(SubmissionOutcome::decode(&rejected.encode()).unwrap(), rejected);
+    }
+
+    /// Readiness travels on the handshake, so it has to survive the codec.
+    /// The blocker list is repeated-string: a daemon missing both halves must
+    /// report both, not the first one twice or only one.
+    #[test]
+    fn a_hello_ack_round_trips_its_readiness() {
+        let ack = HelloAck {
+            protocol_major: 1,
+            protocol_minor: 0,
+            session_kind: SessionKind::Controller,
+            daemon_version: "0.1.0".into(),
+            refusal: None,
+            execution_ready: false,
+            execution_blockers: vec!["NO_PAIRED_AUTHORITY".into(), "NO_DISPATCHER".into()],
+            toolchain_id: String::new(),
+            toolchain_sha256: String::new(),
+        };
+        assert_eq!(HelloAck::decode(&ack.encode()).unwrap(), ack);
+
+        let ready = HelloAck {
+            execution_ready: true,
+            execution_blockers: Vec::new(),
+            toolchain_id: "example-tool-fixed".into(),
+            toolchain_sha256: "a".repeat(64),
+            ..ack
+        };
+        assert_eq!(HelloAck::decode(&ready.encode()).unwrap(), ready);
     }
 
     #[test]

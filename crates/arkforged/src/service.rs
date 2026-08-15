@@ -15,7 +15,7 @@ use arkforge_core::profile::DeviceProfile;
 use arkforge_core::{AuthorityBindingRef, AuthorityNamespace, PersistentEffect, Sha256Digest, TransientEffect};
 use crate::jobs::JobRegistry;
 use arkforge_authority_api::{ControllerPairingSecret, StepPermit};
-use arkforge_engine::{Engine, StoredPlan};
+use arkforge_engine::{BoundToolchain, Engine, ExecutionReadiness, StoredPlan};
 use arkforge_ipc::messages::{
     ArchiveMember, Assessment, Effect, ErrorBody, ExecutablePlan, InspectArtifactResponse,
     KeyValue, MaterializePlanResponse, PartitionEntry, PublicStep, Request, Response,
@@ -47,10 +47,12 @@ pub struct Service {
     transports: Vec<TranscriptTransport>,
     now_epoch_ms: u64,
     jobs: JobRegistry,
-    /// The secret the authority handed this daemon at startup. `None` means no
-    /// authority is paired, which is the entire condition the execution gate
-    /// switches on.
+    /// The secret the authority handed this daemon at startup. Held here and
+    /// nowhere else; there is no getter.
     pairing: Option<ControllerPairingSecret>,
+    /// What this daemon can do, as standing facts. Kept beside the secret
+    /// rather than derived from it, because pairing is only half of it.
+    readiness: ExecutionReadiness,
 }
 
 impl Service {
@@ -128,6 +130,7 @@ impl Service {
             now_epoch_ms,
             jobs: JobRegistry::new(store_root.join("jobs")),
             pairing: None,
+            readiness: ExecutionReadiness::default(),
         })
     }
 
@@ -145,6 +148,21 @@ impl Service {
     /// copy to hand to something else, and there is no getter to read it back.
     pub fn pair_authority(&mut self, secret: ControllerPairingSecret) {
         self.pairing = Some(secret);
+        self.readiness.authority_paired = true;
+    }
+
+    /// Binds the fixed tool a dispatcher will run.
+    ///
+    /// Identity, not a path. What the rest of the daemon needs to know is
+    /// whether these are the bytes a plan's maturity was published against;
+    /// which file they came from is the host's business.
+    pub fn bind_dispatcher(&mut self, toolchain: BoundToolchain) {
+        self.readiness.dispatcher = Some(toolchain);
+    }
+
+    /// What this daemon can do. Standing facts, established at startup.
+    pub fn readiness(&self) -> &ExecutionReadiness {
+        &self.readiness
     }
 
     pub fn authority_paired(&self) -> bool {
@@ -480,12 +498,18 @@ impl Service {
     /// and the plan is resolved out of the daemon's own store rather than
     /// rebuilt from anything the caller sent (architecture.md 15.3).
     fn start_execution(&mut self, request: &Request) -> Response {
-        // The gate first, because it is a standing fact about this daemon and
-        // the payload is a fact about one request. An unpaired daemon that
-        // answered "unknown plan" would send an operator to fix a plan that
-        // could not have run either way.
-        if let Some(gate) = arkforge_engine::ExecutionGate::evaluate(self.pairing.is_some()) {
-            return self.refuse(request, Status::Unavailable, "EXECUTION_DISABLED", gate.reason());
+        // Standing blockers first, because they are facts about this daemon
+        // and the payload is a fact about one request. A daemon with no
+        // authority answering "unknown plan" would send an operator to fix a
+        // plan that could not have run either way.
+        let standing = self.readiness.standing_blockers();
+        if !standing.is_empty() {
+            return self.refuse(
+                request,
+                Status::Unavailable,
+                standing[0].code(),
+                &blocker_list(&standing),
+            );
         }
         let plan_id = first_string_field(&request.payload, 1).unwrap_or_default();
         let plan_sha256 = first_string_field(&request.payload, 2).unwrap_or_default();
@@ -507,11 +531,20 @@ impl Service {
             );
         };
 
-        let paired = self.pairing.is_some();
-        let stored = match self.engine.start_execution(&plan_id, expected, paired) {
+        let readiness = self.readiness.clone();
+        let stored = match self.engine.start_execution(&plan_id, expected, &readiness) {
             Ok(stored) => stored.clone(),
-            Err(arkforge_engine::EngineError::ExecutionDisabled(gate)) => {
-                return self.refuse(request, Status::Unavailable, "EXECUTION_DISABLED", gate.reason())
+            Err(arkforge_engine::EngineError::ExecutionDisabled(blockers)) => {
+                let code = blockers
+                    .first()
+                    .map(|blocker| blocker.code())
+                    .unwrap_or("EXECUTION_DISABLED");
+                return self.refuse(
+                    request,
+                    Status::Unavailable,
+                    code,
+                    &blocker_list(&blockers),
+                );
             }
             Err(error) => {
                 return self.refuse(
@@ -619,8 +652,8 @@ impl Service {
             return self.refuse(
                 request,
                 Status::Unavailable,
-                "EXECUTION_DISABLED",
-                arkforge_engine::ExecutionGate::CURRENT.reason(),
+                arkforge_engine::ExecutionBlocker::NoPairedAuthority.code(),
+                &arkforge_engine::ExecutionBlocker::NoPairedAuthority.to_string(),
             );
         };
         let Some(stored) = self.stored_plan_for_job(&submission.job_id) else {
@@ -694,8 +727,8 @@ impl Service {
             return self.refuse(
                 request,
                 Status::Unavailable,
-                "EXECUTION_DISABLED",
-                arkforge_engine::ExecutionGate::CURRENT.reason(),
+                arkforge_engine::ExecutionBlocker::NoPairedAuthority.code(),
+                &arkforge_engine::ExecutionBlocker::NoPairedAuthority.to_string(),
             );
         }
         let Some(stored) = self.stored_plan_for_job(&receipt.job_id) else {
@@ -928,6 +961,18 @@ impl Service {
             ),
         }
     }
+}
+
+/// Every blocker, in one message.
+///
+/// All of them rather than the first: an operator fixing one at a time should
+/// not have to discover the second by trying again.
+fn blocker_list(blockers: &[arkforge_engine::ExecutionBlocker]) -> String {
+    blockers
+        .iter()
+        .map(|blocker| format!("{}: {blocker}", blocker.code()))
+        .collect::<Vec<_>>()
+        .join("; ")
 }
 
 /// Chooses the provider by the artifact formats the *profile* declares.

@@ -10,8 +10,9 @@
 //! - [`superseding`] — possible effects, read-only reconcile, and whether a
 //!   distinct recovery plan could be offered (14.2–14.5).
 //!
-//! What is still missing is an authority. [`ExecutionGate`] says so, and has no
-//! variant meaning "allowed": turning execution on is a pairing, not a setting.
+//! [`ExecutionReadiness`] says what this daemon can do, as standing facts — an
+//! authority paired and a fixed tool bound. Neither can be turned on by a
+//! request, and [`ExecutionBlocker`] has no variant meaning "allowed".
 
 #![forbid(unsafe_code)]
 
@@ -21,6 +22,7 @@ pub mod recovery;
 pub mod step;
 pub mod superseding;
 
+use arkforge_core::ids::OpaqueId;
 use arkforge_core::plan::{FlashPlanEnvelope, PlanError};
 use arkforge_core::projection::StoredProviderPlan;
 use arkforge_core::{PlanId, Sha256Digest};
@@ -188,46 +190,124 @@ impl PlanStore {
     }
 }
 
-/// Why execution is refused.
+/// The tool this daemon has bound for dispatch.
 ///
-/// There is no `Allowed` variant, and the reason is stated as what is still
-/// missing rather than as a stage name. A gate whose text outlives the thing it
-/// describes is worse than no gate: it tells an operator a false story about
-/// why the daemon will not run.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum ExecutionGate {
-    /// The durable journal, the crash-disposition table and single-use permit
-    /// consumption are here ([`durable`], [`recovery`], [`step`]). No authority
-    /// is paired with this daemon, so no permit can be verified against a real
-    /// pairing secret, and no session exists to receive the receipts.
-    NoPairedAuthority,
+/// Identity, not a path: which executable it is belongs to the host, and what
+/// matters downstream is whether its bytes are the ones a plan's maturity was
+/// published against (architecture.md 12.3).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct BoundToolchain {
+    pub id: OpaqueId,
+    pub backend_digest: Sha256Digest,
 }
 
-impl ExecutionGate {
-    pub const CURRENT: ExecutionGate = ExecutionGate::NoPairedAuthority;
+/// What this daemon can do, as standing facts rather than a stage name.
+///
+/// Both fields are established once at startup and neither can be turned on by
+/// a request. That is deliberate: execution becoming available is a pairing and
+/// a tool binding, not a setting a caller could flip.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct ExecutionReadiness {
+    /// An authority handed this daemon a pairing secret, so a permit can be
+    /// verified and receipts have somewhere to go.
+    pub authority_paired: bool,
+    /// A fixed tool is bound, so a step this daemon must dispatch can actually
+    /// run. Without it a job would walk to its first dispatch and stop, which
+    /// is worse than refusing at the start: the permit would already be spent.
+    pub dispatcher: Option<BoundToolchain>,
+}
 
-    /// The gate that applies, or `None` when nothing blocks execution.
-    ///
-    /// Pairing is the whole condition, and deliberately so: an authority that
-    /// handed this daemon a secret is an authority that can sign permits and
-    /// receive receipts, and there is nothing else to switch on. A build flag
-    /// or a config key here would be a way to turn execution on without one.
-    pub fn evaluate(authority_paired: bool) -> Option<ExecutionGate> {
-        if authority_paired {
-            None
-        } else {
-            Some(ExecutionGate::NoPairedAuthority)
+/// Why execution is refused.
+///
+/// There is no `Allowed` variant and no `reason()` that outlives its subject:
+/// each blocker names the thing that is missing, so an operator reading one is
+/// not sent to look for a stage that already shipped.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ExecutionBlocker {
+    NoPairedAuthority,
+    NoDispatcher,
+    /// The plan was materialized against one tool and this daemon has another
+    /// bound. The toolchain digest is part of the maturity combination
+    /// (architecture.md 12.3), so running it here would run a combination
+    /// nobody published.
+    ToolchainDigestMismatch {
+        plan_expects: Sha256Digest,
+        daemon_bound: Sha256Digest,
+    },
+}
+
+impl ExecutionBlocker {
+    /// A stable code, so a caller can branch without parsing prose.
+    pub fn code(&self) -> &'static str {
+        match self {
+            ExecutionBlocker::NoPairedAuthority => "NO_PAIRED_AUTHORITY",
+            ExecutionBlocker::NoDispatcher => "NO_DISPATCHER",
+            ExecutionBlocker::ToolchainDigestMismatch { .. } => "TOOLCHAIN_DIGEST_MISMATCH",
         }
     }
+}
 
-    pub fn reason(self) -> &'static str {
+impl fmt::Display for ExecutionBlocker {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            ExecutionGate::NoPairedAuthority => {
-                "startExecution is unavailable: no authority is paired with this daemon, so a \
-                 StepPermit cannot be verified against a pairing secret and no session can \
-                 receive its receipts (architecture.md 8.6, 21.2 Stage A)"
+            ExecutionBlocker::NoPairedAuthority => f.write_str(
+                "no authority is paired with this daemon, so a StepPermit cannot be verified \
+                 against a pairing secret and no session can receive its receipts \
+                 (architecture.md 8.6)",
+            ),
+            ExecutionBlocker::NoDispatcher => f.write_str(
+                "no fixed tool is bound, so a step this daemon must dispatch could not run. \
+                 Refused here rather than at the step: by then the permit would be spent and \
+                 the job would have to be reconciled instead of simply not started",
+            ),
+            ExecutionBlocker::ToolchainDigestMismatch {
+                plan_expects,
+                daemon_bound,
+            } => write!(
+                f,
+                "the plan was materialized for toolchain {plan_expects} and this daemon has \
+                 {daemon_bound} bound; the toolchain digest is part of the maturity combination, \
+                 so this pairing was never published (architecture.md 12.3)"
+            ),
+        }
+    }
+}
+
+impl ExecutionReadiness {
+    /// Blockers that apply to every plan.
+    pub fn standing_blockers(&self) -> Vec<ExecutionBlocker> {
+        let mut blockers = Vec::new();
+        if !self.authority_paired {
+            blockers.push(ExecutionBlocker::NoPairedAuthority);
+        }
+        if self.dispatcher.is_none() {
+            blockers.push(ExecutionBlocker::NoDispatcher);
+        }
+        blockers
+    }
+
+    /// Whether this daemon could execute *some* plan.
+    ///
+    /// Not whether it could execute *a given* plan — that needs the plan, and
+    /// [`Self::blockers_for`] is the call that takes one. Reporting "ready"
+    /// from here and refusing later is the point: a client learns the standing
+    /// facts at handshake and the per-plan ones when it names a plan.
+    pub fn is_ready(&self) -> bool {
+        self.standing_blockers().is_empty()
+    }
+
+    /// Blockers for one plan, standing ones included.
+    pub fn blockers_for(&self, plan: &FlashPlanEnvelope) -> Vec<ExecutionBlocker> {
+        let mut blockers = self.standing_blockers();
+        if let Some(bound) = &self.dispatcher {
+            if bound.backend_digest != plan.toolchain.backend_digest {
+                blockers.push(ExecutionBlocker::ToolchainDigestMismatch {
+                    plan_expects: plan.toolchain.backend_digest,
+                    daemon_bound: bound.backend_digest,
+                });
             }
         }
+        blockers
     }
 }
 
@@ -254,21 +334,28 @@ impl Engine {
 
     /// Resolves the plan a job would run, or says why it may not.
     ///
-    /// The plan is resolved and verified before the gate is consulted *here*,
-    /// so a paired daemon reports a corrupt or unknown plan as exactly that.
-    /// Callers are expected to test the gate first — it is a standing fact
-    /// about the daemon, while the plan is a fact about one request, and an
-    /// unpaired daemon answering "unknown plan" would send an operator to fix
-    /// a plan that could not have run either way.
+    /// The plan is resolved first so a paired, tool-bound daemon reports a
+    /// corrupt or unknown plan as exactly that. Callers test the standing
+    /// blockers before this — they are facts about the daemon, while the plan
+    /// is a fact about one request, and a daemon with no authority answering
+    /// "unknown plan" would send an operator to fix a plan that could not have
+    /// run either way.
+    ///
+    /// The per-plan check happens here because it needs the plan: the
+    /// toolchain the plan was materialized against must be the toolchain this
+    /// daemon has bound.
     pub fn start_execution(
         &mut self,
         plan_id: &PlanId,
         plan_digest: Sha256Digest,
-        authority_paired: bool,
+        readiness: &ExecutionReadiness,
     ) -> Result<&StoredPlan, EngineError> {
-        self.plans.get(plan_id, plan_digest)?;
-        if let Some(gate) = ExecutionGate::evaluate(authority_paired) {
-            return Err(EngineError::ExecutionDisabled(gate));
+        let blockers = {
+            let stored = self.plans.get(plan_id, plan_digest)?;
+            readiness.blockers_for(&stored.envelope)
+        };
+        if !blockers.is_empty() {
+            return Err(EngineError::ExecutionDisabled(blockers));
         }
         self.plans.get(plan_id, plan_digest)
     }
@@ -291,7 +378,7 @@ pub enum EngineError {
         from: JobState,
         to: JobState,
     },
-    ExecutionDisabled(ExecutionGate),
+    ExecutionDisabled(Vec<ExecutionBlocker>),
     Plan(PlanError),
     Journal(journal::JournalError),
 }
@@ -322,7 +409,17 @@ impl fmt::Display for EngineError {
                 from.as_str(),
                 to.as_str()
             ),
-            EngineError::ExecutionDisabled(gate) => f.write_str(gate.reason()),
+            EngineError::ExecutionDisabled(blockers) => {
+                let mut first = true;
+                for blocker in blockers {
+                    if !first {
+                        f.write_str("; ")?;
+                    }
+                    write!(f, "{blocker}")?;
+                    first = false;
+                }
+                Ok(())
+            }
             EngineError::Plan(error) => write!(f, "{error}"),
             EngineError::Journal(error) => write!(f, "{error}"),
         }
@@ -411,26 +508,83 @@ mod tests {
         assert!(!JobState::Dispatching.may_transition_to(JobState::CancelledSafe));
     }
 
-    #[test]
-    fn an_unknown_plan_is_reported_before_the_gate_is_consulted() {
-        let mut engine = Engine::new();
-        for paired in [false, true] {
-            let error = engine
-                .start_execution(&PlanId::new("PLAN-1").unwrap(), sha256(b"plan"), paired)
-                .unwrap_err();
-            // The gate never masks a real caller error: an operator told
-            // "execution is unavailable" would go and fix the wrong thing.
-            assert!(matches!(error, EngineError::UnknownPlan(_)), "paired={paired}");
+    fn bound(digest: Sha256Digest) -> ExecutionReadiness {
+        ExecutionReadiness {
+            authority_paired: true,
+            dispatcher: Some(BoundToolchain {
+                id: OpaqueId::new("example-tool-fixed").unwrap(),
+                backend_digest: digest,
+            }),
         }
     }
 
     #[test]
-    fn pairing_is_the_whole_condition_the_gate_switches_on() {
+    fn an_unknown_plan_is_reported_before_the_readiness_is_consulted() {
+        let mut engine = Engine::new();
+        for readiness in [ExecutionReadiness::default(), bound(sha256(b"tool"))] {
+            let error = engine
+                .start_execution(&PlanId::new("PLAN-1").unwrap(), sha256(b"plan"), &readiness)
+                .unwrap_err();
+            // Readiness never masks a real caller error: an operator told
+            // "execution is unavailable" would go and fix the wrong thing.
+            assert!(matches!(error, EngineError::UnknownPlan(_)), "{readiness:?}");
+        }
+    }
+
+    /// A paired daemon with no tool is not ready. Reporting it as ready is how
+    /// a job walks to its first dispatch, spends a permit, and stops.
+    #[test]
+    fn pairing_alone_is_not_readiness() {
+        let paired_only = ExecutionReadiness {
+            authority_paired: true,
+            dispatcher: None,
+        };
+        assert!(!paired_only.is_ready());
         assert_eq!(
-            ExecutionGate::evaluate(false),
-            Some(ExecutionGate::NoPairedAuthority)
+            paired_only.standing_blockers(),
+            vec![ExecutionBlocker::NoDispatcher]
         );
-        assert_eq!(ExecutionGate::evaluate(true), None);
-        assert!(ExecutionGate::CURRENT.reason().contains("unavailable"));
+
+        let tool_only = ExecutionReadiness {
+            authority_paired: false,
+            dispatcher: Some(BoundToolchain {
+                id: OpaqueId::new("example-tool-fixed").unwrap(),
+                backend_digest: sha256(b"tool"),
+            }),
+        };
+        assert_eq!(
+            tool_only.standing_blockers(),
+            vec![ExecutionBlocker::NoPairedAuthority]
+        );
+
+        // Neither, and both are reported — an operator fixing one at a time
+        // should not have to discover the second by trying again.
+        let neither = ExecutionReadiness::default();
+        assert_eq!(
+            neither.standing_blockers(),
+            vec![
+                ExecutionBlocker::NoPairedAuthority,
+                ExecutionBlocker::NoDispatcher
+            ]
+        );
+        assert!(bound(sha256(b"tool")).is_ready());
+    }
+
+    #[test]
+    fn every_blocker_has_a_distinct_code_and_says_what_is_missing() {
+        let blockers = [
+            ExecutionBlocker::NoPairedAuthority,
+            ExecutionBlocker::NoDispatcher,
+            ExecutionBlocker::ToolchainDigestMismatch {
+                plan_expects: sha256(b"a"),
+                daemon_bound: sha256(b"b"),
+            },
+        ];
+        let codes: std::collections::BTreeSet<&str> =
+            blockers.iter().map(|blocker| blocker.code()).collect();
+        assert_eq!(codes.len(), blockers.len());
+        for blocker in &blockers {
+            assert!(!blocker.to_string().is_empty());
+        }
     }
 }

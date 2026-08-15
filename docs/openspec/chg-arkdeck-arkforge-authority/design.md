@@ -4,8 +4,9 @@
 > 本文只讲**怎么做**与**为什么必须这么做**；要不要做见 `proposal.md`。
 >
 > ArkForge 侧的对应产物都在 ArkForge 仓，路径在文中逐处给出，都能直接跑。
-> **2026-08-15 更新：controller execution/admission surface 已实现并固定**，
-> 第 8 节列了逐项状态。唯一还没有的是 dispatch（AF-V2.4，需要硬件）。
+> **2026-08-15 更新：controller execution/admission surface 与 dispatch 均已实现**，
+> 第 8 节列了逐项状态。还没有的是**在真机上跑一次**——现有端到端测试用的是
+> 脚本化 tool port，不是设备（AF-V2.4）。
 
 ---
 
@@ -391,6 +392,61 @@ tool port 把整个计划跑完：九条 `wlx` 按 Profile 声明顺序发出、
 脚本里的 `ppt` 输出与读面行为都取自 2026-08-15 的真机实测（AD-018、AD-019）。
 
 **仍然没有的**：真机上跑一次。测试用的是脚本 port，不是设备。
+
+### 8.4 Readiness：机器可读，且不是「配对了就行」
+
+daemon 的执行就绪是**两个常驻事实**，都在启动时确定，任何请求都改不了：
+
+| 事实 | 缺了会怎样 |
+|---|---|
+| authority 已配对 | permit 验不了，回执没地方去 |
+| fixed tool 已绑定 | 需要本 daemon 派发的步骤跑不了 |
+
+**只配对不算就绪。** 早先的版本只看配对，结果 job 会一路走到第一个 dispatch、
+花掉一张 permit、然后停在那里——那是要 reconcile 的状态，而不是「没启动」。
+现在 `startExecution` 在**解析 payload 之前**就按常驻事实拒绝，
+并且**一次报全部缺失项**，免得修完一个才发现还有第二个。
+
+### 8.5 ArkDeck 侧怎么读
+
+握手就能读到，不必先物化一个跑不了的计划：
+
+~~~text
+HelloAck {
+  execution_ready:      bool
+  execution_blockers:   ["NO_PAIRED_AUTHORITY", "NO_DISPATCHER"]   // 稳定码
+  toolchain_id:         "rkdeveloptool"
+  toolchain_sha256:     "bbd7bdc0…"
+}
+~~~
+
+`execution_blockers` 为空 ⟺ `execution_ready` 为真。
+
+**把 `toolchain_sha256` 和你计划里的 toolchain 摘要比一下。** 不一致时
+`startExecution` 会拒为 `TOOLCHAIN_DIGEST_MISMATCH`——toolchain 摘要是 maturity
+组合键的一部分（architecture.md 12.3），换一份工具就是在跑一个没人发布过的组合。
+daemon 会拒，但你不必等它拒才知道。
+
+### 8.6 工具摘要现在是强制比对，不再只是打印
+
+~~~bash
+arkforged --runtime-dir <dir> --profile profiles/dayu200.yaml \
+  --pair-from-stdin <epoch> \
+  --rkdeveloptool /absolute/path \
+  --rkdeveloptool-sha256 <64 hex>
+~~~
+
+- `--rkdeveloptool-sha256` 是**必填**的，只要给了 `--rkdeveloptool`。
+  绑一个没钉过的工具就是绑「碰巧在那个路径上的东西」。
+- 实测字节与钉值不符 → **拒绝启动**，不是启动后跑不了。
+- 三条启动路径都验过：
+  - 配对无工具 → `execution: not ready (NO_DISPATCHER)`
+  - 有工具无钉值 → 拒绝启动，说明理由
+  - 钉值不符 → 拒绝启动，两个摘要都打出来
+
+**这条不能证明的事**：字节相等不等于工具能跑。同一份字节带 quarantine 时会挂死在
+dyld（AD-015），readiness 里任何字段都不会显示这一点。要真正确认得跑一次
+`ld`，而那会碰设备，因此不在启动时自动做。
 
 除此之外，ArkForge 侧的执行机制——封闭命令面、读域三态、staging 与写前
 revalidate、durable journal、permit 单次使用——**都已完成并在真机上验证到写入前的

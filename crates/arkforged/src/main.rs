@@ -42,8 +42,11 @@ fn usage() -> String {
         "  --profile          a DeviceProfile YAML document (repeatable)\n",
         "  --transcript       a golden transcript to serve as a replay transport (repeatable)\n",
         "  --pair-from-stdin  read the authority's pairing secret from stdin and close it\n",
-        "  --rkdeveloptool    absolute path to the pinned vendor tool; without it a job\n",
-        "                     that reaches a step this daemon must dispatch will park\n",
+        "  --rkdeveloptool    absolute path to the pinned vendor tool. Without it,\n",
+        "                     startExecution refuses: a job that reached its first\n",
+        "                     dispatch would have spent a permit before finding out\n",
+        "  --rkdeveloptool-sha256  the digest those bytes must have. Required with\n",
+        "                     --rkdeveloptool: an unpinned tool is a tool nobody chose\n",
         "\n",
         "Without --pair-from-stdin no authority is paired, and startExecution is\n",
         "unavailable. The secret is read from stdin rather than an argv or an\n",
@@ -59,6 +62,7 @@ fn run(arguments: &[String]) -> Result<(), String> {
     let mut transcript_paths: Vec<PathBuf> = Vec::new();
     let mut pairing_epoch: Option<u64> = None;
     let mut rkdeveloptool: Option<PathBuf> = None;
+    let mut rkdeveloptool_sha256: Option<String> = None;
 
     let mut index = 0usize;
     while index < arguments.len() {
@@ -80,6 +84,10 @@ fn run(arguments: &[String]) -> Result<(), String> {
             "--rkdeveloptool" => {
                 index += 1;
                 rkdeveloptool = Some(PathBuf::from(arguments.get(index).ok_or_else(usage)?));
+            }
+            "--rkdeveloptool-sha256" => {
+                index += 1;
+                rkdeveloptool_sha256 = Some(arguments.get(index).ok_or_else(usage)?.clone());
             }
             "--pair-from-stdin" => {
                 index += 1;
@@ -131,22 +139,45 @@ fn run(arguments: &[String]) -> Result<(), String> {
         runtime_dir.join("public.sock").display(),
         runtime_dir.join("controller.sock").display()
     );
-    match pairing_epoch {
-        Some(epoch) => println!(
-            "execution: available (authority paired, pairing epoch {epoch})"
-        ),
-        None => println!(
-            "execution: unavailable (no authority paired; pass --pair-from-stdin to pair one)"
-        ),
-    }
-
     // The dispatcher runs on its own thread and takes the service lock only
     // for the hand-off at either end. A partition write takes minutes; holding
     // the lock across one would stop the event stream reporting on it.
     let dispatch_handle = match rkdeveloptool {
         Some(path) => {
+            // The pin is required, not optional. A tool bound without one is a
+            // tool nobody chose: the digest is part of the maturity
+            // combination (architecture.md 12.3), so binding whatever happens
+            // to be at that path would execute a combination nobody published.
+            let pinned = rkdeveloptool_sha256.ok_or(
+                "--rkdeveloptool requires --rkdeveloptool-sha256; binding a tool without \
+                 pinning its bytes would execute a combination nobody published",
+            )?;
+            let expected = arkforge_core::Sha256Digest::parse_hex(&pinned)
+                .map_err(|error| format!("--rkdeveloptool-sha256: {error}"))?;
             let port = arkforged::dispatch::HostFixedToolPort::open(&path)?;
+            if port.digest() != expected {
+                // Refuse to start rather than start unable to execute. An
+                // operator who swapped the binary should hear it now.
+                return Err(format!(
+                    "{} hashes to {}, and --rkdeveloptool-sha256 pins {expected}",
+                    path.display(),
+                    port.digest()
+                ));
+            }
+            {
+                let Ok(mut guard) = service.lock() else {
+                    return Err("the service lock is poisoned".into());
+                };
+                guard.bind_dispatcher(arkforge_engine::BoundToolchain {
+                    id: arkforge_core::ids::OpaqueId::new("rkdeveloptool")
+                        .map_err(|error| error.to_string())?,
+                    backend_digest: port.digest(),
+                });
+            }
             println!("dispatch: {} ({})", path.display(), port.digest());
+            // Byte equality is not a promise the tool runs: the same bytes
+            // hang in dyld when quarantined (AD-015). Nothing checked here
+            // would show that.
             let store_root = runtime_dir.join("store");
             let work_root = runtime_dir.join("work");
             let dispatch_service = Arc::clone(&service);
@@ -175,11 +206,30 @@ fn run(arguments: &[String]) -> Result<(), String> {
             }))
         }
         None => {
-            println!("dispatch: unavailable (no --rkdeveloptool; jobs will park at their first \
-                      dispatch)");
+            println!(
+                "dispatch: unavailable (no --rkdeveloptool; startExecution will refuse rather \
+                 than let a job park at its first dispatch)"
+            );
             None
         }
     };
+
+    {
+        let Ok(guard) = service.lock() else {
+            return Err("the service lock is poisoned".into());
+        };
+        let readiness = guard.readiness();
+        if readiness.is_ready() {
+            println!("execution: ready");
+        } else {
+            let blockers: Vec<&str> = readiness
+                .standing_blockers()
+                .iter()
+                .map(|blocker| blocker.code())
+                .collect();
+            println!("execution: not ready ({})", blockers.join(", "));
+        }
+    }
 
     let public_service = Arc::clone(&service);
     let handle = std::thread::spawn(move || {
@@ -246,12 +296,36 @@ fn handle_connection(
         )),
         Err(message) => Some(message),
     };
+    // Readiness is reported on the handshake so a client learns it before it
+    // materializes a plan it could not run, rather than after creating a job.
+    let readiness = {
+        let Ok(guard) = service.lock() else {
+            return Err("the service lock is poisoned".into());
+        };
+        guard.readiness().clone()
+    };
     let ack = HelloAck {
         protocol_major: PROTOCOL_MAJOR,
         protocol_minor: PROTOCOL_MINOR,
         session_kind: kind,
         daemon_version: DAEMON_VERSION.to_string(),
         refusal: refusal.clone(),
+        execution_ready: readiness.is_ready(),
+        execution_blockers: readiness
+            .standing_blockers()
+            .iter()
+            .map(|blocker| blocker.code().to_string())
+            .collect(),
+        toolchain_id: readiness
+            .dispatcher
+            .as_ref()
+            .map(|tool| tool.id.to_string())
+            .unwrap_or_default(),
+        toolchain_sha256: readiness
+            .dispatcher
+            .as_ref()
+            .map(|tool| tool.backend_digest.to_hex())
+            .unwrap_or_default(),
     };
     write_frame(&mut writer, &ack.encode()).map_err(|error| error.to_string())?;
     if refusal.is_some() {

@@ -98,8 +98,8 @@ inspect
       撕裂尾部穷举复原；13.3 崩溃处置表由 journal 推导)
 - [~] ArkDeck adapter — ArkForge 半已完成并**固定**：step 映射表、控制动作映射表、
       ArkDeck provider action 归属表、permit 交叉验证向量，以及
-      **controller execution/admission surface**(API 6/7/8/12/13 全部实现，
-      九条端到端测试)。Swift 半是 ArkDeck 仓变更，提案已贴进
+      **controller execution/admission surface**(API 6/7/8/12/13 全部实现)
+      与 **dispatch**(服务锁之外运行)，十一条端到端测试。Swift 半是 ArkDeck 仓变更，提案已贴进
       `ArkDeck/openspec/changes/chg-2026-059-arkdeck-arkforge-authority/`
 - [x] StepPermit(含 8.6 完整性与重传信任模型；single-use 跨重启由 durable ledger 保证，
       顺序由类型强制：admit → begin_dispatch → record_receipt → checkpoint，逐个 by value 消费)
