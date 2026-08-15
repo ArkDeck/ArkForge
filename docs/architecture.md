@@ -1308,6 +1308,25 @@ RecoveryGuidePublished
 - fsync policy；
 - job revision。
 
+fsync policy 是**记录种类的函数，不是可调项**。凡是丢失后会让 ArkForge 二次派发、
+或忘记自己已经派发的记录，一律 durable；其余（PreflightObserved、
+StepAdmissionRequested、TransportEvidenceRecorded、RebindObserved、
+ReadOnlyObservationRecorded）为 buffered——丢失只损失记录里的细节，不改变任何判定。
+声明了比自身种类更弱策略的记录按篡改处理。
+
+#### 13.2.1 durability 的边界（AD-017）
+
+本设计的 durability 只声明到**进程死亡**为止：
+
+- 与派发决定相关的记录在 `append` 返回前 `fsync`，因此「返回了」意味着已落稳定存储；
+- 撕裂尾部（崩溃打断了一次写）在重放时要么作为更短的前缀被接受，要么被拒绝，
+  不存在「静默丢一条中间记录」的第三种结果；这一条由穷举每一个可能撕裂位点的
+  测试保证，不是靠推理。
+
+**不声明掉电安全。** macOS `fsync(2)` 不冲刷驱动器自身的写缓存——那需要
+`F_FULLFSYNC`，而它要 libc，AFD-0001 不允许本仓引入。因此掉电语义是**未验证**的，
+记为 open 边界而非已通过的门。任何上层（含 authority）不得据此声称掉电安全。
+
 ### 13.3 Crash 语义
 
 | Crash 窗口 | 处理 |

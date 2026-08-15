@@ -191,3 +191,35 @@ fn the_ledger_does_not_claim_the_pac_module_is_a_parser() {
         "{row}"
     );
 }
+
+/// AD-017 is an *open* boundary, and it has to stay visible as one.
+///
+/// A durability claim that quietly upgrades from "ordered against process
+/// death" to "durable" is exactly the kind of drift a ledger exists to catch,
+/// so both the ledger row and the architecture section that states the limit
+/// are asserted here rather than left to a reader's diligence.
+#[test]
+fn the_durability_boundary_stays_recorded_as_open() {
+    let row = LEDGER
+        .lines()
+        .find(|line| line.starts_with("| AD-017 |"))
+        .expect("AD-017 is the durability boundary entry");
+    assert!(
+        row.contains("open"),
+        "AD-017 must stay open until a power-loss experiment exists: {row}"
+    );
+    assert!(
+        row.contains("F_FULLFSYNC"),
+        "AD-017 must name what would be needed to close it: {row}"
+    );
+
+    const ARCHITECTURE: &str = include_str!("../../../docs/architecture.md");
+    assert!(
+        ARCHITECTURE.contains("#### 13.2.1 durability 的边界（AD-017）"),
+        "the durability limit must appear in the architecture, not only in a module comment"
+    );
+    assert!(
+        ARCHITECTURE.contains("不声明掉电安全"),
+        "13.2.1 must say plainly that power-loss safety is not claimed"
+    );
+}

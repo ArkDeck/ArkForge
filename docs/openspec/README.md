@@ -11,7 +11,7 @@
 |---|---|---|
 | `chg-arkdeck-arkforge-authority/` | ArkDeck 保留 authority，把 Rockchip lowering 交给 ArkForge | ArkForge 侧已完成到写入前最后一步，见 [2026-08-15 彩排](../evidence/runs/2026-08-15-dayu200-flash-rehearsal.md) |
 
-`chg-arkdeck-arkforge-authority/` 里的四份文件：
+`chg-arkdeck-arkforge-authority/` 里的五份文件：
 
 | 文件 | 给谁看 |
 |---|---|
