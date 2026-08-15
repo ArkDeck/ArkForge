@@ -2,14 +2,16 @@
 //!
 //! Plan storage, the job state machine, and the execution gate.
 //!
-//! Scope note: the durable engine — journal fsync policy, crash campaigns,
-//! permit consumption, reconcile — is AF-V2 (architecture.md 22). What AF-V1
-//! needs, and what this crate provides, is the plan store the read-only API
-//! hands out of, the state machine those stages will move through, and a gate
-//! that refuses to start execution.
+//! - [`journal`] / [`durable`] — the hash-chained record and its file, with
+//!   the fsync policy fixed per record kind (architecture.md 13.2);
+//! - [`recovery`] — the crash-disposition table of 13.3, derived from the
+//!   journal rather than left to a caller's memory;
+//! - [`step`] — permit consumption, ordered by types rather than by discipline;
+//! - [`superseding`] — possible effects, read-only reconcile, and whether a
+//!   distinct recovery plan could be offered (14.2–14.5).
 //!
-//! The gate is not a `TODO`. It is the AF-V1 acceptance line "startExecution
-//! disabled", implemented as a type that has no variant meaning "allowed".
+//! What is still missing is an authority. [`ExecutionGate`] says so, and has no
+//! variant meaning "allowed": turning execution on is a pairing, not a setting.
 
 #![forbid(unsafe_code)]
 
@@ -17,6 +19,7 @@ pub mod durable;
 pub mod journal;
 pub mod recovery;
 pub mod step;
+pub mod superseding;
 
 use arkforge_core::plan::{FlashPlanEnvelope, PlanError};
 use arkforge_core::projection::StoredProviderPlan;
