@@ -206,6 +206,20 @@ pub enum ExecutionGate {
 impl ExecutionGate {
     pub const CURRENT: ExecutionGate = ExecutionGate::NoPairedAuthority;
 
+    /// The gate that applies, or `None` when nothing blocks execution.
+    ///
+    /// Pairing is the whole condition, and deliberately so: an authority that
+    /// handed this daemon a secret is an authority that can sign permits and
+    /// receive receipts, and there is nothing else to switch on. A build flag
+    /// or a config key here would be a way to turn execution on without one.
+    pub fn evaluate(authority_paired: bool) -> Option<ExecutionGate> {
+        if authority_paired {
+            None
+        } else {
+            Some(ExecutionGate::NoPairedAuthority)
+        }
+    }
+
     pub fn reason(self) -> &'static str {
         match self {
             ExecutionGate::NoPairedAuthority => {
@@ -238,19 +252,25 @@ impl Engine {
         &mut self.plans
     }
 
-    /// Refuses, always, in this build.
+    /// Resolves the plan a job would run, or says why it may not.
     ///
-    /// The signature takes the same arguments the AF-V2 entry point will, so
-    /// the refusal sits on the real call site rather than beside it.
+    /// The plan is resolved and verified before the gate is consulted *here*,
+    /// so a paired daemon reports a corrupt or unknown plan as exactly that.
+    /// Callers are expected to test the gate first — it is a standing fact
+    /// about the daemon, while the plan is a fact about one request, and an
+    /// unpaired daemon answering "unknown plan" would send an operator to fix
+    /// a plan that could not have run either way.
     pub fn start_execution(
         &mut self,
         plan_id: &PlanId,
         plan_digest: Sha256Digest,
-    ) -> Result<JobState, EngineError> {
-        // The plan is still resolved and verified: a caller that passes a
-        // corrupt or unknown plan should hear about that, not about the gate.
+        authority_paired: bool,
+    ) -> Result<&StoredPlan, EngineError> {
         self.plans.get(plan_id, plan_digest)?;
-        Err(EngineError::ExecutionDisabled(ExecutionGate::CURRENT))
+        if let Some(gate) = ExecutionGate::evaluate(authority_paired) {
+            return Err(EngineError::ExecutionDisabled(gate));
+        }
+        self.plans.get(plan_id, plan_digest)
     }
 }
 
@@ -392,19 +412,25 @@ mod tests {
     }
 
     #[test]
-    fn start_execution_is_refused_and_says_why() {
+    fn an_unknown_plan_is_reported_before_the_gate_is_consulted() {
         let mut engine = Engine::new();
-        let error = engine
-            .start_execution(&PlanId::new("PLAN-1").unwrap(), sha256(b"plan"))
-            .unwrap_err();
-        // An unknown plan is reported as an unknown plan, so the gate never
-        // masks a real caller error.
-        assert!(matches!(error, EngineError::UnknownPlan(_)));
+        for paired in [false, true] {
+            let error = engine
+                .start_execution(&PlanId::new("PLAN-1").unwrap(), sha256(b"plan"), paired)
+                .unwrap_err();
+            // The gate never masks a real caller error: an operator told
+            // "execution is unavailable" would go and fix the wrong thing.
+            assert!(matches!(error, EngineError::UnknownPlan(_)), "paired={paired}");
+        }
     }
 
     #[test]
-    fn the_execution_gate_has_no_allowed_state() {
-        assert_eq!(ExecutionGate::CURRENT, ExecutionGate::NoPairedAuthority);
+    fn pairing_is_the_whole_condition_the_gate_switches_on() {
+        assert_eq!(
+            ExecutionGate::evaluate(false),
+            Some(ExecutionGate::NoPairedAuthority)
+        );
+        assert_eq!(ExecutionGate::evaluate(true), None);
         assert!(ExecutionGate::CURRENT.reason().contains("unavailable"));
     }
 }

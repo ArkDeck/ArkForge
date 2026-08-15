@@ -15,8 +15,8 @@
 #![forbid(unsafe_code)]
 
 use arkforge_core::digest::{
-    constant_time_eq, digest_canonical, hmac_sha256, CanonicalCbor, CborError, CborValue, Domain,
-    Sha256Digest,
+    constant_time_eq, decode_canonical, digest_canonical, hmac_sha256, CanonicalCbor, CborError,
+    CborValue, Domain, Sha256Digest,
 };
 use arkforge_core::effect::EffectSet;
 use arkforge_core::ids::{
@@ -214,7 +214,171 @@ impl StepPermit {
     pub fn signing_body(&self) -> Result<Vec<u8>, CborError> {
         permit_body(self).to_canonical_bytes()
     }
+
+    /// Reads a permit back from the exact canonical bytes an authority signed.
+    ///
+    /// The integrity tag is **not** in these bytes and is not set here: it
+    /// travels beside them and is checked by [`verify_permit`]. A permit
+    /// carrying its own tag inside the body it signs would be signing a claim
+    /// about itself.
+    ///
+    /// Re-encoding this value must reproduce `input` byte for byte, and
+    /// [`Self::from_canonical_bytes`] enforces that rather than trusting it: a
+    /// permit whose encoding differs from what the authority signed is a
+    /// different permit, and the tag would be verified against the wrong bytes.
+    /// Nothing here defaults — a missing field is a malformed permit, because
+    /// the alternative is executing under a permit that says less than the one
+    /// the authority meant to sign.
+    pub fn from_canonical_bytes(input: &[u8]) -> Result<StepPermit, PermitDecodeError> {
+        let value = decode_canonical(input).map_err(PermitDecodeError::Cbor)?;
+        let CborValue::Map(entries) = value else {
+            return Err(PermitDecodeError::NotAMap);
+        };
+        let field = |name: &str| -> Option<&CborValue> {
+            entries
+                .iter()
+                .find(|(key, _)| matches!(key, CborValue::Text(text) if text == name))
+                .map(|(_, value)| value)
+        };
+        let text = |name: &'static str| -> Result<&str, PermitDecodeError> {
+            match field(name) {
+                Some(CborValue::Text(value)) => Ok(value.as_str()),
+                _ => Err(PermitDecodeError::Field(name)),
+            }
+        };
+        let unsigned = |name: &'static str| -> Result<u64, PermitDecodeError> {
+            match field(name) {
+                Some(CborValue::Unsigned(value)) => Ok(*value),
+                _ => Err(PermitDecodeError::Field(name)),
+            }
+        };
+        let boolean = |name: &'static str| -> Result<bool, PermitDecodeError> {
+            match field(name) {
+                Some(CborValue::Bool(value)) => Ok(*value),
+                _ => Err(PermitDecodeError::Field(name)),
+            }
+        };
+        let digest = |name: &'static str| -> Result<Sha256Digest, PermitDecodeError> {
+            match field(name) {
+                Some(CborValue::Bytes(bytes)) if bytes.len() == 32 => {
+                    let mut array = [0u8; 32];
+                    array.copy_from_slice(bytes);
+                    Ok(Sha256Digest::from_bytes(array))
+                }
+                _ => Err(PermitDecodeError::Field(name)),
+            }
+        };
+        let binding = match field("authorityBinding") {
+            Some(CborValue::Map(pairs)) => {
+                let sub = |name: &str| -> Option<&CborValue> {
+                    pairs
+                        .iter()
+                        .find(|(key, _)| matches!(key, CborValue::Text(text) if text == name))
+                        .map(|(_, value)| value)
+                };
+                let namespace = match sub("authorityNamespace") {
+                    Some(CborValue::Text(value)) => AuthorityNamespace::new(value)
+                        .map_err(|_| PermitDecodeError::Field("authorityBinding"))?,
+                    _ => return Err(PermitDecodeError::Field("authorityBinding")),
+                };
+                let binding_id = match sub("bindingId") {
+                    Some(CborValue::Text(value)) => OpaqueId::new(value)
+                        .map_err(|_| PermitDecodeError::Field("authorityBinding"))?,
+                    _ => return Err(PermitDecodeError::Field("authorityBinding")),
+                };
+                let revision = match sub("bindingRevision") {
+                    Some(CborValue::Unsigned(value)) => *value,
+                    _ => return Err(PermitDecodeError::Field("authorityBinding")),
+                };
+                let identity = match sub("stableIdentityDigest") {
+                    Some(CborValue::Bytes(bytes)) if bytes.len() == 32 => {
+                        let mut array = [0u8; 32];
+                        array.copy_from_slice(bytes);
+                        Sha256Digest::from_bytes(array)
+                    }
+                    _ => return Err(PermitDecodeError::Field("authorityBinding")),
+                };
+                AuthorityBindingRef {
+                    authority_namespace: namespace,
+                    binding_id,
+                    binding_revision: revision,
+                    stable_identity_digest: identity,
+                }
+            }
+            _ => return Err(PermitDecodeError::Field("authorityBinding")),
+        };
+
+        let permit = StepPermit {
+            permit_id: PermitId::new(text("permitId")?)
+                .map_err(|_| PermitDecodeError::Field("permitId"))?,
+            authority_namespace: AuthorityNamespace::new(text("authorityNamespace")?)
+                .map_err(|_| PermitDecodeError::Field("authorityNamespace"))?,
+            controller_session_id: ControllerSessionId::new(text("controllerSessionId")?)
+                .map_err(|_| PermitDecodeError::Field("controllerSessionId"))?,
+            job_id: JobId::new(text("jobId")?).map_err(|_| PermitDecodeError::Field("jobId"))?,
+            plan_id: PlanId::new(text("planId")?)
+                .map_err(|_| PermitDecodeError::Field("planId"))?,
+            plan_digest: digest("planDigest")?,
+            step_id: StepId::new(text("stepId")?)
+                .map_err(|_| PermitDecodeError::Field("stepId"))?,
+            attempt_id: AttemptId::new(text("attemptId")?)
+                .map_err(|_| PermitDecodeError::Field("attemptId"))?,
+            public_step_digest: digest("publicStepDigest")?,
+            private_action_digest: digest("privateActionDigest")?,
+            effect_set_digest: digest("effectSetDigest")?,
+            authority_binding: binding,
+            admitted_device_facts_digest: digest("admittedDeviceFactsDigest")?,
+            issued_at_epoch_ms: unsigned("issuedAtEpochMs")?,
+            expires_at_epoch_ms: unsigned("expiresAtEpochMs")?,
+            single_use: boolean("singleUse")?,
+            // Set by the caller from the tag that travelled beside the bytes.
+            integrity_tag: PermitIntegrityTag {
+                epoch: PairingEpoch(0),
+                tag: Sha256Digest::from_bytes([0u8; 32]),
+            },
+        };
+
+        // The round trip is the check. If re-encoding differs, the bytes the
+        // authority signed are not the bytes this value stands for, and the
+        // tag would be verified against something else.
+        let reencoded = permit.signing_body().map_err(PermitDecodeError::Cbor)?;
+        if reencoded != input {
+            return Err(PermitDecodeError::NotCanonical);
+        }
+        Ok(permit)
+    }
 }
+
+/// Why a permit could not be read back.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum PermitDecodeError {
+    NotAMap,
+    /// A field is missing or has the wrong shape. Named, so a malformed permit
+    /// says which field rather than "invalid".
+    Field(&'static str),
+    /// The bytes decode, but re-encoding them produces something else — so
+    /// they are not the deterministic encoding the tag was computed over.
+    NotCanonical,
+    Cbor(CborError),
+}
+
+impl fmt::Display for PermitDecodeError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            PermitDecodeError::NotAMap => f.write_str("the permit is not a CBOR map"),
+            PermitDecodeError::Field(name) => {
+                write!(f, "permit field {name:?} is missing or malformed")
+            }
+            PermitDecodeError::NotCanonical => f.write_str(
+                "the permit bytes are not the deterministic encoding the integrity tag covers; \
+                 re-encoding them produces different bytes (RFC 8949 4.2.1)",
+            ),
+            PermitDecodeError::Cbor(error) => write!(f, "{error}"),
+        }
+    }
+}
+
+impl std::error::Error for PermitDecodeError {}
 
 fn permit_body(permit: &StepPermit) -> CborValue {
     CborValue::map(vec![

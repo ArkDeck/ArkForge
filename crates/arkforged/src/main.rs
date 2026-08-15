@@ -36,12 +36,17 @@ fn main() {
 fn usage() -> String {
     concat!(
         "usage: arkforged --runtime-dir <dir> [--profile <file>]... [--transcript <file>]...\n",
+        "                 [--pair-from-stdin <epoch>]\n",
         "\n",
-        "  --runtime-dir  where the content store and sockets live\n",
-        "  --profile      a DeviceProfile YAML document (repeatable)\n",
-        "  --transcript   a golden transcript to serve as a replay transport (repeatable)\n",
+        "  --runtime-dir      where the content store and sockets live\n",
+        "  --profile          a DeviceProfile YAML document (repeatable)\n",
+        "  --transcript       a golden transcript to serve as a replay transport (repeatable)\n",
+        "  --pair-from-stdin  read the authority's pairing secret from stdin and close it\n",
         "\n",
-        "This build is the AF-V1 read-only vertical: startExecution is unavailable.\n"
+        "Without --pair-from-stdin no authority is paired, and startExecution is\n",
+        "unavailable. The secret is read from stdin rather than an argv or an\n",
+        "environment variable, neither of which this process could erase after\n",
+        "reading and both of which other processes can sometimes see.\n"
     )
     .to_string()
 }
@@ -50,6 +55,7 @@ fn run(arguments: &[String]) -> Result<(), String> {
     let mut runtime_dir: Option<PathBuf> = None;
     let mut profile_paths: Vec<PathBuf> = Vec::new();
     let mut transcript_paths: Vec<PathBuf> = Vec::new();
+    let mut pairing_epoch: Option<u64> = None;
 
     let mut index = 0usize;
     while index < arguments.len() {
@@ -67,6 +73,14 @@ fn run(arguments: &[String]) -> Result<(), String> {
             "--transcript" => {
                 index += 1;
                 transcript_paths.push(PathBuf::from(arguments.get(index).ok_or_else(|| usage())?));
+            }
+            "--pair-from-stdin" => {
+                index += 1;
+                let raw = arguments.get(index).ok_or_else(usage)?;
+                pairing_epoch = Some(
+                    raw.parse::<u64>()
+                        .map_err(|_| format!("{raw:?} is not a pairing epoch"))?,
+                );
             }
             "--help" | "-h" => {
                 print!("{}", usage());
@@ -96,8 +110,11 @@ fn run(arguments: &[String]) -> Result<(), String> {
     }
 
     let now = now_epoch_ms();
-    let service = Service::new(&runtime_dir.join("store"), profiles, transcripts, now)
+    let mut service = Service::new(&runtime_dir.join("store"), profiles, transcripts, now)
         .map_err(|error| error.to_string())?;
+    if let Some(epoch) = pairing_epoch {
+        service.pair_authority(arkforged::jobs::read_pairing_secret_from_stdin(epoch)?);
+    }
     let service = Arc::new(Mutex::new(service));
 
     let public = bind(&runtime_dir.join("public.sock"))?;
@@ -107,7 +124,14 @@ fn run(arguments: &[String]) -> Result<(), String> {
         runtime_dir.join("public.sock").display(),
         runtime_dir.join("controller.sock").display()
     );
-    println!("execution: unavailable (AF-V1 read-only vertical)");
+    match pairing_epoch {
+        Some(epoch) => println!(
+            "execution: available (authority paired, pairing epoch {epoch})"
+        ),
+        None => println!(
+            "execution: unavailable (no authority paired; pass --pair-from-stdin to pair one)"
+        ),
+    }
 
     let public_service = Arc::clone(&service);
     let handle = std::thread::spawn(move || {

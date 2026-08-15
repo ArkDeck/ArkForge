@@ -9,6 +9,7 @@ use arkforge_core::profile;
 use arkforged::Service;
 use arkforge_ipc::messages::{
     ErrorBody, InspectArtifactResponse, MaterializePlanResponse, Request, Response,
+    SubmitStepPermitRequest,
 };
 use arkforge_ipc::{wire, Api, SessionKind, Status};
 use std::path::PathBuf;
@@ -143,13 +144,23 @@ fn the_public_socket_cannot_import_an_artifact() {
     });
 }
 
+/// Two different answers, because they are two different facts.
+///
+/// `watchJob` and `cancelJob` are implemented; asking them about a job that
+/// does not exist is a not-found, not a missing capability. Reconcile and
+/// superseding recovery genuinely are not here.
 #[test]
-fn every_job_surface_call_is_unavailable_in_this_build() {
+fn an_unknown_job_is_not_found_and_an_absent_capability_is_unavailable() {
     let root = TempRoot::new("job-surface");
     let mut service = service(&root);
+
+    for api in [Api::WatchJob, Api::CancelJob] {
+        let response = service.handle(SessionKind::Controller, &request(api, Vec::new()), None);
+        assert_eq!(response.status, Status::NotFound, "{api}");
+        assert_eq!(decode_error(&response).unwrap().code, "UNKNOWN_JOB", "{api}");
+    }
+
     for api in [
-        Api::WatchJob,
-        Api::CancelJob,
         Api::ReconcileJob,
         Api::PlanSupersedingRecovery,
         Api::GetRecoveryGuide,
@@ -157,6 +168,51 @@ fn every_job_surface_call_is_unavailable_in_this_build() {
         let response = service.handle(SessionKind::Controller, &request(api, Vec::new()), None);
         assert_eq!(response.status, Status::Unavailable, "{api}");
     }
+}
+
+/// Answering an admission is minting authority. A public caller that could do
+/// it would be an authority nobody paired.
+#[test]
+fn the_public_socket_cannot_answer_an_admission() {
+    let root = TempRoot::new("public-admission");
+    let mut service = service(&root);
+    for api in [Api::SubmitStepPermit, Api::SubmitManagedControlReceipt] {
+        let response = service.handle(SessionKind::Public, &request(api, Vec::new()), None);
+        assert_eq!(response.status, Status::Refused, "{api}");
+        assert_eq!(
+            decode_error(&response).unwrap().code,
+            "SESSION_NOT_PERMITTED",
+            "{api}"
+        );
+    }
+}
+
+/// Without a paired authority the admission surface refuses too, and names the
+/// same standing condition `startExecution` names.
+#[test]
+fn an_unpaired_daemon_accepts_no_permit() {
+    let root = TempRoot::new("unpaired-admission");
+    let mut service = service(&root);
+    let response = service.handle(
+        SessionKind::Controller,
+        &request(
+            Api::SubmitStepPermit,
+            SubmitStepPermitRequest {
+                job_id: "JOB-1".into(),
+                request_id: "REQ-1".into(),
+                permit_cbor: vec![0xA0],
+                integrity_tag: vec![0u8; 32],
+                pairing_epoch: 1,
+                refusal: String::new(),
+            }
+            .encode(),
+        ),
+        None,
+    );
+    assert_eq!(response.status, Status::Unavailable);
+    let error = decode_error(&response).unwrap();
+    assert_eq!(error.code, "EXECUTION_DISABLED");
+    assert!(error.message.contains("no authority is paired"), "{}", error.message);
 }
 
 #[test]

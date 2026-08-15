@@ -3,9 +3,9 @@
 > 读者：在 ArkDeck 仓实现 Swift 侧的人。
 > 本文只讲**怎么做**与**为什么必须这么做**；要不要做见 `proposal.md`。
 >
-> ArkForge 侧的对应产物都在 ArkForge 仓，路径在文中逐处给出。凡是写「已实现」的，
-> 都能直接跑；凡是写「AF-V2.4」的，是 ArkForge 侧还没接线、需要与本 change
-> 的实现 PR 同期完成的部分。
+> ArkForge 侧的对应产物都在 ArkForge 仓，路径在文中逐处给出，都能直接跑。
+> **2026-08-15 更新：controller execution/admission surface 已实现并固定**，
+> 第 8 节列了逐项状态。唯一还没有的是 dispatch（AF-V2.4，需要硬件）。
 
 ---
 
@@ -145,10 +145,10 @@ daemon 在 `watchJob` 流上**请求**，authority 回头**调用**。
 
 | # | API | 会话 | 说明 |
 |---:|---|---|---|
-| 6 | `startExecution` | controller | 现在返回 `UNAVAILABLE`：没有配对的 authority |
-| 7 | `watchJob` | 任意 | 事件流；`from_sequence` 支持断线重连续传 |
-| 12 | `submitStepPermit` | **controller only** | 答复一次 admission |
-| 13 | `submitManagedControlReceipt` | **controller only** | 报告 authority 自己观测到什么 |
+| 6 | `startExecution` | controller | 已实现；未配对 authority 时返回 `UNAVAILABLE` |
+| 7 | `watchJob` | 任意 | 已实现。轮询而非推送——daemon 所有连接共用一把锁，一个停在那里等下一条事件的 handler 会挡住产生它的那次调用 |
+| 12 | `submitStepPermit` | **controller only** | 已实现。答复一次 admission |
+| 13 | `submitManagedControlReceipt` | **controller only** | 已实现。报告 authority 自己观测到什么 |
 
 12/13 必须是 controller-only：能提交 permit 的 public 调用方，
 就是一个没人配对过的 authority。ArkForge 侧
@@ -323,16 +323,53 @@ ArkForge 的 fsync 只证明到**进程死亡**为止。macOS `fsync(2)` 不冲�
 
 ---
 
-## 8. ArkForge 侧仍需完成的部分（AF-V2.4）
+## 8. ArkForge 侧的状态（2026-08-15 更新）
 
-诚实起见列在这里，免得实现到第 5 步才发现对面没接：
+controller execution/admission surface **已实现并固定**：
 
-- `arkforged` 的 job 状态机上线（`startExecution` 现在返回 `UNAVAILABLE`）；
-- `watchJob` 事件流的发布；
-- API 12/13 的 daemon 侧处理（现在返回 `ADMISSION_SURFACE_UNAVAILABLE`）；
-- `proto/arkforge.proto` 新增消息的 Rust 编解码。
+| 项 | 状态 |
+|---|---|
+| `startExecution`（API 6） | ✅ 建 job、开 per-job journal、发布第一条 admission |
+| `watchJob`（API 7） | ✅ 事件流，`from_sequence` 支持断线续传 |
+| `cancelJob`（API 8） | ✅ permit 之前 `CancelledSafe`；之后拒绝为 `CANCEL_NOT_SAFE` |
+| `submitStepPermit`（API 12） | ✅ 逐项验证并落 durable intent |
+| `submitManagedControlReceipt`（API 13） | ✅ 校验 request/action、拒绝禁止事实、落回执与 checkpoint |
+| 新增消息的 Rust 编解码 | ✅ 全部 round-trip 测试 |
+| permit 的 CBOR 解码 | ✅ `StepPermit::from_canonical_bytes` |
 
-线上契约本身（proto）已经写定，两侧可以并行实现。
+九条端到端测试在 `crates/arkforged/tests/admission_surface.rs`，
+用真实归档物化的真实计划驱动整套握手。
+
+### 8.1 ArkDeck 侧现在可以对着什么写
+
+- **permit 编码**：`StepPermit::from_canonical_bytes` 做**往返校验**——
+  解出来再编回去必须与输入逐字节相同，否则拒绝为 `NotCanonical`。
+  这意味着 Swift 侧只要有一个字节的编码差异就会被当场拒绝，而不是默默通过。
+  先用 `permit-vectors.md` 的三组向量对齐，再接线。
+- **snapshot 新鲜度**：`SNAPSHOT_LIFETIME_MS = 60_000`。晚到的 permit 被拒为
+  `SNAPSHOT_EXPIRED`，daemon 同时发布一条**新的** admission——不需要重启 job，
+  重新签一张即可。
+- **禁止事实**：回执里出现 `connectKey`/`hdcExecutablePath`/`hdcEndpoint`/
+  `argv`/`shell`/`serverLifecycleAction` 任一，整条回执被拒为
+  `RECEIPT_CARRIES_FORBIDDEN_FACTS`。不是丢字段继续。
+- **`accepted: false` 的含义**：job 进入 `outcomeUnknown`，不是失败。
+  要表达「确实没发生」，在 `failure_reason` 里说清依据。
+- **配对**：daemon 用 `--pair-from-stdin <epoch>` 启动，authority 把 secret 写进
+  它的 stdin 再关闭。没配对时 `startExecution` 与 API 12/13 一律返回
+  `EXECUTION_DISABLED`，且这个判断在解析 payload **之前**——
+  它是 daemon 的常驻事实，不是某一次请求的事实。
+
+### 8.2 还没有的
+
+**dispatch。** 一个需要 ArkForge 自己派发私有动作的步骤会停在
+`DispatchNotWired`：permit 已验、intent 已落盘，job 处于
+`StepIntentDurable`——即 architecture.md 13.3 说的「intent 已落、dispatch 是否发生不明」。
+把 Rockchip 执行器接到这个位置是 AF-V2.4，需要硬件；surface 本身不需要。
+
+因此本 change 的实现顺序里，第 5 步「RuntimeJobEngine 接线」现在可以做到
+**控制动作那一类步骤走完整条链路**（`flash.dayu200` 的第一步 `EnsureMode` 与最后一步
+`PostflightProbe` 都是这类），写入类步骤会停在 `DispatchNotWired`。
+
 除此之外，ArkForge 侧的执行机制——封闭命令面、读域三态、staging 与写前
 revalidate、durable journal、permit 单次使用——**都已完成并在真机上验证到写入前的
 最后一步**，见 `../../evidence/runs/2026-08-15-dayu200-flash-rehearsal.md`。

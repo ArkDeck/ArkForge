@@ -13,10 +13,14 @@ use arkforge_core::ids::{OpaqueId, PlanId};
 use arkforge_core::plan::PlanMaterialization;
 use arkforge_core::profile::DeviceProfile;
 use arkforge_core::{AuthorityBindingRef, AuthorityNamespace, PersistentEffect, Sha256Digest, TransientEffect};
-use arkforge_engine::Engine;
+use crate::jobs::JobRegistry;
+use arkforge_authority_api::{ControllerPairingSecret, StepPermit};
+use arkforge_engine::{Engine, StoredPlan};
 use arkforge_ipc::messages::{
-    ArchiveMember, Assessment, Effect, ErrorBody, ExecutablePlan, InspectArtifactResponse, KeyValue,
-    MaterializePlanResponse, PartitionEntry, PublicStep, Request, Response,
+    ArchiveMember, Assessment, Effect, ErrorBody, ExecutablePlan, InspectArtifactResponse,
+    KeyValue, MaterializePlanResponse, PartitionEntry, PublicStep, Request, Response,
+    SubmissionOutcome, SubmitManagedControlReceiptRequest, SubmitStepPermitRequest,
+    WatchJobRequest,
 };
 use arkforge_ipc::{Api, SessionKind, Status};
 use arkforge_provider::rockchip::{publish_af_v1_maturity, RockchipProvider};
@@ -42,6 +46,11 @@ pub struct Service {
     manifests: BTreeMap<String, ArtifactManifest>,
     transports: Vec<TranscriptTransport>,
     now_epoch_ms: u64,
+    jobs: JobRegistry,
+    /// The secret the authority handed this daemon at startup. `None` means no
+    /// authority is paired, which is the entire condition the execution gate
+    /// switches on.
+    pairing: Option<ControllerPairingSecret>,
 }
 
 impl Service {
@@ -117,11 +126,29 @@ impl Service {
             manifests: BTreeMap::new(),
             transports: loaded,
             now_epoch_ms,
+            jobs: JobRegistry::new(store_root.join("jobs")),
+            pairing: None,
         })
     }
 
     pub fn engine(&self) -> &Engine {
         &self.engine
+    }
+
+    pub fn jobs(&self) -> &JobRegistry {
+        &self.jobs
+    }
+
+    /// Pairs an authority with this daemon.
+    ///
+    /// Consuming the secret by value is the point: the caller cannot keep a
+    /// copy to hand to something else, and there is no getter to read it back.
+    pub fn pair_authority(&mut self, secret: ControllerPairingSecret) {
+        self.pairing = Some(secret);
+    }
+
+    pub fn authority_paired(&self) -> bool {
+        self.pairing.is_some()
     }
 
     /// Dispatches one request.
@@ -153,39 +180,20 @@ impl Service {
             Api::DiscoverDevices => self.discover_devices(request),
             Api::ProbeDevice => self.probe_device(request),
             Api::MaterializePlan => self.materialize_plan(request),
-            Api::StartExecution => {
-                // The gate, at the real call site. A caller sees the same
-                // refusal whether or not it holds a controller session.
-                self.refuse(
+            Api::StartExecution => self.start_execution(request),
+            Api::WatchJob => self.watch_job(request),
+            Api::CancelJob => self.cancel_job(request),
+            Api::SubmitStepPermit => self.submit_step_permit(request),
+            Api::SubmitManagedControlReceipt => self.submit_control_receipt(request),
+            Api::ReconcileJob | Api::PlanSupersedingRecovery | Api::GetRecoveryGuide => self
+                .refuse(
                     request,
                     Status::Unavailable,
-                    "EXECUTION_DISABLED",
-                    arkforge_engine::ExecutionGate::CURRENT.reason(),
-                )
-            }
-            Api::WatchJob
-            | Api::CancelJob
-            | Api::ReconcileJob
-            | Api::PlanSupersedingRecovery
-            | Api::GetRecoveryGuide => self.refuse(
-                request,
-                Status::Unavailable,
-                "JOB_SURFACE_UNAVAILABLE",
-                "no job exists: startExecution is unavailable until an authority is paired \
-                 with this daemon",
-            ),
-            // The wire contract for these two exists (proto/arkforge.proto,
-            // API 12/13) and the ArkDeck side is specified against it. The
-            // daemon-side wiring is AF-V2.4 and cannot be exercised before an
-            // authority is paired, so the honest answer is that they are not
-            // implemented here — not that the message was malformed.
-            Api::SubmitStepPermit | Api::SubmitManagedControlReceipt => self.refuse(
-                request,
-                Status::Unavailable,
-                "ADMISSION_SURFACE_UNAVAILABLE",
-                "this build accepts no permit: no authority is paired, so there is no admission \
-                 to answer (architecture.md 8.6)",
-            ),
+                    "RECONCILE_SURFACE_UNAVAILABLE",
+                    "reconcile and superseding recovery need read-only device observation of a \
+                     job that dispatched; this build has the assessment half only \
+                     (arkforge_engine::superseding)",
+                ),
         }
     }
 
@@ -429,6 +437,259 @@ impl Service {
         )
     }
 
+
+    // -----------------------------------------------------------------------
+    // The controller execution/admission surface (architecture.md 8, 13, 15.3)
+    // -----------------------------------------------------------------------
+
+    /// Creates a job for a plan this daemon materialized.
+    ///
+    /// Everything a caller can supply is an internal identifier. There is no
+    /// partition, address, tool, timeout or effect override in the request,
+    /// and the plan is resolved out of the daemon's own store rather than
+    /// rebuilt from anything the caller sent (architecture.md 15.3).
+    fn start_execution(&mut self, request: &Request) -> Response {
+        // The gate first, because it is a standing fact about this daemon and
+        // the payload is a fact about one request. An unpaired daemon that
+        // answered "unknown plan" would send an operator to fix a plan that
+        // could not have run either way.
+        if let Some(gate) = arkforge_engine::ExecutionGate::evaluate(self.pairing.is_some()) {
+            return self.refuse(request, Status::Unavailable, "EXECUTION_DISABLED", gate.reason());
+        }
+        let plan_id = first_string_field(&request.payload, 1).unwrap_or_default();
+        let plan_sha256 = first_string_field(&request.payload, 2).unwrap_or_default();
+
+        let Ok(plan_id) = PlanId::new(&plan_id) else {
+            return self.refuse(
+                request,
+                Status::InvalidArgument,
+                "BAD_PLAN_ID",
+                "planId is not a usable identifier",
+            );
+        };
+        let Ok(expected) = Sha256Digest::parse_hex(&plan_sha256) else {
+            return self.refuse(
+                request,
+                Status::InvalidArgument,
+                "BAD_PLAN_DIGEST",
+                "planSha256 is not 64 hex characters",
+            );
+        };
+
+        let paired = self.pairing.is_some();
+        let stored = match self.engine.start_execution(&plan_id, expected, paired) {
+            Ok(stored) => stored.clone(),
+            Err(arkforge_engine::EngineError::ExecutionDisabled(gate)) => {
+                return self.refuse(request, Status::Unavailable, "EXECUTION_DISABLED", gate.reason())
+            }
+            Err(error) => {
+                return self.refuse(
+                    request,
+                    Status::NotFound,
+                    "PLAN_NOT_STARTABLE",
+                    &error.to_string(),
+                )
+            }
+        };
+
+        match self
+            .jobs
+            .start(&stored.envelope, &stored.private_plan, self.now_epoch_ms)
+        {
+            Ok(job_id) => {
+                let mut payload = Vec::new();
+                arkforge_ipc::wire::write_string(&mut payload, 1, &job_id);
+                self.ok(request, payload)
+            }
+            Err(error) => self.refuse(
+                request,
+                Status::Internal,
+                error.code(),
+                &error.to_string(),
+            ),
+        }
+    }
+
+    /// Returns the events a job has published since `from_sequence`.
+    ///
+    /// A poll rather than a push, because the daemon serves every connection
+    /// under one lock and a handler that parked waiting for the next event
+    /// would stop every other call — including the one that produces it.
+    fn watch_job(&mut self, request: &Request) -> Response {
+        let Ok(watch) = WatchJobRequest::decode(&request.payload) else {
+            return self.refuse(
+                request,
+                Status::InvalidArgument,
+                "BAD_WATCH_REQUEST",
+                "watchJob payload does not decode",
+            );
+        };
+        let Some(job) = self.jobs.job(&watch.job_id) else {
+            return self.refuse(
+                request,
+                Status::NotFound,
+                "UNKNOWN_JOB",
+                &format!("no job {}", watch.job_id),
+            );
+        };
+        let events = job.events_from(watch.from_sequence);
+        let mut payload = Vec::new();
+        for event in &events {
+            arkforge_ipc::wire::write_message(&mut payload, 1, &event.encode());
+        }
+        self.ok(request, payload)
+    }
+
+    fn cancel_job(&mut self, request: &Request) -> Response {
+        let job_id = first_string_field(&request.payload, 1).unwrap_or_default();
+        match self.jobs.cancel(&job_id, self.now_epoch_ms) {
+            Ok(state) => {
+                let mut payload = Vec::new();
+                arkforge_ipc::wire::write_string(&mut payload, 1, state.as_str());
+                self.ok(request, payload)
+            }
+            // "No such job" and "cancelling this job would hide an unresolved
+            // effect" are different answers to different questions, and an
+            // operator needs to tell them apart.
+            Err(crate::jobs::JobError::UnknownJob) => self.refuse(
+                request,
+                Status::NotFound,
+                "UNKNOWN_JOB",
+                &format!("no job {job_id}"),
+            ),
+            Err(error) => self.refuse(
+                request,
+                Status::Refused,
+                error.code(),
+                &error.to_string(),
+            ),
+        }
+    }
+
+    /// Answers an admission the daemon asked for on the watchJob stream.
+    fn submit_step_permit(&mut self, request: &Request) -> Response {
+        let Ok(submission) = SubmitStepPermitRequest::decode(&request.payload) else {
+            return self.refuse(
+                request,
+                Status::InvalidArgument,
+                "BAD_SUBMISSION",
+                "submitStepPermit payload does not decode",
+            );
+        };
+        if !submission.is_well_formed() {
+            return self.refuse(
+                request,
+                Status::InvalidArgument,
+                "SUBMISSION_AMBIGUOUS",
+                "a submission carries a permit or a refusal, never both and never neither",
+            );
+        }
+        let Some(secret) = self.pairing.clone() else {
+            return self.refuse(
+                request,
+                Status::Unavailable,
+                "EXECUTION_DISABLED",
+                arkforge_engine::ExecutionGate::CURRENT.reason(),
+            );
+        };
+        let Some(stored) = self.stored_plan_for_job(&submission.job_id) else {
+            return self.refuse(
+                request,
+                Status::NotFound,
+                "UNKNOWN_JOB",
+                &format!("no job {}", submission.job_id),
+            );
+        };
+
+        let permit = if submission.permit_cbor.is_empty() {
+            None
+        } else {
+            match StepPermit::from_canonical_bytes(&submission.permit_cbor) {
+                Ok(permit) => Some((
+                    permit,
+                    submission.integrity_tag.clone(),
+                    submission.pairing_epoch,
+                )),
+                Err(error) => {
+                    return self.refuse(
+                        request,
+                        Status::InvalidArgument,
+                        "PERMIT_NOT_DECODABLE",
+                        &error.to_string(),
+                    )
+                }
+            }
+        };
+
+        let outcome = match self.jobs.submit_permit(
+            &submission.job_id,
+            &submission.request_id,
+            permit,
+            &submission.refusal,
+            &secret,
+            &stored.envelope,
+            &stored.private_plan,
+            self.now_epoch_ms,
+        ) {
+            Ok(()) => SubmissionOutcome::accepted(),
+            Err(error) => SubmissionOutcome::rejected(error.code(), error.to_string()),
+        };
+        self.ok(request, outcome.encode())
+    }
+
+    /// Records what the authority's own control channel observed.
+    fn submit_control_receipt(&mut self, request: &Request) -> Response {
+        let Ok(receipt) = SubmitManagedControlReceiptRequest::decode(&request.payload) else {
+            return self.refuse(
+                request,
+                Status::InvalidArgument,
+                "BAD_RECEIPT",
+                "submitManagedControlReceipt payload does not decode",
+            );
+        };
+        if self.pairing.is_none() {
+            return self.refuse(
+                request,
+                Status::Unavailable,
+                "EXECUTION_DISABLED",
+                arkforge_engine::ExecutionGate::CURRENT.reason(),
+            );
+        }
+        let Some(stored) = self.stored_plan_for_job(&receipt.job_id) else {
+            return self.refuse(
+                request,
+                Status::NotFound,
+                "UNKNOWN_JOB",
+                &format!("no job {}", receipt.job_id),
+            );
+        };
+        let outcome = match self.jobs.submit_control_receipt(
+            &receipt,
+            &stored.envelope,
+            &stored.private_plan,
+            self.now_epoch_ms,
+        ) {
+            Ok(()) => SubmissionOutcome::accepted(),
+            Err(error) => SubmissionOutcome::rejected(error.code(), error.to_string()),
+        };
+        self.ok(request, outcome.encode())
+    }
+
+    /// The stored plan a job is running.
+    ///
+    /// Looked up through the job rather than taken from the caller: a
+    /// submission that could name its own plan could answer one job's
+    /// admission with another job's permit.
+    fn stored_plan_for_job(&self, job_id: &str) -> Option<StoredPlan> {
+        let job = self.jobs.job(job_id)?;
+        let plan_id = PlanId::new(job.plan_id()).ok()?;
+        self.engine
+            .plans()
+            .get(&plan_id, job.plan_digest())
+            .ok()
+            .cloned()
+    }
+
     fn materialize_plan(&mut self, request: &Request) -> Response {
         let artifact_id = first_string_field(&request.payload, 1).unwrap_or_default();
         let profile_id = first_string_field(&request.payload, 2).unwrap_or_default();
@@ -528,7 +789,39 @@ impl Service {
             plan_lifetime_ms: 3_600_000,
         };
 
-        match provider.materialize(&materialize, &self.maturity) {
+        let materialized = match provider.materialize_with_private_plan(&materialize, &self.maturity)
+        {
+            Ok(materialized) => materialized,
+            Err(error) => {
+                return self.refuse(
+                    request,
+                    Status::Refused,
+                    "MATERIALIZATION_REFUSED",
+                    &error.to_string(),
+                )
+            }
+        };
+        // Store the executable plan and its private half together. A job can
+        // only ever be started against a plan the daemon materialized itself,
+        // which is what keeps `startExecution` free of anything a caller could
+        // supply (architecture.md 15.3).
+        if let (PlanMaterialization::Executable(envelope), Some(private_plan)) =
+            (&materialized.materialization, &materialized.private_plan)
+        {
+            if let Err(error) = self.engine.plans_mut().insert(StoredPlan {
+                envelope: (**envelope).clone(),
+                private_plan: private_plan.clone(),
+            }) {
+                return self.refuse(
+                    request,
+                    Status::Internal,
+                    "PLAN_NOT_STORABLE",
+                    &error.to_string(),
+                );
+            }
+        }
+
+        match Ok::<_, arkforge_provider::ProviderError>(materialized.materialization) {
             Ok(PlanMaterialization::Assessment(assessment)) => {
                 let mut message = Assessment {
                     availability: assessment.availability.as_str().to_string(),

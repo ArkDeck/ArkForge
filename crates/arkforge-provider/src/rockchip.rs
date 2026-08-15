@@ -9,8 +9,8 @@
 //! SPI's default refusal stands.
 
 use crate::{
-    FlashIntent, FlashProvider, MaterializeRequest, MaturityRegistry, ProbeContext,
-    ProviderDescriptor, ProviderError, ProviderProbe, ValidationReport,
+    FlashIntent, FlashProvider, MaterializeRequest, MaterializedPlan, MaturityRegistry,
+    ProbeContext, ProviderDescriptor, ProviderError, ProviderProbe, ValidationReport,
 };
 use arkforge_artifact::manifest::ArtifactManifest;
 use arkforge_core::digest::{digest_in_domain, sha256, CanonicalCbor, CborValue, Domain};
@@ -44,16 +44,6 @@ pub const BACKEND_REPLAY: &str = "transcript-replay";
 /// The mode the device must be in to accept writes.
 const LOADER_MODE: &str = "rockusb-loader";
 const NORMAL_MODE: &str = "hdc-normal";
-
-/// The result of materialization together with the private plan it produced.
-///
-/// The private plan never leaves the daemon. It is returned here so the engine
-/// can store it beside the envelope; nothing in the IPC surface serializes it.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct MaterializedPlan {
-    pub materialization: PlanMaterialization,
-    pub private_plan: Option<StoredProviderPlan>,
-}
 
 /// The DAYU200 Rockchip provider.
 #[derive(Debug, Clone)]
@@ -106,7 +96,7 @@ impl RockchipProvider {
     /// The two decisions are separate on purpose: the plan is always built in
     /// full, so an assessment can show exactly what *would* happen, and the
     /// gate then decides whether it may be handed to an authority.
-    pub fn materialize_with_private_plan(
+    fn build_materialized_plan(
         &self,
         request: &MaterializeRequest<'_>,
         maturity: &MaturityRegistry,
@@ -949,8 +939,16 @@ impl FlashProvider for RockchipProvider {
         maturity: &MaturityRegistry,
     ) -> Result<PlanMaterialization, ProviderError> {
         Ok(self
-            .materialize_with_private_plan(request, maturity)?
+            .build_materialized_plan(request, maturity)?
             .materialization)
+    }
+
+    fn materialize_with_private_plan(
+        &self,
+        request: &MaterializeRequest<'_>,
+        maturity: &MaturityRegistry,
+    ) -> Result<MaterializedPlan, ProviderError> {
+        self.build_materialized_plan(request, maturity)
     }
 }
 

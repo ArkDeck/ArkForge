@@ -8,6 +8,7 @@
 
 #![forbid(unsafe_code)]
 
+pub mod jobs;
 pub mod service;
 
 pub use service::Service;

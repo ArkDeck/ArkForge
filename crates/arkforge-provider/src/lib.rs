@@ -23,6 +23,7 @@ use arkforge_core::identity::{
 use arkforge_core::ids::OpaqueId;
 use arkforge_core::plan::PlanMaterialization;
 use arkforge_core::profile::DeviceProfile;
+use arkforge_core::projection::StoredProviderPlan;
 use arkforge_core::{AuthorityBindingRef, PlanId, Sha256Digest};
 use arkforge_transport::{DeviceObservation, DeviceTransport};
 use core::fmt;
@@ -160,6 +161,20 @@ impl MaturityRegistry {
     }
 }
 
+/// The result of materialization together with the private plan it produced.
+///
+/// The private plan never leaves the daemon. It is returned here so the engine
+/// can store it beside the envelope; nothing in the IPC surface serializes it.
+///
+/// An assessment carries its private plan too: architecture.md 6.3 requires a
+/// gated plan to be auditable, and "here is exactly what I would have run" is
+/// the only form that audit can take.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct MaterializedPlan {
+    pub materialization: PlanMaterialization,
+    pub private_plan: Option<StoredProviderPlan>,
+}
+
 /// The Provider SPI.
 ///
 /// The execute-side methods are declared so the shape is the one AF-V2 will
@@ -183,6 +198,24 @@ pub trait FlashProvider: fmt::Debug + Send + Sync {
         request: &MaterializeRequest<'_>,
         maturity: &MaturityRegistry,
     ) -> Result<PlanMaterialization, ProviderError>;
+
+    /// The same materialization, plus the private plan the daemon needs to
+    /// execute it.
+    ///
+    /// The default returns no private plan, which is the correct answer for a
+    /// provider that cannot execute: a daemon holding an envelope with no
+    /// private plan cannot start a job, and that is exactly the intended
+    /// outcome rather than an oversight to be worked around.
+    fn materialize_with_private_plan(
+        &self,
+        request: &MaterializeRequest<'_>,
+        maturity: &MaturityRegistry,
+    ) -> Result<MaterializedPlan, ProviderError> {
+        Ok(MaterializedPlan {
+            materialization: self.materialize(request, maturity)?,
+            private_plan: None,
+        })
+    }
 
     /// AF-V2. Executes one stored private action under a verified permit.
     fn execute_stored_action(&self) -> Result<(), ProviderError> {
