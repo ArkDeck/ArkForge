@@ -359,16 +359,38 @@ controller execution/admission surface **已实现并固定**：
   `EXECUTION_DISABLED`，且这个判断在解析 payload **之前**——
   它是 daemon 的常驻事实，不是某一次请求的事实。
 
-### 8.2 还没有的
+### 8.2 dispatch（2026-08-15 已实现）
 
-**dispatch。** 一个需要 ArkForge 自己派发私有动作的步骤会停在
-`DispatchNotWired`：permit 已验、intent 已落盘，job 处于
-`StepIntentDurable`——即 architecture.md 13.3 说的「intent 已落、dispatch 是否发生不明」。
-把 Rockchip 执行器接到这个位置是 AF-V2.4，需要硬件；surface 本身不需要。
+写入执行也接上了：`crates/arkforged/src/dispatch.rs`。
 
-因此本 change 的实现顺序里，第 5 步「RuntimeJobEngine 接线」现在可以做到
-**控制动作那一类步骤走完整条链路**（`flash.dayu200` 的第一步 `EnsureMode` 与最后一步
-`PostflightProbe` 都是这类），写入类步骤会停在 `DispatchNotWired`。
+- **在服务锁之外跑。** job registry 交出一份 `PendingDispatch`，dispatcher
+  **取走**它（取走即标记 in-flight，第二个 dispatcher 拿不到同一份），
+  释放锁，跑完，再回来记录。锁只在两头各持有一次短写。
+  这条不是洁癖：daemon 所有连接共用一把 mutex，2 GiB 的 `wlx` 要几分钟，
+  在锁里跑会冻住本该报告它的那条事件流。
+- **一个 step 的全部私有动作按序跑**：只读子动作在前，唯一的 primary 在后
+  （architecture.md 6.3），回执报告 primary 的结果。
+  最初我只跑了第一个动作，结果 `characterize-read-domain` 跑了、
+  `readback-partition` 没跑——九个目标一个判定都没有。
+- **镜像在第一次写入时才 staging**，一次，之后复用。没走到写入的 job 不必先付
+  4 GB 的解压代价。
+- **失败分两类，这是本模块唯一的判断**：tool 被 spawn **之前**的拒绝
+  → `ConfirmedNoEffect`（设备可证明未被触碰）；spawn **之后**的失败
+  → `OutcomeUnknown`。搞反任一方向，要么把真实效果记成「无效果」，
+  要么让每一次被拒的前置检查都变成待 reconcile 的 job。
+
+daemon 用 `--rkdeveloptool <绝对路径>` 启动 dispatcher；不给就没有 dispatcher，
+job 会停在第一个需要派发的步骤上等着（这是诚实的停，不是崩）。
+
+### 8.3 端到端测试
+
+`crates/arkforged/tests/admission_surface.rs` 十一条，其中
+`a_job_dispatches_every_step_and_reaches_a_verdict_on_each` 用一个脚本化的
+tool port 把整个计划跑完：九条 `wlx` 按 Profile 声明顺序发出、`ppt` 先于它们、
+`rd` 在最后、九个 readback 全部给出 `typedSkip` 且不带任何 strength。
+脚本里的 `ppt` 输出与读面行为都取自 2026-08-15 的真机实测（AD-018、AD-019）。
+
+**仍然没有的**：真机上跑一次。测试用的是脚本 port，不是设备。
 
 除此之外，ArkForge 侧的执行机制——封闭命令面、读域三态、staging 与写前
 revalidate、durable journal、permit 单次使用——**都已完成并在真机上验证到写入前的

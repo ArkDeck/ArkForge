@@ -258,6 +258,7 @@ fn a_job_walks_from_admission_to_a_durable_intent_to_a_control_receipt() {
             &secret(),
             &fixture.envelope,
             &fixture.private_plan,
+            &fixture.profile,
             NOW + 10,
         )
         .unwrap();
@@ -316,19 +317,23 @@ fn a_job_walks_from_admission_to_a_durable_intent_to_a_control_receipt() {
             &secret(),
             &fixture.envelope,
             &fixture.private_plan,
+            &fixture.profile,
             NOW + 30,
         )
         .unwrap();
+    // Step two is this daemon's own to dispatch, so the job now holds work for
+    // the dispatcher rather than stopping. Until something takes it and reports
+    // back, whether the device changed is unknown — which is exactly what the
+    // durable intent already records.
     let job = registry.job(&job_id).unwrap();
-    assert!(matches!(
-        job.stopped(),
-        Some(JobStop::DispatchNotWired { .. })
-    ));
-    // The intent is durable, which is what makes a crash here "outcome
-    // unknown" rather than "nothing happened".
-    assert_eq!(job.state(), JobState::StepIntentDurable);
+    assert_eq!(job.state(), JobState::Dispatching);
+    assert!(job.stopped().is_none());
 
-    let _ = fixture.profile;
+    let work = registry.take_pending_dispatch().expect("work is waiting");
+    assert_eq!(work.job_id, job_id);
+    assert!(!work.actions.is_empty());
+    // Taken means taken: a second dispatcher must not get the same action.
+    assert!(registry.take_pending_dispatch().is_none());
 }
 
 /// A refusal is an answer, and it is a safe one: no intent was recorded, so the
@@ -352,6 +357,7 @@ fn an_authority_refusal_cancels_safely() {
             &secret(),
             &fixture.envelope,
             &fixture.private_plan,
+            &fixture.profile,
             NOW + 10,
         )
         .unwrap();
@@ -388,6 +394,7 @@ fn a_permit_that_arrives_after_its_snapshot_expired_is_refused_and_re_asked() {
             &secret(),
             &fixture.envelope,
             &fixture.private_plan,
+            &fixture.profile,
             late,
         )
         .unwrap_err();
@@ -423,6 +430,7 @@ fn a_permit_for_another_action_is_rejected() {
             &secret(),
             &fixture.envelope,
             &fixture.private_plan,
+            &fixture.profile,
             NOW + 10,
         )
         .unwrap_err();
@@ -456,6 +464,7 @@ fn a_submission_answering_the_wrong_request_is_refused() {
             &secret(),
             &fixture.envelope,
             &fixture.private_plan,
+            &fixture.profile,
             NOW + 10,
         )
         .unwrap_err();
@@ -484,6 +493,7 @@ fn a_control_receipt_carrying_a_forbidden_fact_is_refused_whole() {
             &secret(),
             &fixture.envelope,
             &fixture.private_plan,
+            &fixture.profile,
             NOW + 10,
         )
         .unwrap();
@@ -542,6 +552,7 @@ fn an_unconfirmed_control_action_is_unknown_rather_than_failed() {
             &secret(),
             &fixture.envelope,
             &fixture.private_plan,
+            &fixture.profile,
             NOW + 10,
         )
         .unwrap();
@@ -613,6 +624,7 @@ fn a_job_with_a_durable_intent_cannot_be_cancelled_safely() {
             &secret(),
             &fixture.envelope,
             &fixture.private_plan,
+            &fixture.profile,
             NOW + 10,
         )
         .unwrap();
@@ -645,4 +657,382 @@ fn a_permit_round_trips_through_its_canonical_bytes() {
     let mut trailing = bytes.clone();
     trailing.push(0x00);
     assert!(StepPermit::from_canonical_bytes(&trailing).is_err());
+}
+
+// ---------------------------------------------------------------------------
+// Dispatch
+// ---------------------------------------------------------------------------
+
+/// A tool port that answers like the real one, without a device.
+///
+/// The outputs are the shapes measured on a DAYU200 in Loader mode on
+/// 2026-08-15 (AD-018, AD-019): the three-column partition listing, a windowed
+/// read face, and the vendor tool's own success markers. Scripting them is what
+/// lets the whole job walk — writes included — run in a test suite that must
+/// never touch hardware.
+#[derive(Debug, Default)]
+struct ScriptedPort {
+    argv_log: std::cell::RefCell<Vec<Vec<String>>>,
+}
+
+const REAL_PPT: &str = concat!(
+    "**********Partition Info(GPT)**********\r\n",
+    "NO  LBA       Name                \r\n",
+    "00  00002000  uboot\r\n",
+    "01  00004000  misc\r\n",
+    "02  00006000  bootctrl\r\n",
+    "03  00007000  resource\r\n",
+    "04  0000A000  boot_linux\r\n",
+    "05  0003A000  ramdisk\r\n",
+    "06  0003C000  system\r\n",
+    "07  0043C000  vendor\r\n",
+    "08  0063C000  sys-prod\r\n",
+    "09  00655000  chip-prod\r\n",
+    "10  0066E000  updater\r\n",
+    "11  0067E000  eng_system\r\n",
+    "12  00686000  eng_chipset\r\n",
+    "13  0069E000  chip_ckm\r\n",
+    "14  01308000  userdata\r\n",
+);
+
+impl ScriptedPort {
+    fn writes(&self) -> Vec<Vec<String>> {
+        self.argv_log
+            .borrow()
+            .iter()
+            .filter(|argv| argv.first().map(String::as_str) == Some("wlx"))
+            .cloned()
+            .collect()
+    }
+
+    fn issued(&self, command: &str) -> usize {
+        self.argv_log
+            .borrow()
+            .iter()
+            .filter(|argv| argv.first().map(String::as_str) == Some(command))
+            .count()
+    }
+}
+
+impl arkforge_provider::rockchip_execute::FixedToolPort for ScriptedPort {
+    fn run(
+        &self,
+        invocation: &arkforge_provider::rockchip_execute::ToolInvocation,
+    ) -> Result<arkforge_provider::rockchip_execute::ToolReceipt, String> {
+        self.argv_log.borrow_mut().push(invocation.argv.clone());
+        let receipt = |stdout: String| arkforge_provider::rockchip_execute::ToolReceipt {
+            exited_zero: true,
+            stdout,
+            stderr: String::new(),
+            truncated: false,
+            duration_ms: 1,
+        };
+        match invocation.argv.first().map(String::as_str) {
+            Some("ld") => Ok(receipt(
+                "DevNo=1\tVid=0x2207,Pid=0x350a,LocationID=102\tLoader\n".into(),
+            )),
+            Some("ppt") => Ok(receipt(REAL_PPT.into())),
+            Some("rd") => Ok(receipt("Reset Device OK.\n".into())),
+            Some("wlx") => Ok(receipt("Write LBA from file (100%)\n".into())),
+            Some("rl") => {
+                let begin: u64 = invocation.argv[1].parse().map_err(|_| "bad sector")?;
+                let sectors: usize = invocation.argv[2].parse().map_err(|_| "bad count")?;
+                let out = std::path::PathBuf::from(&invocation.argv[3]);
+                // Sector 1 carries a real table; everything else reads as the
+                // erased-medium filler, which is what a windowed read face
+                // returns regardless of what is on the medium (AD-006).
+                let bytes = if begin == 1 {
+                    let mut block = vec![0u8; sectors * 512];
+                    block[..8].copy_from_slice(b"EFI PART");
+                    block
+                } else {
+                    vec![0xCC; sectors * 512]
+                };
+                std::fs::write(&out, &bytes).map_err(|error| error.to_string())?;
+                Ok(receipt(String::new()))
+            }
+            other => Err(format!("this port scripts no answer for {other:?}")),
+        }
+    }
+}
+
+/// Drives a job to completion, answering every admission and running every
+/// dispatch, and returns the receipts the job published.
+fn walk_to_completion(
+    registry: &mut JobRegistry,
+    dispatcher: &mut arkforged::dispatch::Dispatcher<'_>,
+    fixture: &Fixture,
+    job_id: &str,
+) -> Vec<arkforge_ipc::messages::ActionReceiptSummary> {
+    let mut clock = NOW + 1;
+    // One iteration per step transition; the bound is a runaway guard, not a
+    // step count.
+    for round in 0..200u32 {
+        clock += 1;
+        if registry.job(job_id).unwrap().stopped().is_some() {
+            break;
+        }
+
+        if let Some(work) = registry.take_pending_dispatch() {
+            let outcome = dispatcher.run(&work);
+            registry
+                .complete_dispatch(
+                    &work.job_id,
+                    outcome,
+                    &fixture.envelope,
+                    &fixture.private_plan,
+                    clock,
+                )
+                .unwrap();
+            continue;
+        }
+
+        let job = registry.job(job_id).unwrap();
+        let latest = job.events_from(0);
+        if let Some(control) = latest
+            .iter()
+            .rev()
+            .find(|event| event.kind == JobEventKind::ManagedControlRequested)
+            .and_then(|event| event.control_request.clone())
+        {
+            let already_answered = latest.iter().any(|event| {
+                event.kind == JobEventKind::ActionReceipt
+                    && event
+                        .receipt
+                        .as_ref()
+                        .map_or(false, |receipt| receipt.step_id == control.step_id)
+            });
+            if !already_answered {
+                registry
+                    .submit_control_receipt(
+                        &SubmitManagedControlReceiptRequest {
+                            job_id: job_id.to_string(),
+                            request_id: control.request_id.clone(),
+                            action: control.action,
+                            accepted: true,
+                            facts: vec![KeyValue {
+                                key: "mode".into(),
+                                value: "updater".into(),
+                            }],
+                            evidence_sha256: sha256(b"control").as_bytes().to_vec(),
+                            failure_reason: String::new(),
+                        },
+                        &fixture.envelope,
+                        &fixture.private_plan,
+                        clock,
+                    )
+                    .unwrap();
+                continue;
+            }
+        }
+
+        let snapshot = pending_snapshot(registry, job_id);
+        let (permit, tag, epoch) = mint(&snapshot, &format!("PERMIT-{round}"), clock + 60_000);
+        registry
+            .submit_permit(
+                job_id,
+                &snapshot.request_id,
+                Some((permit, tag, epoch)),
+                "",
+                &secret(),
+                &fixture.envelope,
+                &fixture.private_plan,
+                &fixture.profile,
+                clock,
+            )
+            .unwrap();
+    }
+
+    registry
+        .job(job_id)
+        .unwrap()
+        .events_from(0)
+        .into_iter()
+        .filter_map(|event| event.receipt)
+        .collect()
+}
+
+/// The whole plan, end to end, with every write dispatched.
+#[test]
+fn a_job_dispatches_every_step_and_reaches_a_verdict_on_each() {
+    let root = TempRoot::new("dispatch-walk");
+    let fixture = plan_fixture();
+    let mut registry = JobRegistry::new(root.0.join("jobs"));
+    let port = ScriptedPort::default();
+    let mut dispatcher =
+        arkforged::dispatch::Dispatcher::new(root.0.join("store"), root.0.join("work"), &port);
+
+    // The dispatcher stages out of the same store the plan was built from.
+    stage_archive_into(&root.0.join("store"));
+
+    let job_id = registry
+        .start(&fixture.envelope, &fixture.private_plan, NOW)
+        .unwrap();
+    let receipts = walk_to_completion(&mut registry, &mut dispatcher, &fixture, &job_id);
+
+    let job = registry.job(&job_id).unwrap();
+    assert_eq!(
+        job.stopped(),
+        Some(&JobStop::Completed),
+        "state {:?}, receipts {}",
+        job.state(),
+        receipts.len()
+    );
+    assert_eq!(job.state(), JobState::Succeeded);
+
+    // Nine partitions were written, each by name, each from a staged file.
+    let writes = port.writes();
+    assert_eq!(writes.len(), 9, "{writes:?}");
+    let written: Vec<&str> = writes.iter().map(|argv| argv[1].as_str()).collect();
+    assert_eq!(
+        written,
+        vec![
+            "uboot",
+            "resource",
+            "boot_linux",
+            "ramdisk",
+            "system",
+            "vendor",
+            "updater",
+            "chip_ckm",
+            "userdata",
+        ],
+        "writes run in the profile's declared order"
+    );
+
+    // The device's own table was read before any of them.
+    assert_eq!(port.issued("ppt"), 1);
+    assert_eq!(port.issued("rd"), 1);
+
+    // Every readback landed outside the measured read window, so every one is a
+    // typed skip — and a typed skip carries no strength (architecture.md 16.4).
+    let verdicts: Vec<&str> = receipts
+        .iter()
+        .filter(|receipt| !receipt.verification_outcome.is_empty())
+        .map(|receipt| receipt.verification_outcome.as_str())
+        .collect();
+    assert_eq!(verdicts.len(), 9, "one verdict per target");
+    assert!(verdicts.iter().all(|outcome| *outcome == "typedSkip"), "{verdicts:?}");
+    for receipt in &receipts {
+        assert!(
+            receipt.strength_is_consistent(),
+            "a typed skip must carry no strength: {receipt:?}"
+        );
+        if receipt.verification_outcome == "typedSkip" {
+            assert_eq!(receipt.typed_skip_reason, "skipped-lba-read-window");
+        }
+    }
+}
+
+/// A write the profile does not allow never reaches the tool, and the job says
+/// so without becoming unknown: nothing was spawned, so nothing happened.
+#[test]
+fn a_dispatch_refused_before_the_spawn_confirms_no_effect() {
+    let root = TempRoot::new("dispatch-refused");
+    let fixture = plan_fixture();
+    let mut registry = JobRegistry::new(root.0.join("jobs"));
+    let port = ScriptedPort::default();
+    let mut dispatcher =
+        arkforged::dispatch::Dispatcher::new(root.0.join("store"), root.0.join("work"), &port);
+    // No archive in the store, so staging cannot resolve — a refusal that
+    // happens before any tool runs.
+    let job_id = registry
+        .start(&fixture.envelope, &fixture.private_plan, NOW)
+        .unwrap();
+
+    let mut clock = NOW + 1;
+    let mut refused = None;
+    for round in 0..40u32 {
+        clock += 1;
+        if registry.job(&job_id).unwrap().stopped().is_some() {
+            break;
+        }
+        if let Some(work) = registry.take_pending_dispatch() {
+            let outcome = dispatcher.run(&work);
+            let disposition = outcome.disposition;
+            registry
+                .complete_dispatch(
+                    &work.job_id,
+                    outcome,
+                    &fixture.envelope,
+                    &fixture.private_plan,
+                    clock,
+                )
+                .unwrap();
+            if disposition != arkforge_core::outcome::ActionDisposition::SemanticSuccess {
+                refused = Some(disposition);
+                break;
+            }
+            continue;
+        }
+        let job = registry.job(&job_id).unwrap();
+        if let Some(control) = job
+            .events_from(0)
+            .iter()
+            .rev()
+            .find(|event| event.kind == JobEventKind::ManagedControlRequested)
+            .and_then(|event| event.control_request.clone())
+        {
+            let answered = job.events_from(0).iter().any(|event| {
+                event
+                    .receipt
+                    .as_ref()
+                    .map_or(false, |r| r.step_id == control.step_id)
+            });
+            if !answered {
+                registry
+                    .submit_control_receipt(
+                        &SubmitManagedControlReceiptRequest {
+                            job_id: job_id.clone(),
+                            request_id: control.request_id,
+                            action: control.action,
+                            accepted: true,
+                            facts: Vec::new(),
+                            evidence_sha256: sha256(b"c").as_bytes().to_vec(),
+                            failure_reason: String::new(),
+                        },
+                        &fixture.envelope,
+                        &fixture.private_plan,
+                        clock,
+                    )
+                    .unwrap();
+                continue;
+            }
+        }
+        let snapshot = pending_snapshot(&registry, &job_id);
+        let (permit, tag, epoch) = mint(&snapshot, &format!("PERMIT-R{round}"), clock + 60_000);
+        registry
+            .submit_permit(
+                &job_id,
+                &snapshot.request_id,
+                Some((permit, tag, epoch)),
+                "",
+                &secret(),
+                &fixture.envelope,
+                &fixture.private_plan,
+                &fixture.profile,
+                clock,
+            )
+            .unwrap();
+    }
+
+    assert_eq!(
+        refused,
+        Some(arkforge_core::outcome::ActionDisposition::ConfirmedNoEffect),
+        "a staging failure is provably no effect, not an unknown outcome"
+    );
+    assert!(port.writes().is_empty(), "no write was spawned");
+}
+
+/// Imports the fixture archive so the dispatcher has something to stage.
+fn stage_archive_into(store_root: &std::path::Path) {
+    let store = arkforge_artifact::cas::ContentAddressedStore::open(
+        store_root,
+        arkforge_artifact::cas::CasQuota::dayu200_default(),
+    )
+    .unwrap();
+    let archive = fixture::dayu200_archive();
+    store
+        .import(archive.as_slice(), archive.len() as u64, None)
+        .unwrap();
 }

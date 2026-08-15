@@ -450,6 +450,15 @@ impl ExecutionSession {
     pub fn set_observed_table(&mut self, table: PartitionTableFact) {
         self.observed_table = Some(table);
     }
+
+    /// Records an image that has been extracted and verified.
+    ///
+    /// Staging happens outside this module — it needs the content store, which
+    /// a Provider has no business holding — so the session receives the result
+    /// rather than producing it.
+    pub fn stage(&mut self, member: String, image: StagedImage) {
+        self.staged.insert(member, image);
+    }
 }
 
 /// Executes one decoded action.

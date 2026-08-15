@@ -11,7 +11,7 @@
 > 之所以现在写，是为了把「已经证明了什么」钉住。一份等到全绿才写的验收文档，
 > 会让中途的部分结论无处安放，最后被整体读成通过。
 >
-> 复现：`cargo test --workspace --offline`(428 tests，全绿)。
+> 复现：`cargo test --workspace --offline`(432 tests，全绿)。
 > 真机部分见 [2026-08-15 彩排](runs/2026-08-15-dayu200-flash-rehearsal.md)。
 
 ---
@@ -36,7 +36,8 @@ ArkForge 这侧要交的东西已经全部交付，提案在
 | ArkDeck adapter | 🟡 ArkForge 半完成 | `adapters/arkforge-arkdeck-adapter::{lib,control}`；Swift 半属 ArkDeck 仓 |
 | StepPermit（含 8.6 完整性与重传信任模型） | ✅ | `arkforge-engine::step`；交叉验证向量 `docs/openspec/…/permit-vectors.md` |
 | ManagedDeviceControlPort | ✅ | typed 动作 + Provider 侧显式拒绝 + 发布的映射表 + daemon 侧 API 13 |
-| controller execution/admission surface | ✅ | API 6/7/8/12/13 全部实现;`crates/arkforged/src/jobs.rs`，九条端到端测试 |
+| controller execution/admission surface | ✅ | API 6/7/8/12/13 全部实现;`crates/arkforged/src/jobs.rs` |
+| dispatch（执行侧接线） | ✅ 软件层 | `crates/arkforged/src/dispatch.rs`;服务锁之外运行，十一条端到端测试用脚本化 tool port 跑完整个计划（九条 `wlx` + 读域三态）。**未在真机上跑过** |
 | Rockchip fixed-tool Provider | ✅ | `arkforge-provider::rockchip_execute` |
 | generic Runtime integration | ⛔ | ArkDeck 仓 |
 | generic UI | ⛔ | ArkDeck 仓 |
@@ -119,10 +120,14 @@ rockusb-loader  0x2207:0x350a  "USB download gadget"
 **multi-device 未验**：本环境只有一块板子。多板的 exact 绑定没有硬件可测，
 不作任何声称。
 
-### 3.3 ✅ nine partitions/userdata（未派发）
+### 3.3 ✅ nine partitions/userdata（软件层已派发，真机未派发）
 
-九个目标全部降解、前置校验通过、镜像 revalidate 通过。
+真机彩排：九个目标全部降解、前置校验通过、镜像 revalidate 通过，**未派发**。
 `system` 恰好铺满它的 4,194,304 扇区，其余八条有余量。
+
+软件层：`a_job_dispatches_every_step_and_reaches_a_verdict_on_each` 用脚本化
+tool port 把九条 `wlx` 真的发了出去，按 Profile 声明顺序，`ppt` 在前、`rd` 在后。
+那是一个脚本，不是设备——**这条不构成真机通过**。
 
 ### 3.4 ✅ read-domain-aware verification（readback/typed-skip）
 

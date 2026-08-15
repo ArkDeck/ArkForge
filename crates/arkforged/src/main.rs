@@ -36,12 +36,14 @@ fn main() {
 fn usage() -> String {
     concat!(
         "usage: arkforged --runtime-dir <dir> [--profile <file>]... [--transcript <file>]...\n",
-        "                 [--pair-from-stdin <epoch>]\n",
+        "                 [--pair-from-stdin <epoch>] [--rkdeveloptool <path>]\n",
         "\n",
         "  --runtime-dir      where the content store and sockets live\n",
         "  --profile          a DeviceProfile YAML document (repeatable)\n",
         "  --transcript       a golden transcript to serve as a replay transport (repeatable)\n",
         "  --pair-from-stdin  read the authority's pairing secret from stdin and close it\n",
+        "  --rkdeveloptool    absolute path to the pinned vendor tool; without it a job\n",
+        "                     that reaches a step this daemon must dispatch will park\n",
         "\n",
         "Without --pair-from-stdin no authority is paired, and startExecution is\n",
         "unavailable. The secret is read from stdin rather than an argv or an\n",
@@ -56,6 +58,7 @@ fn run(arguments: &[String]) -> Result<(), String> {
     let mut profile_paths: Vec<PathBuf> = Vec::new();
     let mut transcript_paths: Vec<PathBuf> = Vec::new();
     let mut pairing_epoch: Option<u64> = None;
+    let mut rkdeveloptool: Option<PathBuf> = None;
 
     let mut index = 0usize;
     while index < arguments.len() {
@@ -73,6 +76,10 @@ fn run(arguments: &[String]) -> Result<(), String> {
             "--transcript" => {
                 index += 1;
                 transcript_paths.push(PathBuf::from(arguments.get(index).ok_or_else(|| usage())?));
+            }
+            "--rkdeveloptool" => {
+                index += 1;
+                rkdeveloptool = Some(PathBuf::from(arguments.get(index).ok_or_else(usage)?));
             }
             "--pair-from-stdin" => {
                 index += 1;
@@ -133,12 +140,54 @@ fn run(arguments: &[String]) -> Result<(), String> {
         ),
     }
 
+    // The dispatcher runs on its own thread and takes the service lock only
+    // for the hand-off at either end. A partition write takes minutes; holding
+    // the lock across one would stop the event stream reporting on it.
+    let dispatch_handle = match rkdeveloptool {
+        Some(path) => {
+            let port = arkforged::dispatch::HostFixedToolPort::open(&path)?;
+            println!("dispatch: {} ({})", path.display(), port.digest());
+            let store_root = runtime_dir.join("store");
+            let work_root = runtime_dir.join("work");
+            let dispatch_service = Arc::clone(&service);
+            Some(std::thread::spawn(move || {
+                let mut dispatcher =
+                    arkforged::dispatch::Dispatcher::new(store_root, work_root, &port);
+                loop {
+                    let work = {
+                        let Ok(mut guard) = dispatch_service.lock() else {
+                            return;
+                        };
+                        guard.take_pending_dispatch()
+                    };
+                    let Some(work) = work else {
+                        std::thread::sleep(std::time::Duration::from_millis(200));
+                        continue;
+                    };
+                    let outcome = dispatcher.run(&work);
+                    let Ok(mut guard) = dispatch_service.lock() else {
+                        return;
+                    };
+                    if let Err(error) = guard.complete_dispatch(&work.job_id, outcome) {
+                        eprintln!("arkforged: recording {}: {error}", work.job_id);
+                    }
+                }
+            }))
+        }
+        None => {
+            println!("dispatch: unavailable (no --rkdeveloptool; jobs will park at their first \
+                      dispatch)");
+            None
+        }
+    };
+
     let public_service = Arc::clone(&service);
     let handle = std::thread::spawn(move || {
         serve(public, SessionKind::Public, public_service);
     });
     serve(controller, SessionKind::Controller, service);
     let _ = handle.join();
+    drop(dispatch_handle);
     Ok(())
 }
 

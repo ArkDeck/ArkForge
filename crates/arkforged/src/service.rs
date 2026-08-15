@@ -151,6 +151,37 @@ impl Service {
         self.pairing.is_some()
     }
 
+    /// Hands a dispatcher the next piece of work.
+    ///
+    /// Separate from [`Self::complete_dispatch`] on purpose: the caller takes
+    /// the work, **releases this service's lock**, runs it, and comes back.
+    /// A single call that did both would hold the lock across a partition
+    /// write, and the event stream reporting on that write runs through the
+    /// same lock.
+    pub fn take_pending_dispatch(&mut self) -> Option<crate::jobs::PendingDispatch> {
+        self.jobs.take_pending_dispatch()
+    }
+
+    /// Records what a dispatcher observed.
+    pub fn complete_dispatch(
+        &mut self,
+        job_id: &str,
+        outcome: crate::jobs::DispatchOutcome,
+    ) -> Result<(), String> {
+        let stored = self
+            .stored_plan_for_job(job_id)
+            .ok_or_else(|| format!("no job {job_id}"))?;
+        self.jobs
+            .complete_dispatch(
+                job_id,
+                outcome,
+                &stored.envelope,
+                &stored.private_plan,
+                self.now_epoch_ms,
+            )
+            .map_err(|error| error.to_string())
+    }
+
     /// Dispatches one request.
     ///
     /// `artifact_stream` is present only for `importArtifact`, which is the one
@@ -621,6 +652,17 @@ impl Service {
             }
         };
 
+        let Some(profile) = self.profiles.get(stored.envelope.profile.id.as_str()).cloned() else {
+            return self.refuse(
+                request,
+                Status::NotFound,
+                "PROFILE_NOT_LOADED",
+                &format!(
+                    "the plan names profile {}, which this daemon has not loaded",
+                    stored.envelope.profile.id
+                ),
+            );
+        };
         let outcome = match self.jobs.submit_permit(
             &submission.job_id,
             &submission.request_id,
@@ -629,6 +671,7 @@ impl Service {
             &secret,
             &stored.envelope,
             &stored.private_plan,
+            &profile,
             self.now_epoch_ms,
         ) {
             Ok(()) => SubmissionOutcome::accepted(),

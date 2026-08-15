@@ -34,16 +34,15 @@ use arkforge_core::profile::{self, DeviceProfile};
 use arkforge_core::{AuthorityBindingRef, AuthorityNamespace};
 use arkforge_provider::rockchip::{publish_af_v1_maturity, RockchipProvider};
 use arkforge_provider::rockchip_execute::{
-    execute_action, ExecutionSession, FixedToolPort, RockUsbCommand, StagedImage, StoredAction,
-    ToolInvocation, ToolReceipt,
+    execute_action, ExecutionSession, RockUsbCommand, StagedImage, StoredAction,
 };
+use arkforged::dispatch::HostFixedToolPort;
 use arkforge_provider::{
     FlashIntent, FlashProvider, MaterializeRequest, MaturityRegistry, ProbeContext,
 };
 use arkforge_transport::usb::{IoRegEnumerator, UsbTransport};
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
-use std::process::Command;
 use std::time::Instant;
 
 const DEFAULT_RKDEVELOPTOOL: &str = "/opt/homebrew/bin/rkdeveloptool";
@@ -301,9 +300,9 @@ fn run(arguments: &[String]) -> Result<(), String> {
     };
 
     // ---- 6. Walk every action --------------------------------------------
-    let port = HostRockUsbPort::open(&options.rkdeveloptool)?;
+    let port = HostFixedToolPort::open(&options.rkdeveloptool)?;
     println!("\nrkdeveloptool  {}", options.rkdeveloptool.display());
-    println!("      sha256   {}", port.digest);
+    println!("      sha256   {}", port.digest());
 
     let scratch = options.staging.join("scratch");
     std::fs::create_dir_all(&scratch).map_err(|error| error.to_string())?;
@@ -588,62 +587,6 @@ fn file_digest(path: &Path) -> Result<arkforge_core::Sha256Digest, String> {
     Ok(hasher.finalize())
 }
 
-/// The fixed-tool port against the host's pinned rkdeveloptool.
-///
-/// architecture.md 16.1: one bound executable, direct spawn, no shell, no PATH
-/// resolution. The argv arrives already lowered from the Provider's closed
-/// command enum — this type has no way to build one.
-#[derive(Debug)]
-struct HostRockUsbPort {
-    executable: PathBuf,
-    digest: arkforge_core::Sha256Digest,
-}
-
-impl HostRockUsbPort {
-    fn open(executable: &Path) -> Result<Self, String> {
-        if !executable.is_absolute() {
-            return Err(format!(
-                "{} is not an absolute path; this port resolves no PATH",
-                executable.display()
-            ));
-        }
-        Ok(HostRockUsbPort {
-            executable: executable.to_path_buf(),
-            digest: file_digest(executable)?,
-        })
-    }
-}
-
-impl FixedToolPort for HostRockUsbPort {
-    fn run(&self, invocation: &ToolInvocation) -> Result<ToolReceipt, String> {
-        let started = Instant::now();
-        let output = Command::new(&self.executable)
-            .args(&invocation.argv)
-            .output()
-            .map_err(|error| format!("{}: {error}", self.executable.display()))?;
-        let truncate = |bytes: &[u8]| -> (String, bool) {
-            let text = String::from_utf8_lossy(bytes).to_string();
-            if text.len() > invocation.stdout_budget {
-                (
-                    text.chars().take(invocation.stdout_budget).collect(),
-                    true,
-                )
-            } else {
-                (text, false)
-            }
-        };
-        let (stdout, stdout_truncated) = truncate(&output.stdout);
-        let (stderr, stderr_truncated) = truncate(&output.stderr);
-        Ok(ToolReceipt {
-            exited_zero: output.status.success(),
-            stdout,
-            stderr,
-            truncated: stdout_truncated || stderr_truncated,
-            duration_ms: started.elapsed().as_millis() as u64,
-        })
-    }
-}
-
 /// Compile-time proof that nothing in this file can spawn a write.
 ///
 /// The port takes an argv the Provider lowered; this asserts the one lowering
@@ -654,12 +597,6 @@ impl FixedToolPort for HostRockUsbPort {
 mod tests {
     use super::*;
     use arkforge_provider::rockchip_execute::ExecutionError;
-
-    #[test]
-    fn a_relative_tool_path_is_refused_rather_than_resolved() {
-        let error = HostRockUsbPort::open(Path::new("rkdeveloptool")).unwrap_err();
-        assert!(error.contains("resolves no PATH"), "{error}");
-    }
 
     #[test]
     fn the_withheld_write_lowers_to_the_argv_a_real_flash_would_use() {

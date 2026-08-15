@@ -19,20 +19,26 @@
 //!
 //! # Where dispatch is
 //!
-//! Not here. A step whose private action this daemon would have to run itself
-//! stops at [`JobStop::DispatchNotWired`]. The admission surface around it is
-//! complete: the permit was verified, the intent is durable, and the job is in
-//! exactly the state architecture.md 13.3 calls "StepIntent durable, dispatch
-//! outcome unknown" if the process died right there. Wiring the Rockchip
-//! dispatcher behind it is AF-V2.4 and needs hardware; the surface does not.
+//! Next door, in [`crate::dispatch`], and deliberately not here. A step whose
+//! private action this daemon runs itself becomes a [`PendingDispatch`] that a
+//! dispatcher **takes** — the work leaves the service lock before it runs,
+//! comes back through [`JobRegistry::complete_dispatch`], and the lock is held
+//! only for the two short journal writes at either end.
+//!
+//! Between taking the work and reporting on it, the job holds it `in_flight`
+//! and nothing else may hand it out. Whether the device changed in that window
+//! is unknown, which is exactly what the durable intent already records.
 
 use arkforge_authority_api::{
     verify_permit, ControllerPairingSecret, DispatchIntent, PairingEpoch, PermitIntegrityTag,
     PermitVerificationError, StepPermit,
 };
 use arkforge_core::ids::OpaqueId;
+use arkforge_core::outcome::ActionDisposition;
 use arkforge_core::plan::FlashPlanEnvelope;
-use arkforge_core::projection::StoredProviderPlan;
+use arkforge_core::profile::DeviceProfile;
+use arkforge_core::projection::{PrivateActionRecord, PrivateActionRole, StoredProviderPlan};
+use arkforge_core::verification::VerificationOutcome;
 use arkforge_core::Sha256Digest;
 use arkforge_engine::durable::{DurableJournal, DurableJournalError};
 use arkforge_engine::journal::JournalRecordKind;
@@ -67,6 +73,9 @@ pub struct Job {
     journal: DurableJournal,
     events: Vec<JobEvent>,
     pending: Option<Pending>,
+    /// Work a dispatcher took and has not yet reported on. While this is set,
+    /// whether the device changed is unknown.
+    in_flight: Option<PendingDispatch>,
     /// Set once the job has stopped for a reason that is not a state.
     stopped: Option<JobStop>,
 }
@@ -85,6 +94,43 @@ enum Pending {
         request: ManagedControlRequest,
         permit_id: String,
     },
+    /// This daemon's own dispatcher to run the step's private action.
+    ///
+    /// Held rather than run here: dispatch can take minutes, and this registry
+    /// is reached under the service lock. The dispatcher takes the work,
+    /// releases the lock, runs it, and comes back with a receipt.
+    Dispatch { work: PendingDispatch },
+}
+
+/// One private action waiting for this daemon's dispatcher.
+#[derive(Debug, Clone)]
+pub struct PendingDispatch {
+    pub job_id: String,
+    pub step_id: String,
+    pub permit_id: String,
+    /// Every private action this step declares, in the order they must run:
+    /// read-only sub-actions first, then the one primary effect
+    /// (architecture.md 6.3). A step whose sub-action was skipped would have
+    /// its primary run against a measurement nobody took — which is how a
+    /// readback ends up classifying filler it has no way to interpret.
+    pub actions: Vec<PrivateActionRecord>,
+    /// The profile whose allowlist the write is checked against. Carried with
+    /// the work so the dispatcher never has to reach back into the service for
+    /// it — which is what keeps the lock uncontended while it runs.
+    pub profile: DeviceProfile,
+    /// The archive the images are staged from.
+    pub artifact_digest: Sha256Digest,
+    /// The journal record that made this step's intent durable.
+    pub intent_digest: Sha256Digest,
+}
+
+/// What the dispatcher observed.
+#[derive(Debug, Clone)]
+pub struct DispatchOutcome {
+    pub disposition: ActionDisposition,
+    pub facts: Vec<(String, String)>,
+    pub evidence_digest: Sha256Digest,
+    pub verification: Option<VerificationOutcome>,
 }
 
 /// Why a job stopped short of finishing.
@@ -94,10 +140,13 @@ pub enum JobStop {
     Completed,
     /// The authority refused an admission. Safe: no intent was recorded.
     RefusedByAuthority { step_id: String, reason: String },
-    /// The step's private action is one this daemon would have to dispatch
-    /// itself, and dispatch is not wired in this build. The intent is durable,
-    /// so the honest reading of a crash here is "outcome unknown".
-    DispatchNotWired { step_id: String },
+    /// The dispatcher ran the step and could not establish that it succeeded.
+    /// Not "it failed": the permit is spent and the device may have changed
+    /// (architecture.md 14.1).
+    DispatchOutcomeUnknown {
+        step_id: String,
+        disposition: ActionDisposition,
+    },
     /// The authority's control channel did not observe its own semantic
     /// success. Not "nothing happened": a mode change may have taken effect
     /// unobserved (architecture.md 14.1).
@@ -112,10 +161,11 @@ impl fmt::Display for JobStop {
                 f,
                 "the authority refused admission for {step_id}: {reason}"
             ),
-            JobStop::DispatchNotWired { step_id } => write!(
+            JobStop::DispatchOutcomeUnknown { step_id, disposition } => write!(
                 f,
-                "{step_id} needs a dispatch this build does not have; its intent is durable, so \
-                 the outcome of anything that follows is unknown rather than absent"
+                "{step_id} dispatched and reported {}; whether the device changed is not \
+                 established, and the intent must not be replayed",
+                disposition.as_str()
             ),
             JobStop::ControlOutcomeUnknown { step_id, reason } => write!(
                 f,
@@ -249,6 +299,7 @@ impl JobRegistry {
             journal,
             events: Vec::new(),
             pending: None,
+            in_flight: None,
             stopped: None,
         };
 
@@ -286,8 +337,10 @@ impl JobRegistry {
         secret: &ControllerPairingSecret,
         envelope: &FlashPlanEnvelope,
         private_plan: &StoredProviderPlan,
+        profile: &DeviceProfile,
         now_epoch_ms: u64,
     ) -> Result<(), JobError> {
+        let artifact_digest = envelope.artifact.content_digest;
         let job = self.jobs.get_mut(job_id).ok_or(JobError::UnknownJob)?;
         let Some(Pending::Admission { request_id: expected, snapshot }) = job.pending.clone()
         else {
@@ -424,10 +477,194 @@ impl JobRegistry {
                 );
             }
             None => {
-                job.stopped = Some(JobStop::DispatchNotWired { step_id });
+                let actions = ordered_actions(private_plan, &step_id)?;
+                let digest = job.journal.append(
+                    JournalRecordKind::PermitConsuming,
+                    now_epoch_ms,
+                    1,
+                    id(&step_id)?,
+                    vec![(id(fact::PERMIT_ID)?, permit_id.clone())],
+                )?;
+                job.move_to(JobState::Dispatching)?;
+                job.pending = Some(Pending::Dispatch {
+                    work: PendingDispatch {
+                        job_id: job.job_id.clone(),
+                        step_id: step_id.clone(),
+                        permit_id,
+                        actions,
+                        profile: profile.clone(),
+                        artifact_digest,
+                        intent_digest,
+                    },
+                });
+                job.publish(JobEventKind::StateChanged, now_epoch_ms, digest, |_| {});
             }
         }
         Ok(())
+    }
+
+    /// Hands the dispatcher the next piece of work, if there is one.
+    ///
+    /// Takes it rather than lending it: the work leaves the lock, and a job
+    /// that could hand the same action to two dispatchers would dispatch twice.
+    pub fn take_pending_dispatch(&mut self) -> Option<PendingDispatch> {
+        for job in self.jobs.values_mut() {
+            if let Some(Pending::Dispatch { work }) = job.pending.clone() {
+                // Marked in-flight by clearing it. Whether the device changed
+                // from here on is unknown until a receipt says otherwise, which
+                // is exactly what the journal already records.
+                job.pending = None;
+                job.in_flight = Some(work.clone());
+                return Some(work);
+            }
+        }
+        None
+    }
+
+    /// Records what the dispatcher observed and advances the job.
+    ///
+    /// An outcome of `OutcomeUnknown` stops the job there. It does not retry,
+    /// and there is no path in this type that could: the permit is spent and
+    /// architecture.md 14.1 forbids replaying the intent.
+    pub fn complete_dispatch(
+        &mut self,
+        job_id: &str,
+        outcome: DispatchOutcome,
+        envelope: &FlashPlanEnvelope,
+        private_plan: &StoredProviderPlan,
+        now_epoch_ms: u64,
+    ) -> Result<(), JobError> {
+        let job = self.jobs.get_mut(job_id).ok_or(JobError::UnknownJob)?;
+        let Some(work) = job.in_flight.take() else {
+            return Err(JobError::NoDispatchInFlight);
+        };
+        let step_id = work.step_id.clone();
+
+        job.journal.append(
+            JournalRecordKind::TransportEvidenceRecorded,
+            now_epoch_ms,
+            1,
+            id(&step_id)?,
+            outcome
+                .facts
+                .iter()
+                .map(|(key, value)| Ok((id(key)?, value.clone())))
+                .collect::<Result<Vec<_>, JobError>>()?,
+        )?;
+
+        if outcome.disposition != ActionDisposition::SemanticSuccess {
+            job.move_to(JobState::OutcomeUnknown)?;
+            let digest = job.journal.append(
+                JournalRecordKind::OutcomeClassified,
+                now_epoch_ms,
+                1,
+                id(&step_id)?,
+                vec![(id("outcome")?, outcome.disposition.as_str().to_string())],
+            )?;
+            job.stopped = Some(JobStop::DispatchOutcomeUnknown {
+                step_id: step_id.clone(),
+                disposition: outcome.disposition,
+            });
+            job.publish(JobEventKind::OutcomeClassified, now_epoch_ms, digest, |event| {
+                event.facts.push(KeyValue {
+                    key: "outcome".into(),
+                    value: outcome.disposition.as_str().to_string(),
+                });
+            });
+            return Ok(());
+        }
+
+        job.journal.append(
+            JournalRecordKind::SemanticReceiptRecorded,
+            now_epoch_ms,
+            1,
+            id(&step_id)?,
+            vec![
+                (id(fact::PERMIT_ID)?, work.permit_id.clone()),
+                (
+                    id(fact::RECEIPT_DIGEST)?,
+                    outcome.evidence_digest.to_string(),
+                ),
+            ],
+        )?;
+        job.journal.append(
+            JournalRecordKind::PermitConsumed,
+            now_epoch_ms,
+            1,
+            id(&step_id)?,
+            vec![
+                (id(fact::PERMIT_ID)?, work.permit_id.clone()),
+                (
+                    id(fact::RECEIPT_DIGEST)?,
+                    outcome.evidence_digest.to_string(),
+                ),
+            ],
+        )?;
+        job.move_to(JobState::ReceiptDurable)?;
+
+        let mut receipt = ActionReceiptSummary {
+            job_id: job.job_id.clone(),
+            plan_id: job.plan_id.clone(),
+            step_id: step_id.clone(),
+            action_id: work
+                .actions
+                .last()
+                .map(|action| action.action_id.to_string())
+                .unwrap_or_default(),
+            attempt_id: String::new(),
+            permit_id: work.permit_id.clone(),
+            disposition: outcome.disposition.as_str().to_string(),
+            evidence_sha256: outcome.evidence_digest.as_bytes().to_vec(),
+            facts: outcome
+                .facts
+                .iter()
+                .map(|(key, value)| KeyValue {
+                    key: key.clone(),
+                    value: value.clone(),
+                })
+                .collect(),
+            ..ActionReceiptSummary::default()
+        };
+        // A typed skip is never any grade of verified, so the strength field
+        // stays empty for anything that is not `Verified` (architecture.md 16.4).
+        match &outcome.verification {
+            Some(VerificationOutcome::Verified { strength, range }) => {
+                receipt.verification_outcome = "verified".into();
+                receipt.verification_strength = strength.as_str().to_string();
+                receipt.verified_range_start = range.start;
+                receipt.verified_range_length = range.length;
+            }
+            Some(VerificationOutcome::TypedSkip { reason, .. }) => {
+                receipt.verification_outcome = "typedSkip".into();
+                receipt.typed_skip_reason = reason.as_str().to_string();
+            }
+            Some(VerificationOutcome::Failed { classification, .. }) => {
+                receipt.verification_outcome = "failed".into();
+                receipt.failure_classification = classification.as_str().to_string();
+            }
+            None => {}
+        }
+
+        let checkpoint = job.journal.append(
+            JournalRecordKind::StepCheckpointed,
+            now_epoch_ms,
+            1,
+            id(&step_id)?,
+            vec![
+                (id(fact::PERMIT_ID)?, work.permit_id),
+                (
+                    id(fact::RECEIPT_DIGEST)?,
+                    outcome.evidence_digest.to_string(),
+                ),
+            ],
+        )?;
+        job.move_to(JobState::Checkpointed)?;
+        job.publish(JobEventKind::ActionReceipt, now_epoch_ms, checkpoint, |event| {
+            event.receipt = Some(receipt)
+        });
+        job.publish(JobEventKind::StepCheckpointed, now_epoch_ms, checkpoint, |_| {});
+
+        advance(job, envelope, private_plan, now_epoch_ms, checkpoint)
     }
 
     /// Records what the authority's own control channel observed.
@@ -562,21 +799,7 @@ impl JobRegistry {
         job.publish(JobEventKind::StepCheckpointed, now_epoch_ms, checkpoint, |_| {});
 
         job.pending = None;
-        job.step_index += 1;
-        if job.step_index >= envelope.public_steps.len() {
-            job.move_to(JobState::Postflight)?;
-            job.move_to(JobState::Succeeded)?;
-            job.stopped = Some(JobStop::Completed);
-            job.publish(JobEventKind::OutcomeClassified, now_epoch_ms, checkpoint, |event| {
-                event.facts.push(KeyValue {
-                    key: "outcome".into(),
-                    value: "succeeded".into(),
-                });
-            });
-            return Ok(());
-        }
-        job.move_to(JobState::Preflight)?;
-        request_admission(job, envelope, private_plan, now_epoch_ms)
+        advance(job, envelope, private_plan, now_epoch_ms, checkpoint)
     }
 
     /// Cancels a job, if cancelling is still safe.
@@ -622,6 +845,31 @@ impl JobRegistry {
     }
 }
 
+/// Moves to the next step, or concludes.
+fn advance(
+    job: &mut Job,
+    envelope: &FlashPlanEnvelope,
+    private_plan: &StoredProviderPlan,
+    now_epoch_ms: u64,
+    checkpoint: Sha256Digest,
+) -> Result<(), JobError> {
+    job.step_index += 1;
+    if job.step_index >= envelope.public_steps.len() {
+        job.move_to(JobState::Postflight)?;
+        job.move_to(JobState::Succeeded)?;
+        job.stopped = Some(JobStop::Completed);
+        job.publish(JobEventKind::OutcomeClassified, now_epoch_ms, checkpoint, |event| {
+            event.facts.push(KeyValue {
+                key: "outcome".into(),
+                value: "succeeded".into(),
+            });
+        });
+        return Ok(());
+    }
+    job.move_to(JobState::Preflight)?;
+    request_admission(job, envelope, private_plan, now_epoch_ms)
+}
+
 /// Publishes the admission the job's current step needs.
 fn request_admission(
     job: &mut Job,
@@ -633,10 +881,12 @@ fn request_admission(
         .public_steps
         .get(job.step_index)
         .ok_or(JobError::PlanHasNoSteps)?;
-    let action = private_plan
+    let primary = private_plan
         .actions
         .iter()
-        .find(|action| action.step_id == step.step_id)
+        .find(|action| {
+            action.step_id == step.step_id && action.role == PrivateActionRole::PrimaryEffect
+        })
         .ok_or_else(|| JobError::StepHasNoAction(step.step_id.to_string()))?;
 
     let snapshot = StepAdmissionSnapshot {
@@ -645,8 +895,12 @@ fn request_admission(
         plan_sha256: job.plan_digest.as_bytes().to_vec(),
         step_id: step.step_id.to_string(),
         attempt_id: format!("ATTEMPT-{}", job.step_index + 1),
-        public_step_sha256: step.private_action_digest.as_bytes().to_vec(),
-        private_action_sha256: action
+        public_step_sha256: step
+            .digest()
+            .map_err(|error| JobError::Core(error.to_string()))?
+            .as_bytes()
+            .to_vec(),
+        private_action_sha256: primary
             .digest()
             .map_err(|error| JobError::Core(error.to_string()))?
             .as_bytes()
@@ -681,6 +935,31 @@ fn request_admission(
         |event| event.admission = Some(snapshot),
     );
     Ok(())
+}
+
+/// A step's private actions, in the order they must run.
+///
+/// Read-only sub-actions first, then the single primary effect. The projection
+/// validator already guarantees there is exactly one primary; this only puts it
+/// last, because a sub-action exists to establish something the primary needs.
+fn ordered_actions(
+    private_plan: &StoredProviderPlan,
+    step_id: &str,
+) -> Result<Vec<PrivateActionRecord>, JobError> {
+    let mut sub: Vec<PrivateActionRecord> = Vec::new();
+    let mut primary: Option<PrivateActionRecord> = None;
+    for action in &private_plan.actions {
+        if action.step_id.as_str() != step_id {
+            continue;
+        }
+        match action.role {
+            PrivateActionRole::PrimaryEffect => primary = Some(action.clone()),
+            PrivateActionRole::ReadOnlyTransportSubAction => sub.push(action.clone()),
+        }
+    }
+    let primary = primary.ok_or_else(|| JobError::StepHasNoAction(step_id.to_string()))?;
+    sub.push(primary);
+    Ok(sub)
 }
 
 /// Whether this step belongs to the authority's control port, and what it must
@@ -746,6 +1025,7 @@ pub enum JobError {
     StepHasNoAction(String),
     NoAdmissionPending,
     NoControlPending,
+    NoDispatchInFlight,
     WrongRequest {
         expected: String,
         found: String,
@@ -778,6 +1058,7 @@ impl JobError {
             JobError::StepHasNoAction(_) => "STEP_HAS_NO_ACTION",
             JobError::NoAdmissionPending => "NO_ADMISSION_PENDING",
             JobError::NoControlPending => "NO_CONTROL_PENDING",
+            JobError::NoDispatchInFlight => "NO_DISPATCH_IN_FLIGHT",
             JobError::WrongRequest { .. } => "WRONG_REQUEST",
             JobError::WrongControlAction { .. } => "WRONG_CONTROL_ACTION",
             JobError::SnapshotExpired => "SNAPSHOT_EXPIRED",
@@ -807,6 +1088,9 @@ impl fmt::Display for JobError {
             }
             JobError::NoControlPending => {
                 f.write_str("this job is not waiting for a control receipt")
+            }
+            JobError::NoDispatchInFlight => {
+                f.write_str("this job has no dispatch in flight to report on")
             }
             JobError::WrongRequest { expected, found } => write!(
                 f,
