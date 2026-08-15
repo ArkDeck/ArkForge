@@ -5,7 +5,7 @@
 | 任务 | 内容 | 依赖 | 状态 |
 |---|---|---|---|
 | AF-V1 | ArkForge Core + DAYU200 read-only parity | — | ✅ 完成([验收证据](docs/evidence/AF-V1-acceptance.md)) |
-| AF-V2 | DAYU200 ArkForge production cutover | AF-V1 | 🟡 除写入外全部完成([彩排证据](docs/evidence/runs/2026-08-15-dayu200-flash-rehearsal.md))；写入待 authority 归属拍板 |
+| AF-V2 | DAYU200 ArkForge production cutover | AF-V1 | 🟡 除写入外全部完成([验收证据](docs/evidence/AF-V2-acceptance.md))；写入待 ArkDeck 侧实现 permit 签发 |
 | AF-V3 | DAYU600 evidence + plan-only | AF-V1(共用 API 面) | 🟡 软件半完成([验收证据](docs/evidence/AF-V3-acceptance.md))；证据半需真机 |
 | AF-V4 | DAYU600 production execute | AF-V3 + AF-V2(engine) + 17.5 证据门全 PASS | ⛔ 阻塞：18 条证据门 0 条 PASS |
 
@@ -124,9 +124,13 @@ inspect
 - [~] rebind 瞬态容忍 — ✅ 真机实测两个方向的空窗(3,725 ms / 15,579 ms)、
       serial 与 topology 双双变化、窗口内始终唯一匹配(AD-020)；
       normal 别名 — 未验：它是 hdc 的词汇，需走 ManagedDeviceControlPort，那一侧是 authority 的
-- [ ] crash/cancel/fault
-- [ ] outcomeUnknown no replay
-- [ ] eligible complete-overwrite recovery
+- [~] crash/cancel/fault — 软件层 ✅(13.3 逐行测试、撕裂尾部穷举、`wlx` 不可中断)；
+      真机版需要先有写入
+- [~] outcomeUnknown no replay — 软件层 ✅(状态机无回边、四个 disposition 均拒绝重派、
+      重启后消费中断的 permit 判 unknown)；真机版需要先有写入
+- [~] eligible complete-overwrite recovery — 只读半 ✅(possible effects / reconcile 四态 /
+      eligibility 判定，`arkforge-engine::superseding`)；当前所有 Profile 均判为不合格，
+      因为没有已发布的覆盖声明。recovery plan 物化需真实写入产生的 effect set
 - [ ] ArkDeck production lowering 无 Rockchip command/address
 
 ## AF-V3：DAYU600 evidence + plan-only

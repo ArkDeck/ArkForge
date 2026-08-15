@@ -223,3 +223,27 @@ fn the_durability_boundary_stays_recorded_as_open() {
         "13.2.1 must say plainly that power-loss safety is not claimed"
     );
 }
+
+/// AF-V2 is not accepted, and its acceptance document must keep saying so.
+///
+/// A document titled "AF-V2 验收证据" is exactly the artifact that gets skimmed
+/// and read as "AF-V2 passed". The first acceptance line is a real DAYU200
+/// flash; until that happens, the document has to state the device write count
+/// and the reason, and this asserts it does.
+#[test]
+fn the_af_v2_acceptance_document_does_not_claim_a_flash_that_did_not_happen() {
+    const ACCEPTANCE: &str = include_str!("../../../docs/evidence/AF-V2-acceptance.md");
+    assert!(
+        ACCEPTANCE.contains("设备写入次数至今为 **0**"),
+        "the document must state the device write count"
+    );
+    assert!(
+        ACCEPTANCE.contains("**本文不是「AF-V2 已验收」。**"),
+        "the document must refuse the reading it would otherwise get"
+    );
+    // The ledger's own rule (§5): plan-only never counts as a hardware pass.
+    assert!(
+        LEDGER.contains("**simulation / plan-only 不记 real hardware pass**"),
+        "the ledger rule this document is written under must still be there"
+    );
+}
