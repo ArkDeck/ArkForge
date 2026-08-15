@@ -22,6 +22,13 @@ use std::sync::{Arc, Mutex};
 
 const DAEMON_VERSION: &str = env!("CARGO_PKG_VERSION");
 
+/// How long the tool gets to answer a device-free probe.
+///
+/// The measured answer is 75 ms on this host. Five seconds is not a guess at
+/// how slow the tool might be — it is far past any plausible answer, because
+/// the failure this catches does not take longer, it takes forever (AD-015).
+const TOOL_SELF_TEST_SECONDS: u64 = 5;
+
 fn main() {
     let arguments: Vec<String> = std::env::args().skip(1).collect();
     match run(&arguments) {
@@ -47,6 +54,10 @@ fn usage() -> String {
         "                     dispatch would have spent a permit before finding out\n",
         "  --rkdeveloptool-sha256  the digest those bytes must have. Required with\n",
         "                     --rkdeveloptool: an unpinned tool is a tool nobody chose\n",
+        "\n",
+        "A bound tool must pass its digest check and then prove it runs, because\n",
+        "byte equality is not usability: quarantined bytes with the right digest\n",
+        "hang in dyld. If it cannot run, omit --rkdeveloptool for a read-only daemon.\n",
         "\n",
         "Without --pair-from-stdin no authority is paired, and startExecution is\n",
         "unavailable. The secret is read from stdin rather than an argv or an\n",
@@ -174,10 +185,28 @@ fn run(arguments: &[String]) -> Result<(), String> {
                     backend_digest: port.digest(),
                 });
             }
+            // The digest settles which bytes these are. It does not settle
+            // whether they can run: quarantined bytes with the right digest
+            // hang in dyld (AD-015). `-v` is device-free, so proving it runs
+            // costs nothing but a fork.
+            let probe = port
+                .self_test(
+                    &["-v"],
+                    "rkdeveloptool",
+                    std::time::Duration::from_secs(TOOL_SELF_TEST_SECONDS),
+                )
+                .map_err(|failure| {
+                    format!(
+                        "{} passed its digest check and then failed to run.\n  {failure}\n\
+                         Omit --rkdeveloptool to start a read-only daemon instead.",
+                        path.display()
+                    )
+                })?;
             println!("dispatch: {} ({})", path.display(), port.digest());
-            // Byte equality is not a promise the tool runs: the same bytes
-            // hang in dyld when quarantined (AD-015). Nothing checked here
-            // would show that.
+            println!(
+                "  self-test: {} in {} ms",
+                probe.first_line, probe.duration_ms
+            );
             let store_root = runtime_dir.join("store");
             let work_root = runtime_dir.join("work");
             let dispatch_service = Arc::clone(&service);

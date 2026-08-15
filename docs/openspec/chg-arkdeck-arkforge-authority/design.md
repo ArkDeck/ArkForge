@@ -427,26 +427,39 @@ HelloAck {
 组合键的一部分（architecture.md 12.3），换一份工具就是在跑一个没人发布过的组合。
 daemon 会拒，但你不必等它拒才知道。
 
-### 8.6 工具摘要现在是强制比对，不再只是打印
+### 8.6 工具摘要强制比对，并且必须证明它能跑
 
 ~~~bash
-arkforged --runtime-dir <dir> --profile profiles/dayu200.yaml \
-  --pair-from-stdin <epoch> \
-  --rkdeveloptool /absolute/path \
+arkforged --runtime-dir <dir> --profile profiles/dayu200.yaml \\
+  --pair-from-stdin <epoch> \\
+  --rkdeveloptool /absolute/path \\
   --rkdeveloptool-sha256 <64 hex>
 ~~~
 
-- `--rkdeveloptool-sha256` 是**必填**的，只要给了 `--rkdeveloptool`。
-  绑一个没钉过的工具就是绑「碰巧在那个路径上的东西」。
-- 实测字节与钉值不符 → **拒绝启动**，不是启动后跑不了。
-- 三条启动路径都验过：
-  - 配对无工具 → `execution: not ready (NO_DISPATCHER)`
-  - 有工具无钉值 → 拒绝启动，说明理由
-  - 钉值不符 → 拒绝启动，两个摘要都打出来
+绑定一个工具要过两关，缺一不可：
 
-**这条不能证明的事**：字节相等不等于工具能跑。同一份字节带 quarantine 时会挂死在
-dyld（AD-015），readiness 里任何字段都不会显示这一点。要真正确认得跑一次
-`ld`，而那会碰设备，因此不在启动时自动做。
+1. **字节是不是钉的那些**——`--rkdeveloptool-sha256` 必填，不符拒绝启动。
+2. **这些字节能不能跑**——以 device-free 的 `-v` 探测，5 秒超时。
+
+第二关不是多余的。AD-015 说的就是**字节相等不等于能用**：同一份
+`bbd7bdc0…` 带 `com.apple.quarantine` 时挂死在 dyld，摘要检查一切正常。
+2026-08-15 完整复现并诊断：
+
+~~~text
+带 quarantine   → 探测 5,009 ms 未返回 → 杀掉 → 拒绝启动，错误里直接给出
+                  `xattr -d com.apple.quarantine <path>`
+清除 quarantine → 摘要一字不差 → 自检 207 ms 通过 → execution: ready
+~~~
+
+同一次实测还发现 quarantine 的**第二种形态**：并不总是挂死，也可能立即退出、
+不产生任何输出。两种形态都被拒，且都会附上 quarantine 证据——
+用 `/usr/bin/xattr` 尽力查一次，查不到就明说查不到，绝不含糊成「未知原因」。
+
+> 超时 5 秒不是对「工具可能有多慢」的估计。实测答案是 25–207 ms;
+> 5 秒远在任何合理答案之外，因为这一关要抓的失败不是慢，是**永远不返回**。
+
+工具跑不了时 daemon **拒绝启动**，并提示去掉 `--rkdeveloptool` 就能起一个只读 daemon。
+这条规则简单：给了 `--rkdeveloptool`，它就必须被钉住、匹配、并且能跑。
 
 除此之外，ArkForge 侧的执行机制——封闭命令面、读域三态、staging 与写前
 revalidate、durable journal、permit 单次使用——**都已完成并在真机上验证到写入前的
