@@ -7,9 +7,13 @@
 放在这里而不是直接开 ArkDeck 的 PR，是因为提案的**依据**在本仓：
 真机实测、读域证据、permit 编码。提案与依据不该分居两地。
 
-| 目录 | 内容 | 前置 |
+| 目录 | 内容 | 状态 |
 |---|---|---|
-| `chg-arkdeck-arkforge-authority/` | ArkDeck 保留 authority，把 Rockchip lowering 交给 ArkForge | ArkForge 侧已完成到写入前最后一步，见 [2026-08-15 彩排](../evidence/runs/2026-08-15-dayu200-flash-rehearsal.md) |
+| `chg-arkdeck-arkforge-authority/` | ArkDeck 保留 authority，把 Rockchip lowering 交给 ArkForge | **已复制进 ArkDeck**（2026-08-15），落在 `openspec/changes/chg-2026-059-arkdeck-arkforge-authority/`，未提交 |
+
+> 本目录留的是**草稿正本**；ArkDeck 里那份是按它的约定改过的落地版。
+> 两处若要再改，改 ArkDeck 那份——它已经进了那个仓的治理流程，
+> 这里这份的作用只剩「依据在哪」。
 
 `chg-arkdeck-arkforge-authority/` 里的五份文件：
 
@@ -21,12 +25,24 @@
 | `verification.md` | 九条验收与各自的证据形式 |
 | `permit-vectors.md` | 三组交叉验证向量，支撑 `AFA-AC-2` |
 
-## 贴进去之前要改的
+## 落地时改了什么（chg-2026-059，已完成）
 
-- frontmatter 的 `id` 与目录名里的 `CHG-YYYY-NNN` 换成实际编号；
-- `status` 保持 `draft`，由维护者在 review 后改；
-- `core_baseline` 按当时的 protected-main 值填；
-- `verification.md` 里的 `Environment` 按实际硬件与工具 digest 复核——
+草稿是按通用形状写的，ArkDeck 有自己的约定，落地版做了这些调整：
+
+| 项 | 草稿 | ArkDeck 落地版 |
+|---|---|---|
+| ID | `CHG-YYYY-NNN` | `CHG-2026-059`（059 是当时的下一个空号） |
+| `status` | `draft` | `proposed` —— `draft` 不在 ArkDeck 的状态机里，它是 `proposed → approved → implementing → verified → archived` |
+| `class` | `capability` | `integration`，并在 proposal 里写明「若维护者认为 destructive 执行跨进程构成 capability/core 变化，请重分类」 |
+| `owner` | `lvye` | `fuhanfeng` |
+| Requirements / Acceptance | 只在 tasks/verification 里引用 ID | 在 proposal 里补齐 `AFA-REQ-001…005` 与 `AFA-AC-1…9` 的正文——原稿引用了从未定义的 ID |
+| `spec-impact.md` | 无 | 补：本 change 无 spec delta，但有两处需要维护者判断（class 归属、`REQ-FLASH-015` 的执行者身份） |
+| `evidence/` | 无 | 补：目录结构 + 跨仓引用表，并说明为空的原因 |
+
+## 若还要再贴别的
+
+- `core_baseline` 按当时的 protected-main 值填（当前 `CORE-3.0.0`）；
+- `verification.md` 的 `Environment` 按实际硬件与工具 digest 复核——
   尤其是 rkdeveloptool：本仓自建的那份与 homebrew 的那份字节相同，
   但后者带 quarantine 时会挂死在 dyld（AD-015）。
 
