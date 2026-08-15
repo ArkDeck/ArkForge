@@ -65,6 +65,12 @@ enum Api {
   API_RECONCILE_JOB = 9;
   API_PLAN_SUPERSEDING_RECOVERY = 10;
   API_GET_RECOVERY_GUIDE = 11;
+  // The authority answers an admission the daemon asked for on the watchJob
+  // stream. Controller sessions only.
+  API_SUBMIT_STEP_PERMIT = 12;
+  // The authority reports what its own device control channel observed, for a
+  // managed control action the daemon asked for on the watchJob stream.
+  API_SUBMIT_MANAGED_CONTROL_RECEIPT = 13;
 }
 
 message Request {
@@ -262,4 +268,180 @@ message StartExecutionRequest {
 
 message StartExecutionResponse {
   string job_id = 1;
+}
+
+// ---------------------------------------------------------------------------
+// Execution (architecture.md 8, 9.2, 13)
+// ---------------------------------------------------------------------------
+//
+// The daemon never calls out. It asks on the `watchJob` stream and waits for
+// the authority to call back in, which keeps every message client-initiated
+// and leaves the authority free to answer, refuse, or simply stop.
+//
+// The permit itself is NOT re-encoded field by field on the wire. It travels
+// as the exact canonical CBOR bytes the authority signed, because a permit
+// re-encoded by a second codec is a different permit, and "the same permit"
+// is what the integrity tag exists to pin down (architecture.md 8.6).
+
+message WatchJobRequest {
+  string job_id = 1;
+  // Resume a stream after a reconnect. 0 means "from the beginning".
+  uint64 from_sequence = 2;
+}
+
+enum JobEventKind {
+  JOB_EVENT_KIND_UNSPECIFIED = 0;
+  JOB_EVENT_KIND_STATE_CHANGED = 1;
+  // The daemon needs a permit. Carries the admission snapshot.
+  JOB_EVENT_KIND_STEP_ADMISSION_REQUESTED = 2;
+  // The daemon needs the authority to act on its own control channel.
+  JOB_EVENT_KIND_MANAGED_CONTROL_REQUESTED = 3;
+  JOB_EVENT_KIND_ACTION_RECEIPT = 4;
+  JOB_EVENT_KIND_STEP_CHECKPOINTED = 5;
+  JOB_EVENT_KIND_POSTFLIGHT_RECORDED = 6;
+  JOB_EVENT_KIND_OUTCOME_CLASSIFIED = 7;
+  JOB_EVENT_KIND_POSSIBLE_EFFECT_SET = 8;
+  JOB_EVENT_KIND_RECOVERY_ASSESSMENT = 9;
+}
+
+message JobEvent {
+  string job_id = 1;
+  // Monotonic within one job, and equal to the journal sequence that produced
+  // it. A gap means the authority missed an event, not that none happened.
+  uint64 sequence = 2;
+  JobEventKind kind = 3;
+  uint64 at_epoch_ms = 4;
+  // The journal record digest this event was published from, so an authority
+  // can tie what it saw to what the daemon durably recorded.
+  bytes journal_record_sha256 = 5;
+  // Set for STATE_CHANGED.
+  string job_state = 6;
+  // Set for STEP_ADMISSION_REQUESTED.
+  StepAdmissionSnapshot admission = 7;
+  // Set for MANAGED_CONTROL_REQUESTED.
+  ManagedControlRequest control_request = 8;
+  // Set for ACTION_RECEIPT.
+  ActionReceiptSummary receipt = 9;
+  // Set for OUTCOME_CLASSIFIED / POSSIBLE_EFFECT_SET / RECOVERY_ASSESSMENT.
+  repeated KeyValue facts = 10;
+}
+
+// What the daemon read immediately before asking (architecture.md 8.3).
+//
+// The authority re-verifies these against its own binding before it signs. A
+// snapshot that is merely echoed back has proved nothing.
+message StepAdmissionSnapshot {
+  string job_id = 1;
+  string plan_id = 2;
+  bytes plan_sha256 = 3;
+  string step_id = 4;
+  string attempt_id = 5;
+  bytes public_step_sha256 = 6;
+  bytes private_action_sha256 = 7;
+  bytes effect_set_sha256 = 8;
+  // Digest over the device facts the daemon observed in this snapshot. The
+  // facts themselves are not sent: the authority holds the binding they are
+  // checked against.
+  bytes admitted_device_facts_sha256 = 9;
+  string observed_mode = 10;
+  uint64 observed_at_epoch_ms = 11;
+  // How long this snapshot may be signed against, from `observed_at_epoch_ms`.
+  // Past it the daemon takes a new snapshot rather than accepting a late
+  // permit (architecture.md 8.3).
+  uint64 snapshot_lifetime_ms = 12;
+  string request_id = 13;
+}
+
+message SubmitStepPermitRequest {
+  string job_id = 1;
+  // Which admission this answers. Must equal the snapshot's request_id.
+  string request_id = 2;
+  // Exactly one of the two below.
+  //
+  // The permit as canonical CBOR — the bytes the authority signed, unchanged.
+  bytes permit_cbor = 3;
+  bytes integrity_tag = 4;
+  uint64 pairing_epoch = 5;
+  // Set instead when the authority declines. A refusal is an answer; silence
+  // is not, and the daemon distinguishes them.
+  string refusal = 6;
+}
+
+message SubmitStepPermitResponse {
+  // What the daemon did with it. `accepted` false always carries a reason, and
+  // never means "retry with the same permit".
+  bool accepted = 1;
+  string rejection_code = 2;
+  string rejection_message = 3;
+}
+
+// architecture.md 9.2. ArkForge names a semantic action and receives nothing
+// that could reach the device directly.
+enum ManagedControlAction {
+  MANAGED_CONTROL_ACTION_UNSPECIFIED = 0;
+  MANAGED_CONTROL_ACTION_ENTER_UPDATER = 1;
+  MANAGED_CONTROL_ACTION_REBOOT_TO_NORMAL = 2;
+  MANAGED_CONTROL_ACTION_READ_PRODUCT_FACTS = 3;
+  MANAGED_CONTROL_ACTION_READ_BUILD_FACTS = 4;
+}
+
+message ManagedControlRequest {
+  string job_id = 1;
+  string step_id = 2;
+  string request_id = 3;
+  ManagedControlAction action = 4;
+  // The permit that authorizes the step this action belongs to, by id. The
+  // daemon has already verified it; the authority checks it is its own.
+  string permit_id = 5;
+  // Facts the authority must confirm, for a postflight read. Empty otherwise.
+  repeated KeyValue expected_facts = 6;
+  uint64 deadline_epoch_ms = 7;
+}
+
+message SubmitManagedControlReceiptRequest {
+  string job_id = 1;
+  string request_id = 2;
+  ManagedControlAction action = 3;
+  // False means the authority's own semantic success was not observed. It does
+  // NOT mean nothing happened: a mode change may have taken effect and gone
+  // unobserved, which the daemon records as an unknown outcome.
+  bool accepted = 4;
+  // Facts the authority observed. `connectKey`, executable paths, endpoints,
+  // argv, shells and server lifecycle actions must never appear here
+  // (architecture.md 9.2); the daemon rejects the receipt if one does.
+  repeated KeyValue facts = 5;
+  bytes evidence_sha256 = 6;
+  string failure_reason = 7;
+}
+
+message SubmitManagedControlReceiptResponse {
+  bool accepted = 1;
+  string rejection_code = 2;
+  string rejection_message = 3;
+}
+
+// What the daemon tells the authority happened (architecture.md 12.4).
+message ActionReceiptSummary {
+  string job_id = 1;
+  string plan_id = 2;
+  string step_id = 3;
+  string action_id = 4;
+  string attempt_id = 5;
+  string permit_id = 6;
+  // semanticSuccess | confirmedNoEffect | confirmedPartialEffect |
+  // outcomeUnknown. A zero exit status is not a disposition and is not sent.
+  string disposition = 7;
+  bytes evidence_sha256 = 8;
+  // verified | typedSkip | failed. Absent for a step that verifies nothing.
+  string verification_outcome = 9;
+  // fullHash | sampledRanges | prefixHash | semanticOnly. Absent unless
+  // `verification_outcome` is `verified` — a typed skip is never any strength.
+  string verification_strength = 10;
+  uint64 verified_range_start = 11;
+  uint64 verified_range_length = 12;
+  // skipped-lba-read-window | profile-declares-unreachable.
+  string typed_skip_reason = 13;
+  // content-mismatch | erased-medium-filler.
+  string failure_classification = 14;
+  repeated KeyValue facts = 15;
 }

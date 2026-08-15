@@ -63,11 +63,15 @@ impl SessionKind {
             // assessment to it regardless of what the provider could build.
             Api::MaterializePlan => true,
             Api::WatchJob | Api::GetRecoveryGuide => true,
+            // Answering an admission is minting authority. A public caller
+            // that could submit a permit would be an authority nobody paired.
             Api::ImportArtifact
             | Api::StartExecution
             | Api::CancelJob
             | Api::ReconcileJob
-            | Api::PlanSupersedingRecovery => self == SessionKind::Controller,
+            | Api::PlanSupersedingRecovery
+            | Api::SubmitStepPermit
+            | Api::SubmitManagedControlReceipt => self == SessionKind::Controller,
         }
     }
 }
@@ -86,10 +90,15 @@ pub enum Api {
     ReconcileJob,
     PlanSupersedingRecovery,
     GetRecoveryGuide,
+    /// The authority answers an admission the daemon asked for on the
+    /// `watchJob` stream.
+    SubmitStepPermit,
+    /// The authority reports what its own device control channel observed.
+    SubmitManagedControlReceipt,
 }
 
 impl Api {
-    pub const ALL: [Api; 11] = [
+    pub const ALL: [Api; 13] = [
         Api::ImportArtifact,
         Api::InspectArtifact,
         Api::DiscoverDevices,
@@ -101,6 +110,8 @@ impl Api {
         Api::ReconcileJob,
         Api::PlanSupersedingRecovery,
         Api::GetRecoveryGuide,
+        Api::SubmitStepPermit,
+        Api::SubmitManagedControlReceipt,
     ];
 
     pub fn wire_value(self) -> i32 {
@@ -116,6 +127,8 @@ impl Api {
             Api::ReconcileJob => 9,
             Api::PlanSupersedingRecovery => 10,
             Api::GetRecoveryGuide => 11,
+            Api::SubmitStepPermit => 12,
+            Api::SubmitManagedControlReceipt => 13,
         }
     }
 
@@ -138,6 +151,8 @@ impl Api {
             Api::ReconcileJob => "reconcileJob",
             Api::PlanSupersedingRecovery => "planSupersedingRecovery",
             Api::GetRecoveryGuide => "getRecoveryGuide",
+            Api::SubmitStepPermit => "submitStepPermit",
+            Api::SubmitManagedControlReceipt => "submitManagedControlReceipt",
         }
     }
 }

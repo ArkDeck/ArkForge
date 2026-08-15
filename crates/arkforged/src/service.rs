@@ -171,7 +171,20 @@ impl Service {
                 request,
                 Status::Unavailable,
                 "JOB_SURFACE_UNAVAILABLE",
-                "there are no jobs in the AF-V1 read-only vertical; the durable engine is AF-V2",
+                "no job exists: startExecution is unavailable until an authority is paired \
+                 with this daemon",
+            ),
+            // The wire contract for these two exists (proto/arkforge.proto,
+            // API 12/13) and the ArkDeck side is specified against it. The
+            // daemon-side wiring is AF-V2.4 and cannot be exercised before an
+            // authority is paired, so the honest answer is that they are not
+            // implemented here — not that the message was malformed.
+            Api::SubmitStepPermit | Api::SubmitManagedControlReceipt => self.refuse(
+                request,
+                Status::Unavailable,
+                "ADMISSION_SURFACE_UNAVAILABLE",
+                "this build accepts no permit: no authority is paired, so there is no admission \
+                 to answer (architecture.md 8.6)",
             ),
         }
     }

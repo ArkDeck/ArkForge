@@ -11,6 +11,16 @@
 |---|---|---|
 | `chg-arkdeck-arkforge-authority/` | ArkDeck 保留 authority，把 Rockchip lowering 交给 ArkForge | ArkForge 侧已完成到写入前最后一步，见 [2026-08-15 彩排](../evidence/runs/2026-08-15-dayu200-flash-rehearsal.md) |
 
+`chg-arkdeck-arkforge-authority/` 里的四份文件：
+
+| 文件 | 给谁看 |
+|---|---|
+| `proposal.md` | 维护者 review：要不要做、为什么、影响面 |
+| `design.md` | **实现者：怎么做**。含 CBOR 编码规则、线上往返、超时实测值、失败处置 |
+| `tasks.md` | 单任务垂直交付的范围与允许改动路径 |
+| `verification.md` | 九条验收与各自的证据形式 |
+| `permit-vectors.md` | 三组交叉验证向量，支撑 `AFA-AC-2` |
+
 ## 贴进去之前要改的
 
 - frontmatter 的 `id` 与目录名里的 `CHG-YYYY-NNN` 换成实际编号；
