@@ -183,6 +183,8 @@ refactor(TASK-AIN-021): adopt app concurrency defaults (#1302)
 
 另一条必须进入 arkforged 打包设计的仓内定案：macOS Rockchip 组件曾出现 entitlement 死锁——运行时校验器要求 app-sandbox+inherit，而打包契约(#1052)要求空 entitlements，两者互斥无解，最终以修改校验器收口，spec/ADR 对齐仍留白。新的 Rust daemon + 捆绑固定哈希工具会原样踏入同一区域，打包契约必须对齐当前校验器语义设计(见 21.2 Stage B 与 AD-007)。
 
+**该留白已于 2026-08-16 对齐**：见 [AFD-0003](decisions/AFD-0003-arkforged-signing-packaging.md)。结论是两个二进制的 entitlement 字典都为空，并由 `arkforged` 在绑定工具之前读 Mach-O 代码签名强制；`arkforged` 不注册第二个 LaunchAgent，而是由 `arkdeck-agentd` spawn、pairing secret 走继承的 stdin。同一份实测查出 AD-023：ArkDeck 当前钉给破坏性 flash 的那份工具链接 Homebrew libusb，不可出厂。
+
 ### 2.2 已确认的 DAYU600 静态证据
 
 仓库中的 bluetool-analysis.md 在 60f14eee 基线已经存在，并记录：
@@ -2203,7 +2205,7 @@ CLI 仅用于 read-only/offline diagnostics。
 | AD-004 | BlueTool contains separate DAYU600/UNISOC/PAC path | [bluetool-analysis.md](../../ArkDeck/openspec/changes/chg-2026-026-macos-rockchip-flash-ui/bluetool-analysis.md) | C/D | confirmed static evidence |
 | AD-005 | Current Rockchip Provider/tool/profile implementation | ArkDeckKit production sources | C | confirmed |
 | AD-006 | DAYU200 板端 RockUSB 读写面不对称：`rl` 读面自扇区 65536(32 MiB)起结构性盲区、窗口外恒 uniform 0xCC；擦除介质亦读为 0xCC；`wlx` 写面全盘可达；读窗大小须每次执行实测 | GJ-4 真机 campaign ECAMP-96EFFF15 / ECAMP-31E041BC；PR #1066–#1070；[RockchipRuntimeActionHost.swift](../../ArkDeck/Packages/ArkDeckKit/Sources/ArkDeckWorkflows/DeviceProviders/RockchipRuntimeActionHost.swift) `characterizeMediumReadDomain` 与 [RockchipRuntimeCompositionContractTests.swift](../../ArkDeck/Packages/ArkDeckKit/Tests/ArkDeckContractTests/RockchipRuntimeCompositionContractTests.swift) | C | confirmed(真机定案) |
-| AD-007 | macOS Rockchip 组件 entitlement 死锁：运行时校验器要求 app-sandbox+inherit 与打包契约(#1052)要求空 entitlements 互斥，以修改校验器收口；spec/ADR 对齐留白 | 2026-08-04 定案；#1299 helper signing 现代化 | C | confirmed；arkforged 打包设计输入 |
+| AD-007 | macOS Rockchip 组件 entitlement 死锁：运行时校验器要求 app-sandbox+inherit 与打包契约(#1052)要求空 entitlements 互斥，以修改校验器收口；spec/ADR 对齐留白 | 2026-08-04 定案；#1299 helper signing 现代化；AFD-0003 | C + A | **resolved**(2026-08-16，AFD-0003)；证据账本为正本 |
 | FB-001 | Fastboot host-driven protocol and semantic status | [Android official fastboot README](https://android.googlesource.com/platform/system/core/+/master/fastboot/README.md) | A | confirmed; pin revision |
 | FW-001 | fwupd daemon/plugin lifecycle | [fwupd official source](https://github.com/fwupd/fwupd) | A/B | confirmed; pin revision |
 | DFU-001 | DFU detach/download/upload/reset | [dfu-util official manual](https://dfu-util.sourceforge.net/dfu-util.1.html) | A | confirmed |

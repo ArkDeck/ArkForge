@@ -224,6 +224,65 @@ fn the_durability_boundary_stays_recorded_as_open() {
     );
 }
 
+/// AD-007 is closed, and the thing that closed it has to still be there.
+///
+/// A resolved row is a claim that some mechanism now holds the property. If the
+/// mechanism is deleted and the row is not, the ledger has become a record of
+/// what was once true — which is worse than having said nothing, because it
+/// reads as current.
+#[test]
+fn the_entitlement_deadlock_stays_closed_by_something_that_exists() {
+    let row = LEDGER
+        .lines()
+        .find(|line| line.starts_with("| AD-007 |"))
+        .expect("AD-007 is the entitlement deadlock entry");
+    assert!(row.contains("resolved"), "{row}");
+    assert!(row.contains("AFD-0003"), "AD-007 must name what closed it: {row}");
+
+    // The release inputs the decision record commits to.
+    for source in [
+        arkforged::packaging::ARKFORGED_ENTITLEMENTS,
+        arkforged::packaging::TOOL_ENTITLEMENTS,
+    ] {
+        assert!(
+            arkforged::packaging::plist_keys(source).is_empty(),
+            "an entitlement key appeared in a file AD-007 says is empty"
+        );
+    }
+
+    // And the check that enforces it, on the shape that caused AD-007 in the
+    // first place. Asserted through the ledger test rather than only in the
+    // packaging suite because this is the ledger's own claim.
+    let sandboxed = "<plist><dict><key>com.apple.security.app-sandbox</key><true/></dict></plist>";
+    assert_eq!(
+        arkforged::packaging::plist_keys(sandboxed),
+        vec!["com.apple.security.app-sandbox"],
+        "the reader must still see the key that cannot run here"
+    );
+}
+
+/// AD-023 is *open*, and an open finding about a tool nobody has swapped yet
+/// must not quietly become a closed one.
+#[test]
+fn the_unshippable_toolchain_finding_stays_open() {
+    let row = LEDGER
+        .lines()
+        .find(|line| line.starts_with("| AD-023 |"))
+        .expect("AD-023 is the unshippable toolchain entry");
+    assert!(
+        row.contains("open"),
+        "AD-023 stays open until the pinned tool is swapped: {row}"
+    );
+    assert!(
+        row.contains("libusb"),
+        "AD-023 must name the dependency that makes it unshippable: {row}"
+    );
+    assert!(
+        LEDGER.contains("### AD-023 对 toolchain 摘要的后果"),
+        "the consequence for the maturity combination must be written down, not implied"
+    );
+}
+
 /// AF-V2 is not accepted, and its acceptance document must keep saying so.
 ///
 /// A document titled "AF-V2 验收证据" is exactly the artifact that gets skimmed

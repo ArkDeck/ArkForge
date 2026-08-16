@@ -44,7 +44,7 @@ ArkForge 这侧要交的东西已经全部交付，提案在
 | generic UI | ⛔ | ArkDeck 仓 |
 | compatibility alias | ⛔ | 换实现之后另开 change |
 | legacy decoder | ⛔ | 同上 |
-| arkforged signing/entitlement/packaging 契约 | ⛔ | AD-007，另开 change |
+| arkforged signing/entitlement/packaging 契约 | ✅ | [AFD-0003](../decisions/AFD-0003-arkforged-signing-packaging.md);`crates/arkforged/src/packaging.rs`、`packaging/macos/`。两个二进制 entitlement 字典皆空并在绑定前强制(AD-007 的留白已对齐);release 签名形状由 `--require-release-signing` 强制。**公证未做过**——nested code 随容器公证，属 ArkDeck 侧 |
 
 ### 2.1 durable engine
 

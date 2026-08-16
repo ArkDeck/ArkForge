@@ -10,6 +10,7 @@
 
 pub mod dispatch;
 pub mod jobs;
+pub mod packaging;
 pub mod service;
 
 pub use service::Service;

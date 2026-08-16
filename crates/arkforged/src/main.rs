@@ -54,6 +54,9 @@ fn usage() -> String {
         "                     dispatch would have spent a permit before finding out\n",
         "  --rkdeveloptool-sha256  the digest those bytes must have. Required with\n",
         "                     --rkdeveloptool: an unpinned tool is a tool nobody chose\n",
+        "  --require-release-signing  hold the bound tool to the shipped signing shape\n",
+        "                     (Developer ID, Hardened Runtime, a Team ID) as well as the\n",
+        "                     empty entitlement dictionary, which is required either way\n",
         "\n",
         "A bound tool must pass its digest check and then prove it runs, because\n",
         "byte equality is not usability: quarantined bytes with the right digest\n",
@@ -74,6 +77,7 @@ fn run(arguments: &[String]) -> Result<(), String> {
     let mut pairing_epoch: Option<u64> = None;
     let mut rkdeveloptool: Option<PathBuf> = None;
     let mut rkdeveloptool_sha256: Option<String> = None;
+    let mut require_release_signing = false;
 
     let mut index = 0usize;
     while index < arguments.len() {
@@ -100,6 +104,7 @@ fn run(arguments: &[String]) -> Result<(), String> {
                 index += 1;
                 rkdeveloptool_sha256 = Some(arguments.get(index).ok_or_else(usage)?.clone());
             }
+            "--require-release-signing" => require_release_signing = true,
             "--pair-from-stdin" => {
                 index += 1;
                 let raw = arguments.get(index).ok_or_else(usage)?;
@@ -175,6 +180,34 @@ fn run(arguments: &[String]) -> Result<(), String> {
                     port.digest()
                 ));
             }
+            // The digest settles which bytes these are; the signature settles
+            // whether macOS will let them start. Both are static facts about
+            // the file, so both are answered before anything depends on it —
+            // and the entitlement clause is answered here rather than by the
+            // self-test below, because "aborted in libsecinit" and "hung in
+            // dyld" look identical from the outside and have different fixes
+            // (AD-007 and AD-015 respectively).
+            let signing = arkforged::packaging::read_file(&path).map_err(|error| {
+                format!("{}: {error}", path.display())
+            })?;
+            let mode = if require_release_signing {
+                arkforged::packaging::ContractMode::Release
+            } else {
+                arkforged::packaging::ContractMode::Development
+            };
+            let violations = signing.violations(mode);
+            if !violations.is_empty() {
+                let detail = violations
+                    .iter()
+                    .map(|violation| format!("  {}: {violation}", violation.code()))
+                    .collect::<Vec<_>>()
+                    .join("\n");
+                return Err(format!(
+                    "{} does not meet the macOS packaging contract ({}):\n{detail}",
+                    path.display(),
+                    arkforged::packaging::CONTRACT_DOC
+                ));
+            }
             {
                 let Ok(mut guard) = service.lock() else {
                     return Err("the service lock is poisoned".into());
@@ -203,6 +236,7 @@ fn run(arguments: &[String]) -> Result<(), String> {
                     )
                 })?;
             println!("dispatch: {} ({})", path.display(), port.digest());
+            println!("  signing: {}", signing.summary());
             println!(
                 "  self-test: {} in {} ms",
                 probe.first_line, probe.duration_ms

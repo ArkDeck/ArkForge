@@ -110,7 +110,12 @@ inspect
 - [ ] generic UI
 - [ ] compatibility alias(flash.dayu200 → generic adapter，不保留 Rockchip lowering)
 - [ ] legacy decoder
-- [ ] arkforged signing/entitlement/packaging 契约(对齐 #1299 体系与运行时校验器语义，AD-007)
+- [x] arkforged signing/entitlement/packaging 契约(对齐 #1299 体系与运行时校验器语义，AD-007)
+      — [AFD-0003](docs/decisions/AFD-0003-arkforged-signing-packaging.md)：两个二进制的
+      entitlement 字典都为空并在绑定前强制;Developer ID/Hardened Runtime/时间戳由
+      `--require-release-signing` 强制;`packaging/macos/` 含 entitlements、fail-closed
+      packager 与仓内 reader。packager→daemon 闭环已用真实 Developer ID 跑通;
+      **公证从未提交过**(nested code 随容器公证，属 ArkDeck 侧)
 
 **验收**
 

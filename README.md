@@ -49,6 +49,7 @@ adapters/        arkforge-arkdeck-adapter：published step 映射表
 profiles/        DeviceProfile 数据(schema 中性，设备在数据里)
 proto/           IPC 正本 schema
 transcripts/     golden transcript(GJ-4 campaign 收据链)
+packaging/macos/ 签名/entitlement/打包契约的发布输入(AFD-0003)
 fuzz/            见 fuzz/README.md
 ```
 

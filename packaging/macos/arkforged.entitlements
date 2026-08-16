@@ -1,0 +1,16 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!-- arkforged carries no entitlement, and the emptiness is the mechanism.
+
+     It is a standalone daemon spawned by arkdeck-agentd, which is not itself
+     sandboxed. A child that declared com.apple.security.app-sandbox with
+     inherit would abort inside _libsecinit_appsandbox before main — the
+     entitlement deadlock recorded as AD-007. Every other key is refused by
+     having no key at all: get-task-allow, Hardened Runtime exceptions,
+     keychain-access-groups, and the device/file/network capabilities are all
+     absent rather than present-and-false.
+
+     See docs/decisions/AFD-0003-arkforged-signing-packaging.md. -->
+<plist version="1.0">
+<dict/>
+</plist>
