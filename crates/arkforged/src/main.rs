@@ -11,7 +11,7 @@
 //! Windows named pipes are a design reservation, out of AF-V1/AF-V2 acceptance
 //! (architecture.md 15.2).
 
-use arkforged::Service;
+use arkforged::{Clock, Service};
 use arkforge_ipc::framing::{read_frame, write_frame};
 use arkforge_ipc::messages::{Hello, HelloAck, Request, Response};
 use arkforge_ipc::{negotiate, Api, SessionKind, Status, PROTOCOL_MAJOR, PROTOCOL_MINOR};
@@ -160,12 +160,13 @@ fn run(arguments: &[String]) -> Result<(), String> {
         );
     }
 
-    let now = now_epoch_ms();
     let mut service = Service::new(
         &runtime_dir.join("store"),
         profiles,
         transcripts,
-        now,
+        // Read per fact, not once here. A captured constant froze every
+        // timestamp at launch and expired every admission it ever offered.
+        Clock::System,
         hardware_campaign.as_deref(),
     )
     .map_err(|error| error.to_string())?;
@@ -521,13 +522,6 @@ impl<'a> Read for ContentStream<'a> {
         self.position += count;
         Ok(count)
     }
-}
-
-fn now_epoch_ms() -> u64 {
-    std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map(|delta| delta.as_millis() as u64)
-        .unwrap_or(0)
 }
 
 /// Keeps `Write` in the import path honest about flushing.

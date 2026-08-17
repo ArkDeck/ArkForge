@@ -10,7 +10,7 @@ use arkforge_core::digest::sha256;
 use arkforge_core::ids::OpaqueId;
 use arkforge_core::profile;
 use arkforge_engine::BoundToolchain;
-use arkforged::Service;
+use arkforged::{Clock, Service};
 use arkforge_ipc::messages::{
     ErrorBody, InspectArtifactResponse, MaterializePlanResponse, Request, Response,
     SubmitStepPermitRequest,
@@ -48,7 +48,7 @@ fn service(root: &TempRoot) -> Service {
         &root.0.join("store"),
         vec![profile::load(PROFILE_SOURCE).unwrap()],
         vec![CAMPAIGN.to_string()],
-        1_754_380_800_000,
+        Clock::Fixed(1_754_380_800_000),
         // Not an acceptance campaign. These cases assert the API surface of an
         // ordinary daemon, and one started as a campaign would answer
         // differently about what it can execute.

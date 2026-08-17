@@ -35,6 +35,35 @@ use std::collections::BTreeMap;
 use std::io::Read;
 use std::path::Path;
 
+/// Where this daemon's notion of "now" comes from.
+///
+/// It used to be a `u64` captured at startup and never reassigned, which meant
+/// every timestamp the daemon stamped was its own launch time. An admission
+/// snapshot carries `observed_at_epoch_ms` and a 60s `snapshot_lifetime_ms`, so
+/// once the daemon had been up for a minute every admission it offered was
+/// already expired when the authority read it, and every one was refused. The
+/// clock has to be read when a fact is stamped, not once at boot.
+///
+/// `Fixed` exists so tests keep asserting exact timestamps; production is
+/// `System` and nothing else.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Clock {
+    System,
+    Fixed(u64),
+}
+
+impl Clock {
+    pub fn now_epoch_ms(&self) -> u64 {
+        match self {
+            Clock::System => std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|delta| delta.as_millis() as u64)
+                .unwrap_or(0),
+            Clock::Fixed(value) => *value,
+        }
+    }
+}
+
 /// Everything the daemon serves from.
 #[derive(Debug)]
 pub struct Service {
@@ -55,7 +84,7 @@ pub struct Service {
     /// observation before probing, could therefore never reach a real device
     /// (AD-027).
     transports: Vec<Box<dyn DeviceTransport>>,
-    now_epoch_ms: u64,
+    clock: Clock,
     jobs: JobRegistry,
     /// The secret the authority handed this daemon at startup. Held here and
     /// nowhere else; there is no getter.
@@ -82,7 +111,7 @@ impl Service {
         store_root: &Path,
         profiles: Vec<DeviceProfile>,
         transcripts: Vec<String>,
-        now_epoch_ms: u64,
+        clock: Clock,
         campaign: Option<&str>,
     ) -> Result<Self, String> {
         let store = ContentAddressedStore::open(store_root, CasQuota::dayu200_default())
@@ -159,7 +188,7 @@ impl Service {
             profiles: profile_map,
             manifests: BTreeMap::new(),
             transports: loaded,
-            now_epoch_ms,
+            clock,
             jobs: JobRegistry::new(store_root.join("jobs")),
             pairing: None,
             readiness: ExecutionReadiness::default(),
@@ -295,7 +324,7 @@ impl Service {
                 outcome,
                 &stored.envelope,
                 &stored.private_plan,
-                self.now_epoch_ms,
+                self.clock.now_epoch_ms(),
             )
             .map_err(|error| error.to_string())
     }
@@ -489,7 +518,7 @@ impl Service {
         let filter = TypedDiscoveryFilter::default();
         let mut out = Vec::new();
         for transport in &self.transports {
-            let observations = match transport.discover(&filter, self.now_epoch_ms) {
+            let observations = match transport.discover(&filter, self.clock.now_epoch_ms()) {
                 Ok(observations) => observations,
                 Err(error) => {
                     return self.refuse(
@@ -520,7 +549,7 @@ impl Service {
         };
 
         for transport in &self.transports {
-            let Ok(observations) = transport.discover(&TypedDiscoveryFilter::default(), self.now_epoch_ms)
+            let Ok(observations) = transport.discover(&TypedDiscoveryFilter::default(), self.clock.now_epoch_ms())
             else {
                 continue;
             };
@@ -658,7 +687,7 @@ impl Service {
 
         match self
             .jobs
-            .start(&stored.envelope, &stored.private_plan, self.now_epoch_ms)
+            .start(&stored.envelope, &stored.private_plan, self.clock.now_epoch_ms())
         {
             Ok(job_id) => {
                 let mut payload = Vec::new();
@@ -706,7 +735,7 @@ impl Service {
 
     fn cancel_job(&mut self, request: &Request) -> Response {
         let job_id = first_string_field(&request.payload, 1).unwrap_or_default();
-        match self.jobs.cancel(&job_id, self.now_epoch_ms) {
+        match self.jobs.cancel(&job_id, self.clock.now_epoch_ms()) {
             Ok(state) => {
                 let mut payload = Vec::new();
                 arkforge_ipc::wire::write_string(&mut payload, 1, state.as_str());
@@ -805,7 +834,7 @@ impl Service {
             &stored.envelope,
             &stored.private_plan,
             &profile,
-            self.now_epoch_ms,
+            self.clock.now_epoch_ms(),
         ) {
             Ok(()) => SubmissionOutcome::accepted(),
             Err(error) => SubmissionOutcome::rejected(error.code(), error.to_string()),
@@ -843,7 +872,7 @@ impl Service {
             &receipt,
             &stored.envelope,
             &stored.private_plan,
-            self.now_epoch_ms,
+            self.clock.now_epoch_ms(),
         ) {
             Ok(()) => SubmissionOutcome::accepted(),
             Err(error) => SubmissionOutcome::rejected(error.code(), error.to_string()),
@@ -902,7 +931,7 @@ impl Service {
 
         let mut probe = None;
         for transport in &self.transports {
-            let Ok(observations) = transport.discover(&TypedDiscoveryFilter::default(), self.now_epoch_ms)
+            let Ok(observations) = transport.discover(&TypedDiscoveryFilter::default(), self.clock.now_epoch_ms())
             else {
                 continue;
             };
@@ -969,7 +998,7 @@ impl Service {
             host_platform: HostPlatform::current(),
             driver_facts_digest: driver_facts_digest(),
             evidence_set_digest: evidence_set_digest(),
-            created_at_epoch_ms: self.now_epoch_ms,
+            created_at_epoch_ms: self.clock.now_epoch_ms(),
             plan_lifetime_ms: 3_600_000,
         };
 

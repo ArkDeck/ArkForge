@@ -6,7 +6,7 @@
 //! answers are the honest ones.
 
 use arkforge_core::profile;
-use arkforged::Service;
+use arkforged::{Clock, Service};
 use arkforge_ipc::messages::{
     ErrorBody, InspectArtifactResponse, MaterializePlanResponse, Request, Response,
 };
@@ -48,7 +48,7 @@ fn service(root: &TempRoot) -> Service {
             profile::load(DAYU600_PROFILE).unwrap(),
         ],
         vec![DAYU600_TRANSCRIPT.to_string()],
-        1_754_380_800_000,
+        Clock::Fixed(1_754_380_800_000),
         None,
     )
     .unwrap()
