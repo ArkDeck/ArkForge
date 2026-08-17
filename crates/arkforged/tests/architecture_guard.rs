@@ -254,6 +254,29 @@ fn the_daemon_never_mints_a_permit() {
 }
 
 #[test]
+fn the_daemon_can_observe_a_real_device() {
+    // AD-027. The daemon held only `TranscriptTransport` until 2026-08-17:
+    // `UsbTransport::with_ioreg` existed and was used by `arkforge-capture`
+    // and `arkforge-rehearse`, but nothing wired it into `arkforged`. So
+    // `discoverDevices` answered "no devices observed" on a host whose `ioreg`
+    // was listing the board, and `materializePlan` — which matches an
+    // observation before it probes — could never reach real hardware.
+    //
+    // A source-level guard rather than a discovery assertion, because the
+    // behavioural version would depend on what is plugged into the machine
+    // running the tests, and would pass on a clean runner for the same reason
+    // the bug survived: nothing was attached to contradict it.
+    let source = std::fs::read_to_string(repo_root().join("crates/arkforged/src/service.rs"))
+        .expect("the service source");
+    let code = code_only(&source);
+    assert!(
+        code.contains("UsbTransport"),
+        "arkforged builds no USB transport; it would see transcripts only, and a daemon that \
+         cannot observe the device in front of it cannot materialize a plan for it"
+    );
+}
+
+#[test]
 fn the_workspace_has_no_third_party_runtime_dependencies() {
     // AFD-0001. A dependency added without a decision record would show up as a
     // non-path dependency here.

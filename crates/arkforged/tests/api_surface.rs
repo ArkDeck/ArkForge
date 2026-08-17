@@ -319,19 +319,28 @@ fn the_read_only_vertical_runs_over_the_api() {
         None,
     );
     assert_eq!(response.status, Status::Ok);
-    let mut observation_id = String::new();
+    // Every observation, then the one this vertical is about — not whichever
+    // arrived last. Since AD-027 the daemon also enumerates real USB, so what
+    // else is on the bus is the developer's business and must not decide
+    // whether this case passes. Selecting by id keeps the replay vertical a
+    // statement about the transcript.
+    let mut observation_ids: Vec<String> = Vec::new();
     let mut reader = wire::Reader::new(&response.payload);
     while let Some((field, value)) = reader.next_field().unwrap() {
         if field == 1 {
             let mut inner = wire::Reader::new(value.as_bytes().unwrap());
             while let Some((inner_field, inner_value)) = inner.next_field().unwrap() {
                 if inner_field == 1 {
-                    observation_id = inner_value.as_str(1).unwrap().to_string();
+                    observation_ids.push(inner_value.as_str(1).unwrap().to_string());
                 }
             }
         }
     }
-    assert_eq!(observation_id, "OBS-PREFLIGHT");
+    assert!(
+        observation_ids.iter().any(|id| id == "OBS-PREFLIGHT"),
+        "the transcript's device is missing from {observation_ids:?}"
+    );
+    let observation_id = "OBS-PREFLIGHT".to_string();
 
     // probe
     let mut payload = string_payload(1, &observation_id);

@@ -29,6 +29,7 @@ use arkforge_provider::{
     FlashIntent, FlashProvider, MaterializeRequest, MaturityRegistry, ProbeContext,
 };
 use arkforge_transport::replay::TranscriptTransport;
+use arkforge_transport::usb::UsbTransport;
 use arkforge_transport::{transcript, DeviceObservation, DeviceTransport, TypedDiscoveryFilter};
 use std::collections::BTreeMap;
 use std::io::Read;
@@ -44,7 +45,16 @@ pub struct Service {
     maturity: MaturityRegistry,
     profiles: BTreeMap<String, DeviceProfile>,
     manifests: BTreeMap<String, ArtifactManifest>,
-    transports: Vec<TranscriptTransport>,
+    /// Every transport this daemon can observe through.
+    ///
+    /// Boxed rather than one concrete type because the daemon needs both: a
+    /// transcript replays a captured device, and `UsbTransport` sees the one
+    /// actually plugged in. It held only transcripts until 2026-08-17, which
+    /// meant `discoverDevices` answered "no devices observed" on a host whose
+    /// `ioreg` was listing the board — and `materializePlan`, which matches an
+    /// observation before probing, could therefore never reach a real device
+    /// (AD-027).
+    transports: Vec<Box<dyn DeviceTransport>>,
     now_epoch_ms: u64,
     jobs: JobRegistry,
     /// The secret the authority handed this daemon at startup. Held here and
@@ -121,10 +131,18 @@ impl Service {
             profile_map.insert(profile.id.as_str().to_string(), profile);
         }
 
-        let mut loaded = Vec::new();
+        let mut loaded: Vec<Box<dyn DeviceTransport>> = Vec::new();
         for source in transcripts {
             let parsed = transcript::parse(&source).map_err(|error| error.to_string())?;
-            loaded.push(TranscriptTransport::new(parsed));
+            loaded.push(Box::new(TranscriptTransport::new(parsed)));
+        }
+        // One USB transport per loaded profile, because the transport reads
+        // its identity table from the profile: which vendor/product pairs in
+        // which mode are this device, rather than "any Rockchip in Loader".
+        // Read-only ioreg enumeration — this opens no HDC server and takes no
+        // device, so it coexists with whatever else owns the board.
+        for profile in profile_map.values() {
+            loaded.push(Box::new(UsbTransport::with_ioreg(profile)));
         }
 
         Ok(Service {
@@ -452,7 +470,7 @@ impl Service {
                 );
             };
             return match provider.probe(&ProbeContext {
-                transport,
+                transport: transport.as_ref(),
                 observation,
                 profile,
             }) {
@@ -821,7 +839,7 @@ impl Service {
             {
                 probe = provider
                     .probe(&ProbeContext {
-                        transport,
+                        transport: transport.as_ref(),
                         observation,
                         profile: &profile,
                     })
