@@ -63,6 +63,11 @@ pub struct Service {
     /// What this daemon can do, as standing facts. Kept beside the secret
     /// rather than derived from it, because pairing is only half of it.
     readiness: ExecutionReadiness,
+    /// The acceptance campaign this daemon runs, if any. Held because
+    /// `bind_dispatcher` republishes maturity and must publish the same
+    /// campaign the construction did — a binding that silently dropped it
+    /// would turn an authorized campaign back into `hardwareGated`.
+    campaign: Option<String>,
 }
 
 impl Service {
@@ -158,6 +163,7 @@ impl Service {
             jobs: JobRegistry::new(store_root.join("jobs")),
             pairing: None,
             readiness: ExecutionReadiness::default(),
+            campaign: campaign.map(str::to_string),
         })
     }
 
@@ -178,13 +184,80 @@ impl Service {
         self.readiness.authority_paired = true;
     }
 
-    /// Binds the fixed tool a dispatcher will run.
+    /// Binds the fixed tool a dispatcher will run, and publishes the maturity
+    /// of the combination that binding creates.
     ///
     /// Identity, not a path. What the rest of the daemon needs to know is
     /// whether these are the bytes a plan's maturity was published against;
     /// which file they came from is the host's business.
+    ///
+    /// # Why maturity is republished here
+    ///
+    /// It used not to be, and the constant and the binding drifted. Maturity
+    /// was published at construction against [`fixed_tool_identity`] — a
+    /// literal digest — while the tool actually bound comes from
+    /// `--rkdeveloptool-sha256`. After AD-023 replaced the shipped
+    /// `rkdeveloptool` those were two different tools, so every plan
+    /// materialized under the constant was refused at `startExecution`:
+    ///
+    /// ```text
+    /// TOOLCHAIN_DIGEST_MISMATCH: the plan was materialized for toolchain
+    /// 038a8a0e… and this daemon has 231a05ef… bound
+    /// ```
+    ///
+    /// The refusal was correct — the toolchain digest is part of the maturity
+    /// combination (architecture.md 12.3), and that pairing was never
+    /// published. What was wrong is that the daemon published a combination it
+    /// could not execute and none it could. So the binding now publishes its
+    /// own combination: one source of truth, the tool actually loaded.
     pub fn bind_dispatcher(&mut self, toolchain: BoundToolchain) {
+        let identity = ToolchainIdentity {
+            id: toolchain.id.clone(),
+            kind: ToolchainKind::FixedTool,
+            backend_digest: toolchain.backend_digest,
+            ..fixed_tool_identity()
+        };
         self.readiness.dispatcher = Some(toolchain);
+        for profile in self.profiles.values() {
+            if !profile
+                .artifact_formats
+                .iter()
+                .any(|format| format.as_str() == dayu200::FORMAT_ID)
+            {
+                continue;
+            }
+            // Ignored deliberately: a profile whose identity cannot be formed
+            // published nothing at construction either, and a binding is not
+            // the place to discover a malformed profile.
+            let _ = publish_dayu200_maturity(
+                &mut self.maturity,
+                &self.rockchip,
+                profile,
+                &identity,
+                &HostPlatform::current(),
+                driver_facts_digest(),
+                evidence_set_digest(),
+                self.campaign.as_deref(),
+            );
+        }
+    }
+
+    /// The fixed-tool identity of the tool this daemon actually bound.
+    ///
+    /// Falls back to the published literal when nothing is bound, which is
+    /// the read-only daemon: it materializes assessments, and an assessment
+    /// names the combination it was assessed against rather than one it
+    /// could run.
+    fn bound_fixed_tool_identity(&self) -> ToolchainIdentity {
+        match &self.readiness.dispatcher {
+            Some(bound) => ToolchainIdentity {
+                id: bound.id.clone(),
+                kind: ToolchainKind::FixedTool,
+                backend_digest: bound.backend_digest,
+                ..fixed_tool_identity()
+            },
+            None => fixed_tool_identity(),
+        }
     }
 
     /// What this daemon can do. Standing facts, established at startup.
@@ -876,6 +949,14 @@ impl Service {
                 binding_revision: 0,
                 stable_identity_digest: probe.facts_digest,
             },
+            // The tool this daemon actually bound, not a constant. A plan
+            // materialized for one toolchain and started on a daemon holding
+            // another is refused at `startExecution` — correctly, since the
+            // digest is part of the maturity combination — so materializing
+            // against anything but the binding produces plans that can never
+            // run. That is what happened after AD-023 replaced the shipped
+            // `rkdeveloptool`: the literal still said 038a8a0e… while every
+            // daemon bound 231a05ef….
             toolchain: if profile
                 .artifact_formats
                 .iter()
@@ -883,7 +964,7 @@ impl Service {
             {
                 research_toolchain_identity()
             } else {
-                fixed_tool_identity()
+                self.bound_fixed_tool_identity()
             },
             host_platform: HostPlatform::current(),
             driver_facts_digest: driver_facts_digest(),
