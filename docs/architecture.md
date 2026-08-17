@@ -544,7 +544,21 @@ pub enum TransientEffect {
 - unknown execution-relevant manifest field；
 - private action 无 public projection；
 - semantic target 不在 Profile allowlist；
-- Provider maturity 组合不是 ProductionVerified。
+- Provider maturity 组合既不是 ProductionVerified，也不是 HardwareCampaign。
+
+关于最后一条：ProductionVerified 的定义是「这个组合已通过真机验收」，
+而真机验收本身需要一个 executable plan。若只承认 ProductionVerified，
+任何新组合的**第一次**刷写都不可达——门不是严，是死。
+
+HardwareCampaign 是那次验收本身，不是对门的放宽：
+
+- 必须由操作员具名开启(`arkforged --hardware-campaign <id>`)，缺省仍是 HardwareGated；
+- transcript replay 永远不适用，PlanOnly 的理由与 AF-V1 相同——录像不是设备；
+- 它进 plan 封印，因此 campaign 计划与 production 计划摘要必然不同。
+  StepPermit 只绑 plan digest，这条保证一次验收活动的 permit 与回执
+  无法被当作「该组合已受支持」的证据重放。
+
+见 `docs/decisions/AFD-0004-hardware-campaign-maturity.md`。
 
 ---
 
@@ -1201,6 +1215,8 @@ provider
 状态：
 
 - ProductionVerified；
+- HardwareCampaign(campaign)——正在进行的具名真机验收，可支撑 executable plan，
+  但不是 production evidence(见 5.5)；
 - HardwareGated；
 - PlanOnly；
 - ResearchOnly；

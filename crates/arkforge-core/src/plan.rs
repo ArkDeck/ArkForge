@@ -145,6 +145,19 @@ pub struct FlashPlanEnvelope {
     pub artifact: ArtifactIdentity,
     pub toolchain: ToolchainIdentity,
 
+    /// The published state of the combination this plan was materialized
+    /// under.
+    ///
+    /// Sealed rather than merely recorded. A plan that executed under
+    /// `HardwareCampaign` and one that executed under `ProductionVerified`
+    /// must not share a digest, because the authority's StepPermit binds the
+    /// plan digest and nothing else: if the two were identical, a campaign
+    /// run's permits and receipts would be indistinguishable from a
+    /// production run's, and "it passed acceptance once" would become "this
+    /// combination is supported" with nothing in the evidence able to
+    /// contradict it.
+    pub maturity: MaturityState,
+
     pub negotiated_capabilities: NegotiatedCapabilities,
     pub public_steps: Vec<PublicFlashStep>,
     pub effect_set: EffectSet,
@@ -170,6 +183,7 @@ pub struct PlanSealInput {
     pub profile: DeviceProfileIdentity,
     pub artifact: ArtifactIdentity,
     pub toolchain: ToolchainIdentity,
+    pub maturity: MaturityState,
     pub negotiated_capabilities: NegotiatedCapabilities,
     pub public_steps: Vec<PublicFlashStep>,
     pub effect_set: EffectSet,
@@ -212,6 +226,7 @@ impl FlashPlanEnvelope {
             profile: input.profile,
             artifact: input.artifact,
             toolchain: input.toolchain,
+            maturity: input.maturity,
             negotiated_capabilities: input.negotiated_capabilities,
             public_steps: input.public_steps,
             effect_set: input.effect_set,
@@ -240,6 +255,7 @@ impl FlashPlanEnvelope {
             profile: self.profile.clone(),
             artifact: self.artifact.clone(),
             toolchain: self.toolchain.clone(),
+            maturity: self.maturity.clone(),
             negotiated_capabilities: self.negotiated_capabilities.clone(),
             public_steps: self.public_steps.clone(),
             effect_set: self.effect_set.clone(),
@@ -285,6 +301,7 @@ fn plan_digest_body(input: &PlanSealInput) -> CborValue {
         ("profile", input.profile.to_cbor()),
         ("artifact", input.artifact.to_cbor()),
         ("toolchain", input.toolchain.to_cbor()),
+        ("maturity", input.maturity.to_cbor()),
         (
             "negotiatedCapabilities",
             input.negotiated_capabilities.to_cbor(),
@@ -602,6 +619,7 @@ mod tests {
             schema_version: PlanSchemaVersion::CURRENT,
             plan_id: PlanId::new("PLAN-001").unwrap(),
             execution_purpose: ExecutionPurpose::PrimaryFlash,
+            maturity: MaturityState::ProductionVerified,
             authority_binding: AuthorityBindingRef {
                 authority_namespace: AuthorityNamespace::new("test-authority").unwrap(),
                 binding_id: OpaqueId::new("TGT-958780b2ffb7").unwrap(),
@@ -671,6 +689,60 @@ mod tests {
         input.toolchain.backend_digest = sha256(b"a different tool build");
         let rebuilt = FlashPlanEnvelope::seal(input).unwrap();
         assert_ne!(baseline.plan_digest, rebuilt.plan_digest);
+    }
+
+    #[test]
+    fn a_campaign_plan_and_a_production_plan_never_share_a_digest() {
+        // The anti-laundering property, and the reason `maturity` is inside
+        // the seal rather than beside it. A StepPermit binds the plan digest
+        // and nothing else; if these two digests could coincide, every permit
+        // and receipt from an acceptance campaign would be replayable as
+        // evidence that the combination is production-supported.
+        let production = FlashPlanEnvelope::seal(seal_input()).unwrap();
+
+        let mut input = seal_input();
+        input.maturity = MaturityState::HardwareCampaign {
+            campaign: "AFA-AC-6".into(),
+        };
+        let campaign = FlashPlanEnvelope::seal(input).unwrap();
+
+        assert_ne!(production.plan_digest, campaign.plan_digest);
+        assert!(production.maturity.is_production_evidence());
+        assert!(!campaign.maturity.is_production_evidence());
+        assert_eq!(campaign.maturity.campaign(), Some("AFA-AC-6"));
+    }
+
+    #[test]
+    fn two_campaigns_are_two_plans() {
+        // The campaign identifier is in the digest, not merely the state name.
+        // Without this, every campaign run would seal identically and the
+        // evidence could not say which campaign produced it.
+        let mut first = seal_input();
+        first.maturity = MaturityState::HardwareCampaign {
+            campaign: "AFA-AC-6".into(),
+        };
+        let mut second = seal_input();
+        second.maturity = MaturityState::HardwareCampaign {
+            campaign: "AFA-AC-7".into(),
+        };
+        assert_ne!(
+            FlashPlanEnvelope::seal(first).unwrap().plan_digest,
+            FlashPlanEnvelope::seal(second).unwrap().plan_digest
+        );
+    }
+
+    #[test]
+    fn a_sealed_maturity_survives_the_round_trip() {
+        // `recompute_digest` rebuilds the seal input from the envelope. A
+        // field the envelope carries but the rebuild drops would make every
+        // loaded plan look corrupt — which is how a fail-closed store turns
+        // into an outage.
+        let mut input = seal_input();
+        input.maturity = MaturityState::HardwareCampaign {
+            campaign: "AFA-AC-6".into(),
+        };
+        let sealed = FlashPlanEnvelope::seal(input).unwrap();
+        assert!(sealed.verify_self_digest().is_ok());
     }
 
     #[test]

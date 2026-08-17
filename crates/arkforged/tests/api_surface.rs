@@ -49,6 +49,10 @@ fn service(root: &TempRoot) -> Service {
         vec![profile::load(PROFILE_SOURCE).unwrap()],
         vec![CAMPAIGN.to_string()],
         1_754_380_800_000,
+        // Not an acceptance campaign. These cases assert the API surface of an
+        // ordinary daemon, and one started as a campaign would answer
+        // differently about what it can execute.
+        None,
     )
     .unwrap()
 }

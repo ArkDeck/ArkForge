@@ -57,6 +57,13 @@ fn usage() -> String {
         "  --require-release-signing  hold the bound tool to the shipped signing shape\n",
         "                     (Developer ID, Hardened Runtime, a Team ID) as well as the\n",
         "                     empty entitlement dictionary, which is required either way\n",
+        "  --hardware-campaign <id>  run as a named DAYU200 acceptance campaign\n",
+        "                     Without it a DAYU200 combination is hardwareGated and only\n",
+        "                     assessments materialize, because a combination becomes\n",
+        "                     productionVerified only after a real flash — which needs a\n",
+        "                     plan, which needs this. The campaign is sealed into every\n",
+        "                     plan digest it produces, so its receipts stay campaign\n",
+        "                     evidence and cannot be read back as a support claim.\n",
         "\n",
         "A bound tool must pass its digest check and then prove it runs, because\n",
         "byte equality is not usability: quarantined bytes with the right digest\n",
@@ -78,6 +85,7 @@ fn run(arguments: &[String]) -> Result<(), String> {
     let mut rkdeveloptool: Option<PathBuf> = None;
     let mut rkdeveloptool_sha256: Option<String> = None;
     let mut require_release_signing = false;
+    let mut hardware_campaign: Option<String> = None;
 
     let mut index = 0usize;
     while index < arguments.len() {
@@ -105,6 +113,18 @@ fn run(arguments: &[String]) -> Result<(), String> {
                 rkdeveloptool_sha256 = Some(arguments.get(index).ok_or_else(usage)?.clone());
             }
             "--require-release-signing" => require_release_signing = true,
+            "--hardware-campaign" => {
+                index += 1;
+                let raw = arguments.get(index).ok_or_else(usage)?;
+                if raw.trim().is_empty() {
+                    return Err(
+                        "--hardware-campaign needs a campaign identifier; an unnamed campaign is \
+                         one nobody can hold to a result"
+                            .into(),
+                    );
+                }
+                hardware_campaign = Some(raw.clone());
+            }
             "--pair-from-stdin" => {
                 index += 1;
                 let raw = arguments.get(index).ok_or_else(usage)?;
@@ -141,8 +161,24 @@ fn run(arguments: &[String]) -> Result<(), String> {
     }
 
     let now = now_epoch_ms();
-    let mut service = Service::new(&runtime_dir.join("store"), profiles, transcripts, now)
-        .map_err(|error| error.to_string())?;
+    let mut service = Service::new(
+        &runtime_dir.join("store"),
+        profiles,
+        transcripts,
+        now,
+        hardware_campaign.as_deref(),
+    )
+    .map_err(|error| error.to_string())?;
+    if let Some(campaign) = &hardware_campaign {
+        // Said out loud at startup, next to the signing and self-test lines.
+        // A daemon that can execute writes on an unverified combination is
+        // not the ordinary case, and an operator reading this log should not
+        // have to infer it from the absence of a refusal later.
+        println!(
+            "maturity: hardware campaign {campaign} — DAYU200 plans are executable and their \
+             receipts are campaign evidence, not a production support claim"
+        );
+    }
     if let Some(epoch) = pairing_epoch {
         service.pair_authority(arkforged::jobs::read_pairing_secret_from_stdin(epoch)?);
     }

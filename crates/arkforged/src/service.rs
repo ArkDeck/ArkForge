@@ -23,7 +23,7 @@ use arkforge_ipc::messages::{
     WatchJobRequest,
 };
 use arkforge_ipc::{Api, SessionKind, Status};
-use arkforge_provider::rockchip::{publish_af_v1_maturity, RockchipProvider};
+use arkforge_provider::rockchip::{publish_dayu200_maturity, RockchipProvider};
 use arkforge_provider::unisoc::{publish_af_v3_maturity, UnisocProvider};
 use arkforge_provider::{
     FlashIntent, FlashProvider, MaterializeRequest, MaturityRegistry, ProbeContext,
@@ -56,11 +56,19 @@ pub struct Service {
 }
 
 impl Service {
+    /// Builds the service.
+    ///
+    /// `campaign` is the acceptance campaign this daemon is running, if any.
+    /// It is a parameter with no default because it decides whether any
+    /// DAYU200 plan can be executable at all: `None` publishes `HardwareGated`
+    /// and the daemon can materialize assessments only, which is what every
+    /// ordinary run wants. See [`publish_dayu200_maturity`].
     pub fn new(
         store_root: &Path,
         profiles: Vec<DeviceProfile>,
         transcripts: Vec<String>,
         now_epoch_ms: u64,
+        campaign: Option<&str>,
     ) -> Result<Self, String> {
         let store = ContentAddressedStore::open(store_root, CasQuota::dayu200_default())
             .map_err(|error| error.to_string())?;
@@ -81,7 +89,7 @@ impl Service {
                 .any(|format| format.as_str() == dayu200::FORMAT_ID)
             {
                 for toolchain in [fixed_tool_identity(), replay_toolchain_identity()] {
-                    publish_af_v1_maturity(
+                    publish_dayu200_maturity(
                         &mut maturity,
                         &rockchip,
                         &profile,
@@ -89,6 +97,7 @@ impl Service {
                         &HostPlatform::current(),
                         driver_facts_digest(),
                         evidence_set_digest(),
+                        campaign,
                     )
                     .map_err(|error| error.to_string())?;
                 }

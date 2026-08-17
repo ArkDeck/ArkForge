@@ -200,6 +200,11 @@ impl RockchipProvider {
             profile: profile_identity,
             artifact: artifact_identity,
             toolchain: request.toolchain.clone(),
+            // Reached only when `permits_executable_plan()` held, so this is
+            // either `ProductionVerified` or the named campaign that is
+            // producing it. Sealing it is what keeps those two apart in the
+            // evidence afterwards.
+            maturity: maturity_state,
             negotiated_capabilities: NegotiatedCapabilities::empty(),
             public_steps: built.public_steps,
             effect_set: built.effect_set,
@@ -970,6 +975,49 @@ pub fn publish_af_v1_maturity(
     driver_facts_digest: Sha256Digest,
     evidence_set_digest: Sha256Digest,
 ) -> Result<(), ProviderError> {
+    publish_dayu200_maturity(
+        registry,
+        provider,
+        profile,
+        toolchain,
+        host_platform,
+        driver_facts_digest,
+        evidence_set_digest,
+        None,
+    )
+}
+
+/// Publishes the DAYU200 maturity, optionally as a named acceptance campaign.
+///
+/// `campaign: None` is AF-V1 and is what every caller that did not ask for a
+/// campaign gets: `HardwareGated`, executable by nobody.
+///
+/// `campaign: Some(id)` is the break in the ring described on
+/// [`MaturityState::HardwareCampaign`]. It is a parameter rather than a
+/// default because a campaign is an operator's decision to put a real device
+/// under a real write in order to measure a combination — and a decision that
+/// arrived by default is one nobody made.
+///
+/// # Replay is never a campaign
+///
+/// A transcript stays `PlanOnly` whatever is asked for. The AF-V1 reason holds
+/// exactly as it did — a transcript is not a device — and a campaign against
+/// one would produce evidence about a recording while naming a board.
+// Seven of the eight are the fields of `MaturityKey`, which is a seven-part
+// key by design (architecture.md 12.3): maturity is published for an exact
+// combination, and collapsing any of them into a struct here would just move
+// the same seven somewhere less visible.
+#[allow(clippy::too_many_arguments)]
+pub fn publish_dayu200_maturity(
+    registry: &mut MaturityRegistry,
+    provider: &RockchipProvider,
+    profile: &DeviceProfile,
+    toolchain: &arkforge_core::identity::ToolchainIdentity,
+    host_platform: &arkforge_core::identity::HostPlatform,
+    driver_facts_digest: Sha256Digest,
+    evidence_set_digest: Sha256Digest,
+    campaign: Option<&str>,
+) -> Result<(), ProviderError> {
     let profile_identity = profile
         .identity()
         .map_err(|error| ProviderError::Core(error.to_string()))?;
@@ -982,11 +1030,14 @@ pub fn publish_af_v1_maturity(
         driver_facts_digest,
         evidence_set_digest,
     };
-    let state = match toolchain.kind {
-        arkforge_core::identity::ToolchainKind::Replay => MaturityState::PlanOnly {
+    let state = match (toolchain.kind, campaign) {
+        (arkforge_core::identity::ToolchainKind::Replay, _) => MaturityState::PlanOnly {
             blocker: "transcript replay is not a device; no plan built on it may execute".into(),
         },
-        _ => MaturityState::HardwareGated {
+        (_, Some(campaign)) => MaturityState::HardwareCampaign {
+            campaign: campaign.to_string(),
+        },
+        (_, None) => MaturityState::HardwareGated {
             blocker: "AF-V2 requires a real DAYU200 full-flash pass through ArkForge before this \
                       combination can be ProductionVerified (architecture.md 22 AF-V2)"
                 .into(),

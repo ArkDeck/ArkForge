@@ -280,6 +280,26 @@ impl CanonicalCbor for MaturityKey {
 pub enum MaturityState {
     /// Real hardware acceptance passed for this exact combination.
     ProductionVerified,
+    /// The acceptance campaign that would produce `ProductionVerified` is
+    /// authorized and running.
+    ///
+    /// This exists because `HardwareGated` is a ring. Its own blocker says a
+    /// combination becomes `ProductionVerified` only after a real flash passes
+    /// through ArkForge, and a real flash needs a plan, and only
+    /// `ProductionVerified` could back one — so the first flash of any new
+    /// combination could never happen. Relaxing
+    /// [`Self::permits_executable_plan`] to admit `HardwareGated` would have
+    /// broken the ring by deleting the gate: every unmeasured combination
+    /// would execute.
+    ///
+    /// So the campaign is named instead. It is published only when an operator
+    /// asks for it by name, it says which campaign is running, and it is not
+    /// production evidence — see [`Self::is_production_evidence`]. A plan
+    /// materialized under it seals that fact into its own digest, so the
+    /// receipts of a campaign run cannot later be read as a production pass:
+    /// the authority's permit binds the plan digest, and the plan digest
+    /// covers this state.
+    HardwareCampaign { campaign: String },
     /// Implementation complete, awaiting the hardware campaign.
     HardwareGated { blocker: String },
     /// Can materialize an assessment only; no executable plan.
@@ -290,14 +310,42 @@ pub enum MaturityState {
 }
 
 impl MaturityState {
-    /// Only ProductionVerified may back an executable plan (architecture.md 5.5).
+    /// Which states may back an executable plan (architecture.md 5.5).
+    ///
+    /// Two, not one. The second is the acceptance campaign that produces the
+    /// first — without it a combination could never reach
+    /// `ProductionVerified`, because that state is defined by a flash that
+    /// would itself need a plan.
     pub fn permits_executable_plan(&self) -> bool {
+        matches!(
+            self,
+            MaturityState::ProductionVerified | MaturityState::HardwareCampaign { .. }
+        )
+    }
+
+    /// Whether a run under this state is evidence of production support.
+    ///
+    /// A campaign run executes real writes on real hardware and its receipts
+    /// are real. What they are not is a support claim: the combination is
+    /// being measured, and recording "it worked once during acceptance" as
+    /// "this is a supported combination" is the claim-ahead-of-the-evidence
+    /// this project refuses elsewhere (architecture.md 12.3, 24.1).
+    pub fn is_production_evidence(&self) -> bool {
         matches!(self, MaturityState::ProductionVerified)
+    }
+
+    /// The campaign a run under this state belongs to, if any.
+    pub fn campaign(&self) -> Option<&str> {
+        match self {
+            MaturityState::HardwareCampaign { campaign } => Some(campaign),
+            _ => None,
+        }
     }
 
     pub fn as_str(&self) -> &'static str {
         match self {
             MaturityState::ProductionVerified => "productionVerified",
+            MaturityState::HardwareCampaign { .. } => "hardwareCampaign",
             MaturityState::HardwareGated { .. } => "hardwareGated",
             MaturityState::PlanOnly { .. } => "planOnly",
             MaturityState::ResearchOnly { .. } => "researchOnly",
@@ -307,7 +355,10 @@ impl MaturityState {
 
     pub fn blocker(&self) -> Option<&str> {
         match self {
-            MaturityState::ProductionVerified => None,
+            // Neither blocks. A campaign is a qualification on what the run
+            // proves, not an obstacle to running it, and reporting it as a
+            // blocker would send an operator looking for something to fix.
+            MaturityState::ProductionVerified | MaturityState::HardwareCampaign { .. } => None,
             MaturityState::HardwareGated { blocker }
             | MaturityState::PlanOnly { blocker }
             | MaturityState::ResearchOnly { blocker } => Some(blocker),
@@ -323,6 +374,18 @@ impl CanonicalCbor for MaturityState {
             (
                 "blocker",
                 match self.blocker() {
+                    Some(text) => CborValue::text(text),
+                    None => CborValue::Null,
+                },
+            ),
+            // Named in the digest, not just in the struct. A plan seals its
+            // maturity, so a campaign run's plan digest differs from the
+            // digest the same inputs would produce under
+            // `ProductionVerified` — which is what stops one run's receipts
+            // from being presented as the other's.
+            (
+                "campaign",
+                match self.campaign() {
                     Some(text) => CborValue::text(text),
                     None => CborValue::Null,
                 },
