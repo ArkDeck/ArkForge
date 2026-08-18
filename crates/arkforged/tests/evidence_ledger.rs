@@ -239,11 +239,9 @@ fn the_entitlement_deadlock_stays_closed_by_something_that_exists() {
     assert!(row.contains("resolved"), "{row}");
     assert!(row.contains("AFD-0003"), "AD-007 must name what closed it: {row}");
 
-    // The release inputs the decision record commits to.
-    for source in [
-        arkforged::packaging::ARKFORGED_ENTITLEMENTS,
-        arkforged::packaging::TOOL_ENTITLEMENTS,
-    ] {
+    // The native daemon is the only release input after NRU-004. The optional
+    // migration fallback is still checked by the same Mach-O reader at bind.
+    for source in [arkforged::packaging::ARKFORGED_ENTITLEMENTS] {
         assert!(
             arkforged::packaging::plist_keys(source).is_empty(),
             "an entitlement key appeared in a file AD-007 says is empty"
@@ -261,17 +259,17 @@ fn the_entitlement_deadlock_stays_closed_by_something_that_exists() {
     );
 }
 
-/// AD-023 is *open*, and an open finding about a tool nobody has swapped yet
-/// must not quietly become a closed one.
+/// AD-023 is closed by removing the unshippable component from the package,
+/// not by weakening its dependency-closure finding.
 #[test]
-fn the_unshippable_toolchain_finding_stays_open() {
+fn the_unshippable_toolchain_finding_is_closed_by_native_packaging() {
     let row = LEDGER
         .lines()
         .find(|line| line.starts_with("| AD-023 |"))
         .expect("AD-023 is the unshippable toolchain entry");
     assert!(
-        row.contains("open"),
-        "AD-023 stays open until the pinned tool is swapped: {row}"
+        row.contains("resolved"),
+        "AD-023 closes only after the vendor component leaves packaging: {row}"
     );
     assert!(
         row.contains("libusb"),
@@ -281,6 +279,9 @@ fn the_unshippable_toolchain_finding_stays_open() {
         LEDGER.contains("### AD-023 对 toolchain 摘要的后果"),
         "the consequence for the maturity combination must be written down, not implied"
     );
+    let package_script = include_str!("../../../packaging/macos/package-arkforged.sh");
+    assert!(!package_script.contains("rkdeveloptool"));
+    assert!(!package_script.contains("RKDEVELOPTOOL"));
 }
 
 /// AF-V2 is not accepted, and its acceptance document must keep saying so.

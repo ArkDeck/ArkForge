@@ -27,10 +27,7 @@ use arkforged::packaging::{
 fn the_shipped_entitlement_files_are_empty_dictionaries() {
     // The release inputs and the rule are the same statement, so they cannot
     // drift apart: a key added to either file fails here.
-    for (name, source) in [
-        ("arkforged.entitlements", packaging::ARKFORGED_ENTITLEMENTS),
-        ("rkdeveloptool.entitlements", packaging::TOOL_ENTITLEMENTS),
-    ] {
+    for (name, source) in [("arkforged.entitlements", packaging::ARKFORGED_ENTITLEMENTS)] {
         let keys = packaging::plist_keys(source);
         assert!(
             keys.is_empty(),
@@ -39,6 +36,20 @@ fn the_shipped_entitlement_files_are_empty_dictionaries() {
         assert!(
             source.contains("<dict/>"),
             "packaging/macos/{name} must carry the empty dictionary literally"
+        );
+    }
+}
+
+#[test]
+fn the_release_packager_contains_only_the_native_daemon() {
+    const SCRIPT: &str = include_str!("../../../packaging/macos/package-arkforged.sh");
+
+    assert!(SCRIPT.contains("cp \"$release_bin/arkforged\" \"$stage/arkforged\""));
+    assert!(SCRIPT.contains("\\\"arkforged\\\": {"));
+    for retired in ["rkdeveloptool", "RKDEVELOPTOOL"] {
+        assert!(
+            !SCRIPT.contains(retired),
+            "the release packager still carries retired vendor surface {retired}"
         );
     }
 }

@@ -8,6 +8,12 @@
 > AFD-0001、ArkDeck #1299(helper signing 现代化)、ArkDeck ADR-0003、
 > ArkDeck `docs/release/rockchip-component-packaging.md`(TASK-BRC-003)
 
+> **NRU-004 修订（2026-08-18）**：原生 RockUSB 已成为默认执行端口，发布包
+> 只携带并签名 `arkforged`；不再复制、重签或在 receipt 中声明 vendor
+> 二进制，也不再接受 `ARKFORGE_RKDEVELOPTOOL*` 打包输入。下文关于 vendor
+> 签名、自检和 entitlement 的条款保留为迁移期显式 `--rockusb-port vendor`
+> fallback 的运行时约束及历史实测，不再描述当前发布包形状。
+
 ## 背景
 
 architecture.md 21.2 把这件事列为 Stage B 的**显式设计工作项，不是打包杂务**，

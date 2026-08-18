@@ -59,7 +59,9 @@ Protobuf wire codec 均在仓内实现并对公开测试向量，理由见
 
 ## 目标设备
 
-- DAYU200(Rockchip RK3568 / RockUSB)：首个生产垂直，首版封装固定哈希 rkdeveloptool；
+- DAYU200(Rockchip RK3568 / RockUSB)：首个生产垂直，默认由 arkforged 原生
+  RockUSB typed 端口完成枚举、读写与复位；vendor 端口仅保留为迁移期显式 fallback，
+  不进入发布包；
 - DAYU600(Unisoc uis7885 / PAC)：证据门(architecture.md 17.5)通过前仅 inspect 与非可执行 PlanAssessment。
   当前 0/18 通过；`arkforge-artifact::pac` 是结构观测器而非 PAC parser。
 

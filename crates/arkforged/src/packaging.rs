@@ -8,7 +8,10 @@
 //! were not merely inconsistent: the shape the validator asked for **cannot
 //! execute** under a non-sandboxed parent, because `_libsecinit_appsandbox`
 //! aborts the child before `main`. It was closed by changing the validator.
-//! `arkforged` plus a bundled fixed-hash tool walks into the same place.
+//! `arkforged` walked into the same place while the vendor fallback was a
+//! bundled release component. NRU-004 removed that component from packaging;
+//! the reader remains because an explicitly selected migration fallback must
+//! still be refused when its entitlement shape cannot run.
 //!
 //! # What this module enforces
 //!
@@ -54,13 +57,11 @@ use std::path::Path;
 /// Where the prose contract lives, so a refusal can point at it.
 pub const CONTRACT_DOC: &str = "docs/decisions/AFD-0003-arkforged-signing-packaging.md";
 
-/// The entitlements this repository ships as the release inputs. Compiled in so
-/// a test can assert the files on disk still say what the contract says.
+/// The entitlement dictionary this repository ships for the native daemon.
+/// Compiled in so a test can assert the release input still says what the
+/// contract says.
 pub const ARKFORGED_ENTITLEMENTS: &str =
     include_str!("../../../packaging/macos/arkforged.entitlements");
-/// The bound tool's release entitlements — the same empty dictionary.
-pub const TOOL_ENTITLEMENTS: &str =
-    include_str!("../../../packaging/macos/rkdeveloptool.entitlements");
 
 /// Keys that must never appear, and what each one would actually do here.
 ///

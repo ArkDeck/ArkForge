@@ -188,7 +188,8 @@ fn the_daemon_serves_the_read_only_vertical_over_unix_sockets() {
     }
 
     // startExecution is unavailable on the wire, from the controller socket.
-    // This daemon has no authority and no tool bound, so it says so by code.
+    // The default native dispatcher is bound, but no authority is paired, so
+    // the request is still refused before any plan or device action.
     let response = call(&mut controller, Api::StartExecution, Vec::new());
     assert_eq!(response.status, Status::Unavailable);
     assert_eq!(
@@ -201,21 +202,21 @@ fn the_daemon_serves_the_read_only_vertical_over_unix_sockets() {
 /// it could not run.
 #[test]
 fn the_handshake_reports_execution_readiness() {
-    let Some(daemon) = Daemon::start("readiness-handshake") else {
-        eprintln!("skipped: the daemon did not come up");
-        return;
+    // Keep this label short: macOS caps Unix-domain socket paths, and its
+    // per-user temporary directory already consumes most of that budget.
+    let Some(daemon) = Daemon::start("ready") else {
+        panic!("the daemon did not come up");
     };
     let (_stream, ack) = daemon.connect_with_ack(SessionKind::Controller).unwrap();
 
     assert!(!ack.execution_ready);
     assert_eq!(
         ack.execution_blockers,
-        vec!["NO_PAIRED_AUTHORITY".to_string(), "NO_DISPATCHER".to_string()],
-        "both halves are reported, not just the first"
+        vec!["NO_PAIRED_AUTHORITY".to_string()],
+        "the default native dispatcher is bound before the handshake"
     );
-    // No tool is bound, so there is no identity to compare a plan against.
-    assert!(ack.toolchain_id.is_empty());
-    assert!(ack.toolchain_sha256.is_empty());
+    assert_eq!(ack.toolchain_id, "arkforged-native-rockusb");
+    assert_eq!(ack.toolchain_sha256.len(), 64);
 }
 
 #[test]

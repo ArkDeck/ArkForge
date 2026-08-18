@@ -35,6 +35,12 @@ enum RockUsbPortChoice {
     Native,
 }
 
+impl Default for RockUsbPortChoice {
+    fn default() -> Self {
+        Self::Native
+    }
+}
+
 impl RockUsbPortChoice {
     fn parse(value: &str) -> Result<Self, String> {
         match value {
@@ -68,7 +74,7 @@ fn usage() -> String {
         "  --profile          a DeviceProfile YAML document (repeatable)\n",
         "  --transcript       a golden transcript to serve as a replay transport (repeatable)\n",
         "  --pair-from-stdin  read the authority's pairing secret from stdin and close it\n",
-        "  --rockusb-port     RockUSB backend; default vendor during the migration window\n",
+        "  --rockusb-port     RockUSB backend; default native (vendor is migration-only)\n",
         "  --rkdeveloptool    absolute path to the pinned vendor tool. Without it,\n",
         "                     startExecution refuses: a job that reached its first\n",
         "                     dispatch would have spent a permit before finding out\n",
@@ -102,7 +108,7 @@ fn run(arguments: &[String]) -> Result<(), String> {
     let mut profile_paths: Vec<PathBuf> = Vec::new();
     let mut transcript_paths: Vec<PathBuf> = Vec::new();
     let mut pairing_epoch: Option<u64> = None;
-    let mut rockusb_port = RockUsbPortChoice::Vendor;
+    let mut rockusb_port = RockUsbPortChoice::default();
     let mut rkdeveloptool: Option<PathBuf> = None;
     let mut rkdeveloptool_sha256: Option<String> = None;
     let mut require_release_signing = false;
@@ -608,4 +614,16 @@ impl<'a> Read for ContentStream<'a> {
 #[allow(dead_code)]
 fn flush<W: Write>(writer: &mut W) -> io::Result<()> {
     writer.flush()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{usage, RockUsbPortChoice};
+
+    #[test]
+    fn native_rockusb_is_the_default_backend() {
+        assert_eq!(RockUsbPortChoice::default(), RockUsbPortChoice::Native);
+        assert!(usage().contains("default native"));
+        assert!(usage().contains("vendor is migration-only"));
+    }
 }
