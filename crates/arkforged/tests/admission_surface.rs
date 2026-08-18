@@ -722,6 +722,73 @@ fn the_canonical_facts_digest_matches_the_authoritys_spelling() {
     );
 }
 
+/// The control request names a deadline, and the deadline is enforced: an
+/// authority that answers nothing costs one deadline, not a job parked at
+/// `permitConsuming` until an operator digs the journal out of a CBOR file.
+#[test]
+fn an_unanswered_control_request_expires_into_outcome_unknown() {
+    let root = TempRoot::new("control-expiry");
+    let fixture = plan_fixture();
+    let mut registry = JobRegistry::new(&root.0);
+    let job_id = registry
+        .start(&fixture.envelope, &fixture.private_plan, NOW)
+        .unwrap();
+    let snapshot = pending_snapshot(&registry, &job_id);
+    let (permit, tag, epoch) = mint(&snapshot, "PERMIT-1", NOW + 60_000);
+    registry
+        .submit_permit(
+            &job_id,
+            &snapshot.request_id,
+            Some((permit, tag, epoch)),
+            "",
+            &secret(),
+            &fixture.envelope,
+            &fixture.private_plan,
+            &fixture.profile,
+            NOW + 10,
+        )
+        .unwrap();
+    let control = registry
+        .job(&job_id)
+        .unwrap()
+        .events_from(0)
+        .into_iter()
+        .rev()
+        .find(|event| event.kind == JobEventKind::ManagedControlRequested)
+        .and_then(|event| event.control_request)
+        .unwrap();
+
+    // Before the deadline the sweep classifies nothing.
+    assert!(registry
+        .expire_stale_controls(control.deadline_epoch_ms)
+        .is_empty());
+
+    let expired = registry.expire_stale_controls(control.deadline_epoch_ms + 1);
+    assert_eq!(expired, vec![job_id.clone()]);
+
+    let job = registry.job(&job_id).unwrap();
+    assert_eq!(job.state(), JobState::OutcomeUnknown);
+    assert!(matches!(
+        job.stopped(),
+        Some(JobStop::ControlOutcomeUnknown { .. })
+    ));
+    let classified = job
+        .events_from(0)
+        .into_iter()
+        .rev()
+        .find(|event| event.kind == JobEventKind::OutcomeClassified)
+        .expect("the expiry was published");
+    assert!(classified
+        .facts
+        .iter()
+        .any(|fact| fact.key == "reason" && fact.value.contains("expired unanswered")));
+
+    // The sweep settles each job once.
+    assert!(registry
+        .expire_stale_controls(control.deadline_epoch_ms + 2)
+        .is_empty());
+}
+
 /// architecture.md 13.4. Once an intent is durable there is an unresolved
 /// effect, and a job with one may not report `cancelledSafe`.
 #[test]

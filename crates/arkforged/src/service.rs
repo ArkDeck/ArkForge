@@ -309,6 +309,16 @@ impl Service {
         self.jobs.take_pending_dispatch()
     }
 
+    /// Classifies control requests whose deadline passed unanswered.
+    ///
+    /// Runs on the dispatcher's sweep, beside [`Self::take_pending_dispatch`],
+    /// so a silent authority costs one deadline rather than leaving the job
+    /// parked at `permitConsuming` forever. Returns the ids it classified,
+    /// for the caller's log line.
+    pub fn expire_stale_controls(&mut self) -> Vec<String> {
+        self.jobs.expire_stale_controls(self.clock.now_epoch_ms())
+    }
+
     /// Records what a dispatcher observed.
     pub fn complete_dispatch(
         &mut self,

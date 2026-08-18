@@ -289,6 +289,15 @@ fn run(arguments: &[String]) -> Result<(), String> {
                         let Ok(mut guard) = dispatch_service.lock() else {
                             return;
                         };
+                        // The same sweep that feeds the dispatcher enforces the
+                        // control deadline, so a job whose authority went
+                        // silent is classified instead of parked forever.
+                        for job_id in guard.expire_stale_controls() {
+                            eprintln!(
+                                "arkforged: {job_id}: managed control expired unanswered; \
+                                 outcome classified unknown"
+                            );
+                        }
                         guard.take_pending_dispatch()
                     };
                     let Some(work) = work else {

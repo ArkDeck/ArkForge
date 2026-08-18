@@ -536,6 +536,77 @@ impl JobRegistry {
         None
     }
 
+    /// Classifies every control request left unanswered past its deadline.
+    ///
+    /// The request names its deadline, and the design lets the authority
+    /// answer, refuse, or say nothing — but "nothing" used to leave the job
+    /// parked at `permitConsuming` until an operator dug the journal out of a
+    /// CBOR file. Enforced here, by the same sweep that feeds the dispatcher,
+    /// silence now costs one deadline instead of a bench.
+    ///
+    /// The classification is the refused-receipt one, for the refused-receipt
+    /// reason: an unanswered request is not "nothing happened" — the authority
+    /// may have acted and never reported (architecture.md 14.1).
+    pub fn expire_stale_controls(&mut self, now_epoch_ms: u64) -> Vec<String> {
+        let mut expired = Vec::new();
+        for (job_id, job) in self.jobs.iter_mut() {
+            let Some(Pending::Control { request, .. }) = &job.pending else {
+                continue;
+            };
+            if now_epoch_ms <= request.deadline_epoch_ms {
+                continue;
+            }
+            let step_id = request.step_id.clone();
+            let reason = format!(
+                "managed control {} request {} expired unanswered (deadline {} ms, now {} ms)",
+                request.action.as_str(),
+                request.request_id,
+                request.deadline_epoch_ms,
+                now_epoch_ms
+            );
+            let (Ok(subject), Ok(outcome_key), Ok(reason_key)) =
+                (id(&step_id), id("outcome"), id("reason"))
+            else {
+                continue;
+            };
+            // Durable first, state after: an expiry the journal cannot record
+            // is left pending and retried on the next sweep, rather than moved
+            // to a state the journal never explains.
+            let Ok(digest) = job.journal.append(
+                JournalRecordKind::OutcomeClassified,
+                now_epoch_ms,
+                1,
+                subject,
+                vec![
+                    (outcome_key, "outcomeUnknown".to_string()),
+                    (reason_key, reason.clone()),
+                ],
+            ) else {
+                continue;
+            };
+            if job.move_to(JobState::OutcomeUnknown).is_err() {
+                continue;
+            }
+            job.pending = None;
+            job.stopped = Some(JobStop::ControlOutcomeUnknown {
+                step_id,
+                reason: reason.clone(),
+            });
+            job.publish(JobEventKind::OutcomeClassified, now_epoch_ms, digest, |event| {
+                event.facts.push(KeyValue {
+                    key: "outcome".into(),
+                    value: "outcomeUnknown".into(),
+                });
+                event.facts.push(KeyValue {
+                    key: "reason".into(),
+                    value: reason.clone(),
+                });
+            });
+            expired.push(job_id.clone());
+        }
+        expired
+    }
+
     /// Records what the dispatcher observed and advances the job.
     ///
     /// An outcome of `OutcomeUnknown` stops the job there. It does not retry,
