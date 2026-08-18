@@ -229,6 +229,9 @@ fn random_windows(capacity: u64) -> Vec<(u64, u64)> {
 mod tests {
     use super::*;
 
+    const REAL_LOADER_EVIDENCE: &str =
+        include_str!("../../tests/evidence/2026-08-18-task-nru-001-read-parity.txt");
+
     #[test]
     fn random_windows_are_reproducible_and_bounded() {
         let capacity = 31_250_000;
@@ -238,5 +241,29 @@ mod tests {
         assert!(first
             .iter()
             .all(|(begin, sectors)| *begin + *sectors <= capacity));
+    }
+
+    #[test]
+    fn checked_in_loader_evidence_covers_nru_001_without_raw_identity() {
+        assert!(REAL_LOADER_EVIDENCE.contains("result=PASS"));
+        assert!(REAL_LOADER_EVIDENCE.contains("effect=readOnly"));
+        assert!(REAL_LOADER_EVIDENCE.contains("destructive dispatch = 0"));
+        assert!(REAL_LOADER_EVIDENCE.contains("bcd_usb=0201 mode_bit=loader"));
+        assert!(REAL_LOADER_EVIDENCE.contains("partition_count=15 partition_semantics=equal"));
+        assert!(REAL_LOADER_EVIDENCE.contains("window=0+1 "));
+        assert!(REAL_LOADER_EVIDENCE.contains("window=1+33 "));
+        assert_eq!(
+            REAL_LOADER_EVIDENCE
+                .lines()
+                .filter(|line| line.starts_with("window="))
+                .count(),
+            6,
+            "first sector, primary and backup GPT, and three random windows"
+        );
+        assert!(REAL_LOADER_EVIDENCE
+            .lines()
+            .filter(|line| line.starts_with("window="))
+            .all(|line| line.ends_with("parity=equal")));
+        assert!(!REAL_LOADER_EVIDENCE.lines().any(|line| line.starts_with("serial=")));
     }
 }

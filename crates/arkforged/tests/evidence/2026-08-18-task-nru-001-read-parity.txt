@@ -1,0 +1,21 @@
+TASK-NRU-001 native/vendor read parity
+captured_at=2026-08-18 Asia/Shanghai
+implementation_commit=a93579863cde712439fa3553e186a089eaa0528d
+executor=arkforge-rockusb-parity
+effect=readOnly
+result=PASS
+destructive dispatch = 0
+rkdeveloptool_sha256=231a05ef9aae17f9c8b8d3801b3ec2f4a4653291782021fe65517610aa11c79e
+iokit_topology=01120000
+vendor_bus_port=102
+bcd_usb=0201 mode_bit=loader
+serial_digest=94a25a89c9c214dc9f8a0cf1b2cb3703a466e132a97fa015dfdbebfc65546f42
+capacity_sectors=61071360
+partition_count=15 partition_semantics=equal
+window=0+1 bytes=512 sha256=b367f137ae4d28d858bb6eaa534b877b4adfd8611ae376f814b9ec993d1372cb parity=equal
+window=1+33 bytes=16896 sha256=382efae4ef2fa0373b44417c16edc1591d09992616b9ad51f146bde0db972c9e parity=equal
+window=61071327+33 bytes=16896 sha256=287c3bd750bde51ba874f147b0c7e6d2e6a683abc85bb0cbad1a9be0cf627f70 parity=equal
+window=32872433+8 bytes=4096 sha256=3892007bcf2ef17138ec5e053998923ea1f9340362e2cd9787ea5e483fa78e98 parity=equal
+window=45392966+8 bytes=4096 sha256=3892007bcf2ef17138ec5e053998923ea1f9340362e2cd9787ea5e483fa78e98 parity=equal
+window=14775394+8 bytes=4096 sha256=3892007bcf2ef17138ec5e053998923ea1f9340362e2cd9787ea5e483fa78e98 parity=equal
+source_report_sha256=7f2947174ff148875f430a57efb446ca406027c0b14e451fbd2eee28874b4221
