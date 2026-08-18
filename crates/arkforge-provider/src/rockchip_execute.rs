@@ -168,6 +168,209 @@ pub trait FixedToolPort: fmt::Debug {
     fn run(&self, invocation: &ToolInvocation) -> Result<ToolReceipt, String>;
 }
 
+/// One device returned by the typed RockUSB port.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RockUsbDevice {
+    pub vendor_id: u16,
+    pub product_id: u16,
+    pub usb_specification: Option<u16>,
+    pub location: RockUsbLocation,
+    pub mode: String,
+    pub serial: Option<String>,
+    pub product_name: Option<String>,
+    pub vendor_name: Option<String>,
+    pub device_release: Option<u16>,
+}
+
+/// Location facts from the two migration backends are intentionally distinct.
+/// rkdeveloptool's `LocationID` is libusb `(bus << 8) | port`; IOKit's
+/// `locationID` is a controller topology bitfield. They describe attachment
+/// but are not numerically comparable.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RockUsbLocation {
+    IokitTopology(u32),
+    VendorBusPort(u64),
+}
+
+impl RockUsbDevice {
+    pub fn summary(&self) -> String {
+        let location = match self.location {
+            RockUsbLocation::IokitTopology(value) => format!("iokit={value:08x}"),
+            RockUsbLocation::VendorBusPort(value) => format!("vendor={value}"),
+        };
+        format!(
+            "vid={:04x} pid={:04x} {location} mode={}",
+            self.vendor_id, self.product_id, self.mode
+        )
+    }
+}
+
+/// A typed observation and the bytes/facts that evidence it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RockUsbObservation<T> {
+    pub value: T,
+    pub evidence_digest: Sha256Digest,
+}
+
+/// A mutation answer. `semantic_success == false` is deliberately not a
+/// failure return: the transport was reached, so the caller must record an
+/// unknown outcome with the attached diagnostics.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RockUsbMutationReceipt {
+    pub semantic_success: bool,
+    pub evidence_digest: Sha256Digest,
+    pub exited_zero: bool,
+    pub duration_ms: u64,
+    pub detail: String,
+}
+
+/// Whether a port refusal happened before an external interaction or after
+/// the selected backend may have reached the device.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum RockUsbPortFailure {
+    BeforeIo(String),
+    AfterIo(String),
+}
+
+impl fmt::Display for RockUsbPortFailure {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::BeforeIo(detail) => write!(f, "before I/O: {detail}"),
+            Self::AfterIo(detail) => write!(f, "after I/O began: {detail}"),
+        }
+    }
+}
+
+/// Closed, typed RockUSB semantics.  Vendor argv/stdout end at the adapter;
+/// the Provider and native implementation exchange only these values.
+pub trait RockUsbPort: fmt::Debug {
+    fn discover(&self) -> Result<RockUsbObservation<Vec<RockUsbDevice>>, RockUsbPortFailure>;
+
+    fn read_partition_table(
+        &self,
+    ) -> Result<RockUsbObservation<PartitionTableFact>, RockUsbPortFailure>;
+
+    fn read_sectors(
+        &self,
+        begin_sector: u64,
+        sectors: u64,
+        scratch: &Path,
+    ) -> Result<RockUsbObservation<Vec<u8>>, RockUsbPortFailure>;
+
+    fn write_partition_by_name(
+        &self,
+        _partition: &str,
+        _image: &Path,
+    ) -> Result<RockUsbMutationReceipt, RockUsbPortFailure> {
+        Err(RockUsbPortFailure::BeforeIo(
+            "this RockUSB port does not implement WRITE_LBA".into(),
+        ))
+    }
+
+    fn reset_device(&self) -> Result<RockUsbMutationReceipt, RockUsbPortFailure> {
+        Err(RockUsbPortFailure::BeforeIo(
+            "this RockUSB port does not implement DEVICE_RESET".into(),
+        ))
+    }
+}
+
+/// Transitional vendor adapter.  The subprocess vocabulary is private to
+/// this implementation and cannot leak into a native port caller.
+impl<T: FixedToolPort + ?Sized> RockUsbPort for T {
+    fn discover(&self) -> Result<RockUsbObservation<Vec<RockUsbDevice>>, RockUsbPortFailure> {
+        let receipt = legacy_run(self, &RockUsbCommand::ListDevices, 64 * 1024)?;
+        Ok(RockUsbObservation {
+            value: parse_ld(&receipt.stdout),
+            evidence_digest: receipt.evidence_digest(),
+        })
+    }
+
+    fn read_partition_table(
+        &self,
+    ) -> Result<RockUsbObservation<PartitionTableFact>, RockUsbPortFailure> {
+        let receipt = legacy_run(self, &RockUsbCommand::PrintPartitionTable, 256 * 1024)?;
+        let table = parse_ppt(&receipt.stdout)
+            .map_err(|error| RockUsbPortFailure::AfterIo(error.to_string()))?;
+        Ok(RockUsbObservation {
+            value: table,
+            evidence_digest: receipt.evidence_digest(),
+        })
+    }
+
+    fn read_sectors(
+        &self,
+        begin_sector: u64,
+        sectors: u64,
+        scratch: &Path,
+    ) -> Result<RockUsbObservation<Vec<u8>>, RockUsbPortFailure> {
+        let out = scratch.join(format!("vendor-read-{begin_sector}-{sectors}.bin"));
+        let receipt = legacy_run(
+            self,
+            &RockUsbCommand::ReadSectors {
+                begin_sector,
+                sectors,
+                out: out.clone(),
+            },
+            64 * 1024,
+        )?;
+        if !receipt.exited_zero {
+            return Err(RockUsbPortFailure::AfterIo(receipt.combined_output()));
+        }
+        let bytes = std::fs::read(&out)
+            .map_err(|error| RockUsbPortFailure::AfterIo(format!("{}: {error}", out.display())))?;
+        let _ = std::fs::remove_file(&out);
+        let expected = sectors
+            .checked_mul(TOOL_SECTOR_BYTES)
+            .and_then(|bytes| usize::try_from(bytes).ok())
+            .ok_or_else(|| RockUsbPortFailure::BeforeIo("read size overflows".into()))?;
+        if bytes.len() != expected {
+            return Err(RockUsbPortFailure::AfterIo(format!(
+                "vendor read returned {} bytes, expected {expected}",
+                bytes.len()
+            )));
+        }
+        Ok(RockUsbObservation {
+            evidence_digest: sha256(&bytes),
+            value: bytes,
+        })
+    }
+
+    fn write_partition_by_name(
+        &self,
+        partition: &str,
+        image: &Path,
+    ) -> Result<RockUsbMutationReceipt, RockUsbPortFailure> {
+        let receipt = legacy_run(
+            self,
+            &RockUsbCommand::WriteByName {
+                partition: partition.into(),
+                image: image.to_path_buf(),
+            },
+            1 << 20,
+        )?;
+        let detail = receipt.combined_output();
+        Ok(RockUsbMutationReceipt {
+            semantic_success: detail.contains(WRITE_SUCCESS_MARKER),
+            evidence_digest: receipt.evidence_digest(),
+            exited_zero: receipt.exited_zero,
+            duration_ms: receipt.duration_ms,
+            detail,
+        })
+    }
+
+    fn reset_device(&self) -> Result<RockUsbMutationReceipt, RockUsbPortFailure> {
+        let receipt = legacy_run(self, &RockUsbCommand::ResetDevice, 64 * 1024)?;
+        let detail = receipt.combined_output();
+        Ok(RockUsbMutationReceipt {
+            semantic_success: detail.contains(RESET_SUCCESS_MARKER),
+            evidence_digest: receipt.evidence_digest(),
+            exited_zero: receipt.exited_zero,
+            duration_ms: receipt.duration_ms,
+            detail,
+        })
+    }
+}
+
 /// An image extracted from a hashed archive and waiting to be written.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct StagedImage {
@@ -470,7 +673,7 @@ pub fn execute_action(
     record: &PrivateActionRecord,
     session: &mut ExecutionSession,
     profile: &DeviceProfile,
-    port: &dyn FixedToolPort,
+    port: &dyn RockUsbPort,
     scratch: &Path,
 ) -> Result<ActionOutcome, ExecutionError> {
     match action {
@@ -480,12 +683,20 @@ pub fn execute_action(
             control_action: control_action.clone(),
         }),
         StoredAction::ProbeLoader => {
-            let receipt = run(port, &RockUsbCommand::ListDevices, 64 * 1024)?;
+            let receipt = port
+                .discover()
+                .map_err(|error| port_error("discoverDevices", error))?;
+            let summary = receipt
+                .value
+                .iter()
+                .map(RockUsbDevice::summary)
+                .collect::<Vec<_>>()
+                .join("; ");
             Ok(outcome(
                 record,
                 ActionDisposition::SemanticSuccess,
-                vec![fact("ld", receipt.stdout.trim())],
-                receipt.evidence_digest(),
+                vec![fact("rockusbDevices", summary)],
+                receipt.evidence_digest,
                 None,
             ))
         }
@@ -507,8 +718,10 @@ pub fn execute_action(
                 });
             }
 
-            let receipt = run(port, &RockUsbCommand::PrintPartitionTable, 256 * 1024)?;
-            let observed = parse_ppt(&receipt.stdout)?;
+            let receipt = port
+                .read_partition_table()
+                .map_err(|error| port_error("readPartitionTable", error))?;
+            let observed = receipt.value;
             check_conformance(&observed, profile)?;
             let observed_digest = layout_digest_of(&observed);
             session.set_observed_table(observed);
@@ -519,17 +732,25 @@ pub fn execute_action(
                     fact("observedLayoutDigest", observed_digest.to_string()),
                     fact("planLayoutDigest", profile_digest.to_string()),
                 ],
-                receipt.evidence_digest(),
+                receipt.evidence_digest,
                 None,
             ))
         }
-        StoredAction::CharacterizeReadDomain => characterize_read_domain(record, session, port, scratch),
+        StoredAction::CharacterizeReadDomain => {
+            characterize_read_domain(record, session, port, scratch)
+        }
         StoredAction::WritePartition {
             partition,
             member,
             begin_sector,
         } => write_partition(
-            record, session, profile, port, partition, member, *begin_sector,
+            record,
+            session,
+            profile,
+            port,
+            partition,
+            member,
+            *begin_sector,
         ),
         StoredAction::ReadbackPartition {
             partition,
@@ -547,8 +768,10 @@ pub fn execute_action(
             *erased_medium_filler,
         ),
         StoredAction::ResetDevice => {
-            let receipt = run(port, &RockUsbCommand::ResetDevice, 64 * 1024)?;
-            let disposition = if receipt.combined_output().contains(RESET_SUCCESS_MARKER) {
+            let receipt = port
+                .reset_device()
+                .map_err(|error| port_error("resetDevice", error))?;
+            let disposition = if receipt.semantic_success {
                 ActionDisposition::SemanticSuccess
             } else {
                 // A reset whose marker never appeared may still have reset the
@@ -559,7 +782,7 @@ pub fn execute_action(
                 record,
                 disposition,
                 vec![fact("marker", RESET_SUCCESS_MARKER)],
-                receipt.evidence_digest(),
+                receipt.evidence_digest,
                 None,
             ))
         }
@@ -575,7 +798,7 @@ pub fn execute_action(
 fn characterize_read_domain(
     record: &PrivateActionRecord,
     session: &mut ExecutionSession,
-    port: &dyn FixedToolPort,
+    port: &dyn RockUsbPort,
     scratch: &Path,
 ) -> Result<ActionOutcome, ExecutionError> {
     let primary = read_sectors(port, scratch, 1, 1, "primary-table")?;
@@ -636,7 +859,7 @@ fn write_partition(
     record: &PrivateActionRecord,
     session: &mut ExecutionSession,
     profile: &DeviceProfile,
-    port: &dyn FixedToolPort,
+    port: &dyn RockUsbPort,
     partition: &str,
     member: &str,
     begin_sector: u64,
@@ -697,16 +920,10 @@ fn write_partition(
 
     // 5. Only now, the write. From the moment the child is spawned the device
     //    may have changed, so nothing after this point may report "no effect".
-    let receipt = run(
-        port,
-        &RockUsbCommand::WriteByName {
-            partition: partition.to_string(),
-            image: image.path.clone(),
-        },
-        1 << 20,
-    )?;
-    let output = receipt.combined_output();
-    let disposition = if output.contains(WRITE_SUCCESS_MARKER) {
+    let receipt = port
+        .write_partition_by_name(partition, &image.path)
+        .map_err(|error| port_error("writePartitionByName", error))?;
+    let disposition = if receipt.semantic_success {
         ActionDisposition::SemanticSuccess
     } else {
         // The tool was spawned. Whether it wrote anything is not knowable from
@@ -728,7 +945,8 @@ fn write_partition(
         // tool says why it stopped.
         facts.push(fact("toolExitedZero", receipt.exited_zero.to_string()));
         facts.push(fact("toolDurationMs", receipt.duration_ms.to_string()));
-        let tail: String = output
+        let tail: String = receipt
+            .detail
             .chars()
             .rev()
             .take(400)
@@ -742,7 +960,7 @@ fn write_partition(
         record,
         disposition,
         facts,
-        receipt.evidence_digest(),
+        receipt.evidence_digest,
         None,
     ))
 }
@@ -751,7 +969,7 @@ fn write_partition(
 fn readback_partition(
     record: &PrivateActionRecord,
     session: &mut ExecutionSession,
-    port: &dyn FixedToolPort,
+    port: &dyn RockUsbPort,
     scratch: &Path,
     partition: &str,
     begin_sector: u64,
@@ -873,49 +1091,47 @@ fn uniform_byte(bytes: &[u8]) -> Option<u8> {
 }
 
 fn read_sectors(
-    port: &dyn FixedToolPort,
+    port: &dyn RockUsbPort,
     scratch: &Path,
     begin_sector: u64,
     sectors: u64,
     label: &str,
 ) -> Result<Vec<u8>, ExecutionError> {
-    let out = scratch.join(format!("read-{label}-{begin_sector}-{sectors}.bin"));
-    let receipt = run(
-        port,
-        &RockUsbCommand::ReadSectors {
-            begin_sector,
-            sectors,
-            out: out.clone(),
-        },
-        64 * 1024,
-    )?;
-    if !receipt.exited_zero {
-        return Err(ExecutionError::ReadFailed {
-            begin_sector,
-            sectors,
-            output: receipt.combined_output(),
-        });
-    }
-    let bytes = std::fs::read(&out)
-        .map_err(|error| ExecutionError::ScratchUnusable(format!("{}: {error}", out.display())))?;
-    let _ = std::fs::remove_file(&out);
-    Ok(bytes)
+    let operation_scratch = scratch.join(format!("read-{label}"));
+    std::fs::create_dir_all(&operation_scratch).map_err(|error| {
+        ExecutionError::ScratchUnusable(format!("{}: {error}", operation_scratch.display()))
+    })?;
+    port.read_sectors(begin_sector, sectors, &operation_scratch)
+        .map(|receipt| receipt.value)
+        .map_err(|error| port_error("readSectors", error))
 }
 
-fn run(
-    port: &dyn FixedToolPort,
+fn legacy_run<T: FixedToolPort + ?Sized>(
+    port: &T,
     command: &RockUsbCommand,
     budget: usize,
-) -> Result<ToolReceipt, ExecutionError> {
+) -> Result<ToolReceipt, RockUsbPortFailure> {
     port.run(&ToolInvocation {
         argv: command.argv(),
         stdout_budget: budget,
         interruptible: command.is_interruptible(),
     })
-    .map_err(|message| ExecutionError::ToolPort {
-        argv: command.argv().join(" "),
-        message,
+    .map_err(|message| {
+        RockUsbPortFailure::AfterIo(format!("running {:?}: {message}", command.argv().join(" ")))
     })
+}
+
+fn port_error(operation: &str, error: RockUsbPortFailure) -> ExecutionError {
+    match error {
+        RockUsbPortFailure::BeforeIo(message) => ExecutionError::PortRefused {
+            operation: operation.into(),
+            message,
+        },
+        RockUsbPortFailure::AfterIo(message) => ExecutionError::ToolPort {
+            argv: operation.into(),
+            message,
+        },
+    }
 }
 
 fn outcome(
@@ -940,6 +1156,49 @@ fn fact(key: &str, value: impl Into<String>) -> (OpaqueId, String) {
         OpaqueId::new(key).expect("literal fact key"),
         value.into(),
     )
+}
+
+/// Parses the vendor adapter's `ld` rows into the typed device shape. Native
+/// discovery never passes through this parser.
+fn parse_ld(stdout: &str) -> Vec<RockUsbDevice> {
+    let mut devices = Vec::new();
+    for line in stdout.lines() {
+        if !line.contains("DevNo=") {
+            continue;
+        }
+        let normalized = line.replace(['\t', ','], " ");
+        let mut vendor_id = None;
+        let mut product_id = None;
+        let mut location = None;
+        let mut mode = None;
+        for field in normalized.split_whitespace() {
+            if let Some(value) = field.strip_prefix("Vid=") {
+                vendor_id = parse_hex(value).and_then(|value| u16::try_from(value).ok());
+            } else if let Some(value) = field.strip_prefix("Pid=") {
+                product_id = parse_hex(value).and_then(|value| u16::try_from(value).ok());
+            } else if let Some(value) = field.strip_prefix("LocationID=") {
+                location = parse_hex(value).map(RockUsbLocation::VendorBusPort);
+            } else if matches!(field, "Loader" | "Maskrom" | "Unknown") {
+                mode = Some(field.to_ascii_lowercase());
+            }
+        }
+        if let (Some(vendor_id), Some(product_id), Some(location), Some(mode)) =
+            (vendor_id, product_id, location, mode)
+        {
+            devices.push(RockUsbDevice {
+                vendor_id,
+                product_id,
+                usb_specification: None,
+                location,
+                mode,
+                serial: None,
+                product_name: None,
+                vendor_name: None,
+                device_release: None,
+            });
+        }
+    }
+    devices
 }
 
 /// Parses the tool's own partition table listing.
@@ -1115,6 +1374,10 @@ pub enum ExecutionError {
     /// The action belongs to the authority's control port.
     RequiresAuthority { control_action: String },
     ActionUndecodable(String),
+    PortRefused {
+        operation: String,
+        message: String,
+    },
     ToolPort { argv: String, message: String },
     LayoutMismatch {
         expected: Sha256Digest,
@@ -1158,6 +1421,9 @@ impl fmt::Display for ExecutionError {
             ),
             ExecutionError::ActionUndecodable(detail) => {
                 write!(f, "stored action cannot be decoded: {detail}")
+            }
+            ExecutionError::PortRefused { operation, message } => {
+                write!(f, "{operation} was refused before I/O: {message}")
             }
             ExecutionError::ToolPort { argv, message } => {
                 write!(f, "running {argv:?}: {message}")
@@ -1329,6 +1595,21 @@ mod tests {
         assert_eq!(table.entries[14].name, "userdata");
         assert_eq!(table.entries[14].offset_sectors, 19_955_712);
         assert_eq!(table.entries[14].size_sectors, None);
+    }
+
+    #[test]
+    fn vendor_discovery_is_projected_into_the_typed_loader_identity() {
+        let devices = parse_ld(
+            "DevNo=1\tVid=0x2207,Pid=0x350a,LocationID=10100000\tLoader\r\n",
+        );
+        assert_eq!(devices.len(), 1);
+        assert_eq!(devices[0].vendor_id, 0x2207);
+        assert_eq!(devices[0].product_id, 0x350a);
+        assert_eq!(
+            devices[0].location,
+            RockUsbLocation::VendorBusPort(0x1010_0000)
+        );
+        assert_eq!(devices[0].mode, "loader");
     }
 
     /// The device's fifteen rows and the archive's fifteen rows are the same

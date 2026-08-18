@@ -2,6 +2,7 @@
 resolver = "2"
 members = [
     "crates/arkforge-core",
+    "crates/arkforge-usb",
     "crates/arkforge-authority-api",
     "crates/arkforge-artifact",
     "crates/arkforge-transport",

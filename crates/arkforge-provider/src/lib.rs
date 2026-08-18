@@ -13,6 +13,7 @@
 
 pub mod rockchip;
 pub mod rockchip_execute;
+pub mod rockusb_protocol;
 pub mod unisoc;
 
 use arkforge_artifact::manifest::ArtifactManifest;

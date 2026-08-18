@@ -27,25 +27,29 @@ use arkforge_artifact::dayu200;
 use arkforge_artifact::staging::stage_members;
 use arkforge_core::outcome::ActionDisposition;
 use arkforge_provider::rockchip_execute::{
-    execute_action, ExecutionError, ExecutionSession, FixedToolPort, StagedImage, StoredAction,
+    execute_action, ExecutionError, ExecutionSession, FixedToolPort, RockUsbDevice,
+    RockUsbLocation, RockUsbObservation, RockUsbPort, RockUsbPortFailure, StagedImage,
+    StoredAction,
 };
+use arkforge_provider::rockusb_protocol::{RockUsbBulkIo, RockUsbProtocol};
 use core::fmt;
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicU32, Ordering};
 
 /// Runs private actions for one daemon's jobs.
 #[derive(Debug)]
 pub struct Dispatcher<'a> {
     store_root: PathBuf,
     work_root: PathBuf,
-    port: &'a dyn FixedToolPort,
+    port: &'a dyn RockUsbPort,
     sessions: BTreeMap<String, ExecutionSession>,
     /// Jobs whose images are already on disk, so staging happens once.
     staged: BTreeSet<String>,
 }
 
 impl<'a> Dispatcher<'a> {
-    pub fn new(store_root: impl Into<PathBuf>, work_root: impl Into<PathBuf>, port: &'a dyn FixedToolPort) -> Self {
+    pub fn new(store_root: impl Into<PathBuf>, work_root: impl Into<PathBuf>, port: &'a dyn RockUsbPort) -> Self {
         Dispatcher {
             store_root: store_root.into(),
             work_root: work_root.into(),
@@ -246,6 +250,7 @@ fn classify(error: ExecutionError) -> DispatchFailure {
         // process in existence.
         ExecutionError::RequiresAuthority { .. }
         | ExecutionError::ActionUndecodable(_)
+        | ExecutionError::PortRefused { .. }
         | ExecutionError::LayoutMismatch { .. }
         | ExecutionError::PartitionTableUnreadable(_)
         | ExecutionError::DeviceDeclaresUnknownPartitions(_)
@@ -278,6 +283,188 @@ fn classify(error: ExecutionError) -> DispatchFailure {
 pub struct HostFixedToolPort {
     executable: PathBuf,
     digest: arkforge_core::Sha256Digest,
+}
+
+/// Explicit name for the transitional vendor implementation.
+pub type VendorToolPort = HostFixedToolPort;
+
+/// Native DAYU200 Loader port.  Each semantic call claims the exact Loader
+/// interface, runs TEST_UNIT_READY, performs one bounded read operation, and
+/// releases the claim.  Mutation methods remain unavailable until NRU-002.
+#[derive(Debug)]
+pub struct NativeRockUsbPort {
+    usb: arkforge_usb::NativeUsb,
+    selector: arkforge_usb::UsbInterfaceSelector,
+    next_tag: AtomicU32,
+}
+
+impl Default for NativeRockUsbPort {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl NativeRockUsbPort {
+    pub fn new() -> Self {
+        Self {
+            usb: arkforge_usb::NativeUsb::new(30_000),
+            selector: arkforge_usb::UsbInterfaceSelector::dayu200_loader(),
+            next_tag: AtomicU32::new(1),
+        }
+    }
+
+    fn matching_descriptors(
+        &self,
+    ) -> Result<Vec<arkforge_usb::UsbInterfaceDescriptor>, RockUsbPortFailure> {
+        self.usb
+            .enumerate()
+            .map(|records| {
+                records
+                    .into_iter()
+                    .filter(|record| self.selector.matches(record))
+                    .collect()
+            })
+            .map_err(|error| RockUsbPortFailure::BeforeIo(error.to_string()))
+    }
+
+    fn with_protocol<T>(
+        &self,
+        operation: impl FnOnce(&mut RockUsbProtocol<'_>) -> Result<T, String>,
+    ) -> Result<T, RockUsbPortFailure> {
+        let interface = self
+            .usb
+            .open_unique(self.selector)
+            .map_err(|error| RockUsbPortFailure::BeforeIo(error.to_string()))?;
+        let mut io = NativeBulkIo { interface };
+        let first_tag = self.next_tag.fetch_add(0x100, Ordering::Relaxed);
+        let mut protocol = RockUsbProtocol::new(&mut io, first_tag);
+        protocol
+            .test_unit_ready()
+            .map_err(|error| RockUsbPortFailure::AfterIo(error.to_string()))?;
+        operation(&mut protocol).map_err(RockUsbPortFailure::AfterIo)
+    }
+
+    pub fn read_capacity_sectors(&self) -> Result<u64, RockUsbPortFailure> {
+        self.with_protocol(|protocol| {
+            protocol
+                .read_capacity_sectors()
+                .map_err(|error| error.to_string())
+        })
+    }
+
+    pub fn read_bytes(
+        &self,
+        begin_sector: u64,
+        sectors: u64,
+    ) -> Result<Vec<u8>, RockUsbPortFailure> {
+        self.with_protocol(|protocol| {
+            protocol
+                .read_lba(begin_sector, sectors)
+                .map_err(|error| error.to_string())
+        })
+    }
+}
+
+#[derive(Debug)]
+struct NativeBulkIo {
+    interface: Box<dyn arkforge_usb::BulkInterface>,
+}
+
+impl RockUsbBulkIo for NativeBulkIo {
+    fn write_all(&mut self, bytes: &[u8]) -> Result<(), String> {
+        self.interface
+            .write_all(bytes)
+            .map_err(|error| error.to_string())
+    }
+
+    fn read_exact(&mut self, bytes: &mut [u8]) -> Result<(), String> {
+        self.interface
+            .read_exact(bytes)
+            .map_err(|error| error.to_string())
+    }
+
+    fn read_some(&mut self, bytes: &mut [u8]) -> Result<usize, String> {
+        self.interface
+            .read_some(bytes)
+            .map_err(|error| error.to_string())
+    }
+}
+
+impl RockUsbPort for NativeRockUsbPort {
+    fn discover(&self) -> Result<RockUsbObservation<Vec<RockUsbDevice>>, RockUsbPortFailure> {
+        let descriptors = self.matching_descriptors()?;
+        if descriptors.len() != 1 {
+            return Err(RockUsbPortFailure::BeforeIo(format!(
+                "expected one exact DAYU200 Loader interface, observed {}",
+                descriptors.len()
+            )));
+        }
+        // A descriptor is not protocol evidence. Claim the interface and ask
+        // the Loader itself before publishing discovery.
+        self.with_protocol(|_| Ok(()))?;
+        let devices: Vec<RockUsbDevice> = descriptors
+            .into_iter()
+            .map(|descriptor| RockUsbDevice {
+                vendor_id: descriptor.vendor_id,
+                product_id: descriptor.product_id,
+                usb_specification: Some(descriptor.usb_specification),
+                location: RockUsbLocation::IokitTopology(descriptor.location_id),
+                mode: "loader".into(),
+                serial: descriptor.serial,
+                product_name: descriptor.product_name,
+                vendor_name: descriptor.vendor_name,
+                device_release: Some(descriptor.device_release),
+            })
+            .collect();
+        let mut evidence = Vec::new();
+        for device in &devices {
+            evidence.extend_from_slice(device.summary().as_bytes());
+            evidence.push(0);
+            evidence.extend_from_slice(device.serial.as_deref().unwrap_or("").as_bytes());
+            evidence.push(0);
+        }
+        Ok(RockUsbObservation {
+            value: devices,
+            evidence_digest: arkforge_core::digest::sha256(&evidence),
+        })
+    }
+
+    fn read_partition_table(
+        &self,
+    ) -> Result<
+        RockUsbObservation<arkforge_artifact::manifest::PartitionTableFact>,
+        RockUsbPortFailure,
+    > {
+        let table = self.with_protocol(|protocol| {
+            protocol
+                .read_partition_table()
+                .map_err(|error| error.to_string())
+        })?;
+        let mut evidence = Vec::new();
+        for entry in &table.entries {
+            evidence.extend_from_slice(entry.name.as_bytes());
+            evidence.push(b'@');
+            evidence.extend_from_slice(entry.offset_sectors.to_string().as_bytes());
+            evidence.push(b'\n');
+        }
+        Ok(RockUsbObservation {
+            value: table,
+            evidence_digest: arkforge_core::digest::sha256(&evidence),
+        })
+    }
+
+    fn read_sectors(
+        &self,
+        begin_sector: u64,
+        sectors: u64,
+        _scratch: &Path,
+    ) -> Result<RockUsbObservation<Vec<u8>>, RockUsbPortFailure> {
+        let bytes = self.read_bytes(begin_sector, sectors)?;
+        Ok(RockUsbObservation {
+            evidence_digest: arkforge_core::digest::sha256(&bytes),
+            value: bytes,
+        })
+    }
 }
 
 impl HostFixedToolPort {
@@ -654,8 +841,25 @@ mod tests {
     }
 
     #[test]
+    fn the_nru_001_native_port_refuses_mutations_before_usb_io() {
+        let port = NativeRockUsbPort::new();
+        assert!(matches!(
+            port.write_partition_by_name("uboot", Path::new("/never-opened.img")),
+            Err(RockUsbPortFailure::BeforeIo(_))
+        ));
+        assert!(matches!(
+            port.reset_device(),
+            Err(RockUsbPortFailure::BeforeIo(_))
+        ));
+    }
+
+    #[test]
     fn a_refusal_before_the_spawn_confirms_no_effect() {
         for error in [
+            ExecutionError::PortRefused {
+                operation: "writePartitionByName".into(),
+                message: "native writes are disabled in NRU-001".into(),
+            },
             ExecutionError::TargetNotAllowed("misc".into()),
             ExecutionError::TableNotObservedYet,
             ExecutionError::ReadDomainNotCharacterized,

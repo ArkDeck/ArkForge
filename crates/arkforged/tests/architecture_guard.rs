@@ -86,6 +86,8 @@ fn the_dependency_direction_matches_the_architecture() {
     let graph = dependency_graph();
     let allowed: BTreeMap<&str, BTreeSet<&str>> = BTreeMap::from([
         ("arkforge-core", BTreeSet::new()),
+        // CHG-2026-063: the sole IOKit/unsafe containment crate is a leaf.
+        ("arkforge-usb", BTreeSet::new()),
         ("arkforge-authority-api", BTreeSet::from(["arkforge-core"])),
         ("arkforge-artifact", BTreeSet::from(["arkforge-core"])),
         ("arkforge-transport", BTreeSet::from(["arkforge-core"])),
@@ -108,6 +110,7 @@ fn the_dependency_direction_matches_the_architecture() {
             "arkforged",
             BTreeSet::from([
                 "arkforge-core",
+                "arkforge-usb",
                 "arkforge-authority-api",
                 "arkforge-artifact",
                 "arkforge-transport",
@@ -131,6 +134,33 @@ fn the_dependency_direction_matches_the_architecture() {
                 permitted.contains(dependency.as_str()),
                 "{crate_name} depends on {dependency}, which architecture.md 4.3 does not permit"
             );
+        }
+    }
+}
+
+#[test]
+fn unsafe_is_confined_to_the_usb_ffi_crate() {
+    // AFD-0001 as revised by CHG-2026-063.  The direct IOKit ABI requires raw
+    // pointers, but no protocol, daemon, provider, or neutral core crate may
+    // acquire an unsafe surface as a side effect of that decision.
+    let root = repo_root();
+    for directory in ["crates", "adapters"] {
+        for entry in std::fs::read_dir(root.join(directory)).expect("workspace directory") {
+            let entry = entry.expect("directory entry");
+            if entry.file_name() == "arkforge-usb" {
+                continue;
+            }
+            let src = entry.path().join("src");
+            let mut sources = Vec::new();
+            collect(&src, &mut sources);
+            for (path, source) in sources {
+                let code = code_only(&source);
+                assert!(
+                    !code.contains("unsafe "),
+                    "{} contains unsafe code outside crates/arkforge-usb",
+                    path.display()
+                );
+            }
         }
     }
 }

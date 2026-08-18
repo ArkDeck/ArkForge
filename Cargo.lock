@@ -64,6 +64,10 @@ dependencies = [
 ]
 
 [[package]]
+name = "arkforge-usb"
+version = "0.1.0"
+
+[[package]]
 name = "arkforged"
 version = "0.1.0"
 dependencies = [
@@ -75,4 +79,5 @@ dependencies = [
  "arkforge-ipc",
  "arkforge-provider",
  "arkforge-transport",
+ "arkforge-usb",
 ]

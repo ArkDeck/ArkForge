@@ -24,6 +24,7 @@ path = "src/bin/arkforge-capture.rs"
 
 [dependencies]
 arkforge-core = { path = "../arkforge-core" }
+arkforge-usb = { path = "../arkforge-usb" }
 arkforge-authority-api = { path = "../arkforge-authority-api" }
 arkforge-artifact = { path = "../arkforge-artifact" }
 arkforge-transport = { path = "../arkforge-transport" }

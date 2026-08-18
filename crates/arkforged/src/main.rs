@@ -29,6 +29,24 @@ const DAEMON_VERSION: &str = env!("CARGO_PKG_VERSION");
 /// the failure this catches does not take longer, it takes forever (AD-015).
 const TOOL_SELF_TEST_SECONDS: u64 = 5;
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum RockUsbPortChoice {
+    Vendor,
+    Native,
+}
+
+impl RockUsbPortChoice {
+    fn parse(value: &str) -> Result<Self, String> {
+        match value {
+            "vendor" => Ok(Self::Vendor),
+            "native" => Ok(Self::Native),
+            other => Err(format!(
+                "--rockusb-port accepts native or vendor, not {other:?}"
+            )),
+        }
+    }
+}
+
 fn main() {
     let arguments: Vec<String> = std::env::args().skip(1).collect();
     match run(&arguments) {
@@ -43,12 +61,14 @@ fn main() {
 fn usage() -> String {
     concat!(
         "usage: arkforged --runtime-dir <dir> [--profile <file>]... [--transcript <file>]...\n",
-        "                 [--pair-from-stdin <epoch>] [--rkdeveloptool <path>]\n",
+        "                 [--pair-from-stdin <epoch>] [--rockusb-port native|vendor]\n",
+        "                 [--rkdeveloptool <path>]\n",
         "\n",
         "  --runtime-dir      where the content store and sockets live\n",
         "  --profile          a DeviceProfile YAML document (repeatable)\n",
         "  --transcript       a golden transcript to serve as a replay transport (repeatable)\n",
         "  --pair-from-stdin  read the authority's pairing secret from stdin and close it\n",
+        "  --rockusb-port     RockUSB backend; default vendor during NRU-001 migration\n",
         "  --rkdeveloptool    absolute path to the pinned vendor tool. Without it,\n",
         "                     startExecution refuses: a job that reached its first\n",
         "                     dispatch would have spent a permit before finding out\n",
@@ -82,6 +102,7 @@ fn run(arguments: &[String]) -> Result<(), String> {
     let mut profile_paths: Vec<PathBuf> = Vec::new();
     let mut transcript_paths: Vec<PathBuf> = Vec::new();
     let mut pairing_epoch: Option<u64> = None;
+    let mut rockusb_port = RockUsbPortChoice::Vendor;
     let mut rkdeveloptool: Option<PathBuf> = None;
     let mut rkdeveloptool_sha256: Option<String> = None;
     let mut require_release_signing = false;
@@ -107,6 +128,10 @@ fn run(arguments: &[String]) -> Result<(), String> {
             "--rkdeveloptool" => {
                 index += 1;
                 rkdeveloptool = Some(PathBuf::from(arguments.get(index).ok_or_else(usage)?));
+            }
+            "--rockusb-port" => {
+                index += 1;
+                rockusb_port = RockUsbPortChoice::parse(arguments.get(index).ok_or_else(usage)?)?;
             }
             "--rkdeveloptool-sha256" => {
                 index += 1;
@@ -195,131 +220,124 @@ fn run(arguments: &[String]) -> Result<(), String> {
     // The dispatcher runs on its own thread and takes the service lock only
     // for the hand-off at either end. A partition write takes minutes; holding
     // the lock across one would stop the event stream reporting on it.
-    let dispatch_handle = match rkdeveloptool {
-        Some(path) => {
-            // The pin is required, not optional. A tool bound without one is a
-            // tool nobody chose: the digest is part of the maturity
-            // combination (architecture.md 12.3), so binding whatever happens
-            // to be at that path would execute a combination nobody published.
-            let pinned = rkdeveloptool_sha256.ok_or(
-                "--rkdeveloptool requires --rkdeveloptool-sha256; binding a tool without \
+    let dispatch_handle = match rockusb_port {
+        RockUsbPortChoice::Vendor => match rkdeveloptool {
+            Some(path) => {
+                // The pin is required, not optional. A tool bound without one is a
+                // tool nobody chose: the digest is part of the maturity
+                // combination (architecture.md 12.3), so binding whatever happens
+                // to be at that path would execute a combination nobody published.
+                let pinned = rkdeveloptool_sha256.ok_or(
+                    "--rkdeveloptool requires --rkdeveloptool-sha256; binding a tool without \
                  pinning its bytes would execute a combination nobody published",
-            )?;
-            let expected = arkforge_core::Sha256Digest::parse_hex(&pinned)
-                .map_err(|error| format!("--rkdeveloptool-sha256: {error}"))?;
-            let port = arkforged::dispatch::HostFixedToolPort::open(&path)?;
-            if port.digest() != expected {
-                // Refuse to start rather than start unable to execute. An
-                // operator who swapped the binary should hear it now.
-                return Err(format!(
-                    "{} hashes to {}, and --rkdeveloptool-sha256 pins {expected}",
-                    path.display(),
-                    port.digest()
-                ));
-            }
-            // The digest settles which bytes these are; the signature settles
-            // whether macOS will let them start. Both are static facts about
-            // the file, so both are answered before anything depends on it —
-            // and the entitlement clause is answered here rather than by the
-            // self-test below, because "aborted in libsecinit" and "hung in
-            // dyld" look identical from the outside and have different fixes
-            // (AD-007 and AD-015 respectively).
-            let signing = arkforged::packaging::read_file(&path).map_err(|error| {
-                format!("{}: {error}", path.display())
-            })?;
-            let mode = if require_release_signing {
-                arkforged::packaging::ContractMode::Release
-            } else {
-                arkforged::packaging::ContractMode::Development
-            };
-            let violations = signing.violations(mode);
-            if !violations.is_empty() {
-                let detail = violations
-                    .iter()
-                    .map(|violation| format!("  {}: {violation}", violation.code()))
-                    .collect::<Vec<_>>()
-                    .join("\n");
-                return Err(format!(
-                    "{} does not meet the macOS packaging contract ({}):\n{detail}",
-                    path.display(),
-                    arkforged::packaging::CONTRACT_DOC
-                ));
-            }
-            {
-                let Ok(mut guard) = service.lock() else {
+                )?;
+                let expected = arkforge_core::Sha256Digest::parse_hex(&pinned)
+                    .map_err(|error| format!("--rkdeveloptool-sha256: {error}"))?;
+                let port = arkforged::dispatch::HostFixedToolPort::open(&path)?;
+                if port.digest() != expected {
+                    // Refuse to start rather than start unable to execute. An
+                    // operator who swapped the binary should hear it now.
+                    return Err(format!(
+                        "{} hashes to {}, and --rkdeveloptool-sha256 pins {expected}",
+                        path.display(),
+                        port.digest()
+                    ));
+                }
+                // The digest settles which bytes these are; the signature settles
+                // whether macOS will let them start. Both are static facts about
+                // the file, so both are answered before anything depends on it —
+                // and the entitlement clause is answered here rather than by the
+                // self-test below, because "aborted in libsecinit" and "hung in
+                // dyld" look identical from the outside and have different fixes
+                // (AD-007 and AD-015 respectively).
+                let signing = arkforged::packaging::read_file(&path)
+                    .map_err(|error| format!("{}: {error}", path.display()))?;
+                let mode = if require_release_signing {
+                    arkforged::packaging::ContractMode::Release
+                } else {
+                    arkforged::packaging::ContractMode::Development
+                };
+                let violations = signing.violations(mode);
+                if !violations.is_empty() {
+                    let detail = violations
+                        .iter()
+                        .map(|violation| format!("  {}: {violation}", violation.code()))
+                        .collect::<Vec<_>>()
+                        .join("\n");
+                    return Err(format!(
+                        "{} does not meet the macOS packaging contract ({}):\n{detail}",
+                        path.display(),
+                        arkforged::packaging::CONTRACT_DOC
+                    ));
+                }
+                {
+                    let Ok(mut guard) = service.lock() else {
                     return Err("the service lock is poisoned".into());
                 };
-                guard.bind_dispatcher(arkforge_engine::BoundToolchain {
-                    id: arkforge_core::ids::OpaqueId::new("rkdeveloptool")
-                        .map_err(|error| error.to_string())?,
-                    backend_digest: port.digest(),
-                });
-            }
-            // The digest settles which bytes these are. It does not settle
-            // whether they can run: quarantined bytes with the right digest
-            // hang in dyld (AD-015). `-v` is device-free, so proving it runs
-            // costs nothing but a fork.
-            let probe = port
-                .self_test(
-                    &["-v"],
-                    "rkdeveloptool",
-                    std::time::Duration::from_secs(TOOL_SELF_TEST_SECONDS),
-                )
-                .map_err(|failure| {
-                    format!(
-                        "{} passed its digest check and then failed to run.\n  {failure}\n\
-                         Omit --rkdeveloptool to start a read-only daemon instead.",
-                        path.display()
-                    )
-                })?;
-            println!("dispatch: {} ({})", path.display(), port.digest());
-            println!("  signing: {}", signing.summary());
-            println!(
-                "  self-test: {} in {} ms",
-                probe.first_line, probe.duration_ms
-            );
-            let store_root = runtime_dir.join("store");
-            let work_root = runtime_dir.join("work");
-            let dispatch_service = Arc::clone(&service);
-            Some(std::thread::spawn(move || {
-                let mut dispatcher =
-                    arkforged::dispatch::Dispatcher::new(store_root, work_root, &port);
-                loop {
-                    let work = {
-                        let Ok(mut guard) = dispatch_service.lock() else {
-                            return;
-                        };
-                        // The same sweep that feeds the dispatcher enforces the
-                        // control deadline, so a job whose authority went
-                        // silent is classified instead of parked forever.
-                        for job_id in guard.expire_stale_controls() {
-                            eprintln!(
-                                "arkforged: {job_id}: managed control expired unanswered; \
-                                 outcome classified unknown"
-                            );
-                        }
-                        guard.take_pending_dispatch()
-                    };
-                    let Some(work) = work else {
-                        std::thread::sleep(std::time::Duration::from_millis(200));
-                        continue;
-                    };
-                    let outcome = dispatcher.run(&work);
-                    let Ok(mut guard) = dispatch_service.lock() else {
-                        return;
-                    };
-                    if let Err(error) = guard.complete_dispatch(&work.job_id, outcome) {
-                        eprintln!("arkforged: recording {}: {error}", work.job_id);
-                    }
+                    guard.bind_dispatcher(arkforge_engine::BoundToolchain {
+                        id: arkforge_core::ids::OpaqueId::new("rkdeveloptool")
+                            .map_err(|error| error.to_string())?,
+                        backend_digest: port.digest(),
+                    });
                 }
-            }))
-        }
-        None => {
-            println!(
-                "dispatch: unavailable (no --rkdeveloptool; startExecution will refuse rather \
+                // The digest settles which bytes these are. It does not settle
+                // whether they can run: quarantined bytes with the right digest
+                // hang in dyld (AD-015). `-v` is device-free, so proving it runs
+                // costs nothing but a fork.
+                let probe = port
+                    .self_test(
+                        &["-v"],
+                        "rkdeveloptool",
+                        std::time::Duration::from_secs(TOOL_SELF_TEST_SECONDS),
+                    )
+                    .map_err(|failure| {
+                        format!(
+                            "{} passed its digest check and then failed to run.\n  {failure}\n\
+                         Omit --rkdeveloptool to start a read-only daemon instead.",
+                            path.display()
+                        )
+                    })?;
+                println!("dispatch: {} ({})", path.display(), port.digest());
+                println!("  signing: {}", signing.summary());
+                println!(
+                    "  self-test: {} in {} ms",
+                    probe.first_line, probe.duration_ms
+                );
+                Some(spawn_dispatcher(
+                    port,
+                    runtime_dir.join("store"),
+                    runtime_dir.join("work"),
+                    Arc::clone(&service),
+                ))
+            }
+            None => {
+                println!(
+                    "dispatch: unavailable (no --rkdeveloptool; startExecution will refuse rather \
                  than let a job park at its first dispatch)"
+                );
+                None
+            }
+        },
+        RockUsbPortChoice::Native => {
+            if rkdeveloptool.is_some() || rkdeveloptool_sha256.is_some() {
+                println!(
+                    "dispatch: native selected; rkdeveloptool flags are retained only for the \
+                     migration lane and are not opened or spawned"
+                );
+            }
+            println!(
+                "dispatch: native RockUSB read port (TEST_UNIT_READY/READ_LBA/GPT); \
+                 WRITE_LBA and DEVICE_RESET remain fail-closed until NRU-002"
             );
-            None
+            // NRU-001 does not publish a native toolchain maturity identity.
+            // Therefore startExecution remains unavailable even though the
+            // selected dispatcher can exercise the read-only A/B harness.
+            Some(spawn_dispatcher(
+                arkforged::dispatch::NativeRockUsbPort::new(),
+                runtime_dir.join("store"),
+                runtime_dir.join("work"),
+                Arc::clone(&service),
+            ))
         }
     };
 
@@ -348,6 +366,48 @@ fn run(arguments: &[String]) -> Result<(), String> {
     let _ = handle.join();
     drop(dispatch_handle);
     Ok(())
+}
+
+fn spawn_dispatcher<P>(
+    port: P,
+    store_root: PathBuf,
+    work_root: PathBuf,
+    dispatch_service: Arc<Mutex<Service>>,
+) -> std::thread::JoinHandle<()>
+where
+    P: arkforge_provider::rockchip_execute::RockUsbPort + Send + 'static,
+{
+    std::thread::spawn(move || {
+        let mut dispatcher = arkforged::dispatch::Dispatcher::new(store_root, work_root, &port);
+        loop {
+            let work = {
+                let Ok(mut guard) = dispatch_service.lock() else {
+                    return;
+                };
+                // The same sweep that feeds the dispatcher enforces the
+                // control deadline, so a job whose authority went silent is
+                // classified instead of parked forever.
+                for job_id in guard.expire_stale_controls() {
+                    eprintln!(
+                        "arkforged: {job_id}: managed control expired unanswered; outcome \
+                         classified unknown"
+                    );
+                }
+                guard.take_pending_dispatch()
+            };
+            let Some(work) = work else {
+                std::thread::sleep(std::time::Duration::from_millis(200));
+                continue;
+            };
+            let outcome = dispatcher.run(&work);
+            let Ok(mut guard) = dispatch_service.lock() else {
+                return;
+            };
+            if let Err(error) = guard.complete_dispatch(&work.job_id, outcome) {
+                eprintln!("arkforged: recording {}: {error}", work.job_id);
+            }
+        }
+    })
 }
 
 fn bind(path: &Path) -> Result<UnixListener, String> {
