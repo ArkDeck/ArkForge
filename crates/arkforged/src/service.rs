@@ -92,6 +92,14 @@ pub struct Service {
     /// What this daemon can do, as standing facts. Kept beside the secret
     /// rather than derived from it, because pairing is only half of it.
     readiness: ExecutionReadiness,
+    /// The exact RockUSB backend identity bound to the dispatcher.
+    ///
+    /// `ExecutionReadiness` deliberately carries only the id and digest needed
+    /// by the engine's start gate. Materialization additionally needs the
+    /// backend kind and version because those are part of the maturity key, so
+    /// the daemon retains the full identity here rather than reconstructing a
+    /// fixed-tool identity for the native protocol path.
+    rockchip_toolchain: Option<ToolchainIdentity>,
     /// The acceptance campaign this daemon runs, if any. Held because
     /// `bind_dispatcher` republishes maturity and must publish the same
     /// campaign the construction did — a binding that silently dropped it
@@ -192,6 +200,7 @@ impl Service {
             jobs: JobRegistry::new(store_root.join("jobs")),
             pairing: None,
             readiness: ExecutionReadiness::default(),
+            rockchip_toolchain: None,
             campaign: campaign.map(str::to_string),
         })
     }
@@ -246,7 +255,30 @@ impl Service {
             backend_digest: toolchain.backend_digest,
             ..fixed_tool_identity()
         };
+        self.bind_rockchip_dispatcher(toolchain, identity);
+    }
+
+    /// Binds ArkForge's in-process RockUSB implementation.
+    ///
+    /// Its backend digest is the currently running `arkforged` executable,
+    /// not a vendor binary and not a source-revision string. This makes every
+    /// build a distinct maturity combination and prevents an acceptance result
+    /// for one native build from authorizing another.
+    pub fn bind_native_dispatcher(&mut self, toolchain: BoundToolchain) {
+        let identity = ToolchainIdentity {
+            id: toolchain.id.clone(),
+            ..native_toolchain_identity(toolchain.backend_digest)
+        };
+        self.bind_rockchip_dispatcher(toolchain, identity);
+    }
+
+    fn bind_rockchip_dispatcher(
+        &mut self,
+        toolchain: BoundToolchain,
+        identity: ToolchainIdentity,
+    ) {
         self.readiness.dispatcher = Some(toolchain);
+        self.rockchip_toolchain = Some(identity.clone());
         for profile in self.profiles.values() {
             if !profile
                 .artifact_formats
@@ -271,22 +303,16 @@ impl Service {
         }
     }
 
-    /// The fixed-tool identity of the tool this daemon actually bound.
+    /// The RockUSB identity of the backend this daemon actually bound.
     ///
     /// Falls back to the published literal when nothing is bound, which is
     /// the read-only daemon: it materializes assessments, and an assessment
     /// names the combination it was assessed against rather than one it
     /// could run.
-    fn bound_fixed_tool_identity(&self) -> ToolchainIdentity {
-        match &self.readiness.dispatcher {
-            Some(bound) => ToolchainIdentity {
-                id: bound.id.clone(),
-                kind: ToolchainKind::FixedTool,
-                backend_digest: bound.backend_digest,
-                ..fixed_tool_identity()
-            },
-            None => fixed_tool_identity(),
-        }
+    fn bound_rockchip_toolchain_identity(&self) -> ToolchainIdentity {
+        self.rockchip_toolchain
+            .clone()
+            .unwrap_or_else(fixed_tool_identity)
     }
 
     /// What this daemon can do. Standing facts, established at startup.
@@ -1003,7 +1029,7 @@ impl Service {
             {
                 research_toolchain_identity()
             } else {
-                self.bound_fixed_tool_identity()
+                self.bound_rockchip_toolchain_identity()
             },
             host_platform: HostPlatform::current(),
             driver_facts_digest: driver_facts_digest(),
@@ -1211,6 +1237,17 @@ pub fn fixed_tool_identity() -> ToolchainIdentity {
         // exist on the reference host with different digests, which is why the
         // digest stays the discriminator and this is only provenance (AD-010).
         upstream_ref: Some("rkdeveloptool@304f073752fd25c854e1bcf05d8e7f925b1f4e14".into()),
+    }
+}
+
+/// The in-process RockUSB backend compiled into this `arkforged` build.
+pub fn native_toolchain_identity(backend_digest: Sha256Digest) -> ToolchainIdentity {
+    ToolchainIdentity {
+        id: OpaqueId::new("arkforged-native-rockusb").expect("literal identifier"),
+        kind: ToolchainKind::NativeProtocol,
+        version: Version::new(0, 1, 0),
+        backend_digest,
+        upstream_ref: option_env!("ARKFORGE_SOURCE_REVISION").map(str::to_string),
     }
 }
 
@@ -1463,4 +1500,75 @@ fn encode_data_impact(impact: &arkforge_core::DataImpact) -> Vec<KeyValue> {
             value: impact.secure_storage.as_str().to_string(),
         },
     ]
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use arkforge_core::identity::{MaturityKey, MaturityState};
+
+    const DAYU200_PROFILE: &str = include_str!("../../../profiles/dayu200.yaml");
+
+    fn native_binding_maturity(campaign: Option<&str>) -> MaturityState {
+        let root = std::env::temp_dir().join(format!(
+            "arkforged-native-maturity-{}-{:?}",
+            std::process::id(),
+            std::thread::current().id()
+        ));
+        let _ = std::fs::remove_dir_all(&root);
+        let profile = arkforge_core::profile::load(DAYU200_PROFILE).unwrap();
+        let mut service = Service::new(
+            &root,
+            vec![profile],
+            Vec::new(),
+            Clock::Fixed(1_754_380_800_000),
+            campaign,
+        )
+        .unwrap();
+        let backend_digest = arkforge_core::digest::sha256(b"one exact arkforged build");
+        service.bind_native_dispatcher(BoundToolchain {
+            id: OpaqueId::new("arkforged-native-rockusb").unwrap(),
+            backend_digest,
+        });
+
+        let toolchain = service.bound_rockchip_toolchain_identity();
+        assert_eq!(toolchain.kind, ToolchainKind::NativeProtocol);
+        assert_eq!(toolchain.backend_digest, backend_digest);
+        assert_eq!(
+            service.readiness.dispatcher.as_ref().unwrap().backend_digest,
+            backend_digest
+        );
+
+        let profile = service.profiles.values().next().unwrap();
+        let state = service.maturity.lookup(&MaturityKey {
+            provider: service.rockchip.identity().clone(),
+            profile: profile.identity().unwrap(),
+            artifact_format: service.rockchip.descriptor().artifact_formats[0].clone(),
+            toolchain,
+            host_platform: HostPlatform::current(),
+            driver_facts_digest: driver_facts_digest(),
+            evidence_set_digest: evidence_set_digest(),
+        });
+        drop(service);
+        let _ = std::fs::remove_dir_all(root);
+        state
+    }
+
+    #[test]
+    fn native_binding_without_a_campaign_is_hardware_gated() {
+        assert!(matches!(
+            native_binding_maturity(None),
+            MaturityState::HardwareGated { .. }
+        ));
+    }
+
+    #[test]
+    fn afa_ac_7_publishes_the_exact_native_build_as_a_hardware_campaign() {
+        assert_eq!(
+            native_binding_maturity(Some("AFA-AC-7")),
+            MaturityState::HardwareCampaign {
+                campaign: "AFA-AC-7".into()
+            }
+        );
+    }
 }

@@ -1,4 +1,4 @@
-//! Rockchip provider — DAYU200 read-only probe and plan materialization.
+//! Rockchip provider — DAYU200 probe, plan materialization and typed execution.
 //!
 //! architecture.md 16. This module is where `wlx`, `rl` and sector offsets are
 //! allowed to exist. They appear only inside private action bodies, which never
@@ -39,6 +39,7 @@ use arkforge_transport::TransportError;
 
 pub const PROVIDER_ID: &str = "arkforge.rockchip";
 pub const BACKEND_FIXED_TOOL: &str = "rkdeveloptool-fixed";
+pub const BACKEND_NATIVE_ROCKUSB: &str = "arkforged-native-rockusb";
 pub const BACKEND_REPLAY: &str = "transcript-replay";
 
 /// The mode the device must be in to accept writes.
@@ -774,6 +775,7 @@ impl FlashProvider for RockchipProvider {
             artifact_formats: vec![self.artifact_format()],
             backends: vec![
                 OpaqueId::new(BACKEND_FIXED_TOOL).expect("literal identifier"),
+                OpaqueId::new(BACKEND_NATIVE_ROCKUSB).expect("literal identifier"),
                 OpaqueId::new(BACKEND_REPLAY).expect("literal identifier"),
             ],
         }

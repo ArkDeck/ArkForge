@@ -222,6 +222,17 @@ pub struct RockUsbMutationReceipt {
     pub exited_zero: bool,
     pub duration_ms: u64,
     pub detail: String,
+    pub progress: Option<RockUsbWriteProgress>,
+}
+
+/// Native write progress derived from successful WRITE_LBA CSWs, never from
+/// parsing vendor stdout.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RockUsbWriteProgress {
+    pub payload_bytes: u64,
+    pub wire_sectors: u64,
+    pub chunks: u64,
+    pub payload_digest: Sha256Digest,
 }
 
 /// Whether a port refusal happened before an external interaction or after
@@ -257,10 +268,11 @@ pub trait RockUsbPort: fmt::Debug {
         scratch: &Path,
     ) -> Result<RockUsbObservation<Vec<u8>>, RockUsbPortFailure>;
 
-    fn write_partition_by_name(
+    fn write_partition(
         &self,
         _partition: &str,
-        _image: &Path,
+        _begin_sector: u64,
+        _image: &StagedImage,
     ) -> Result<RockUsbMutationReceipt, RockUsbPortFailure> {
         Err(RockUsbPortFailure::BeforeIo(
             "this RockUSB port does not implement WRITE_LBA".into(),
@@ -335,16 +347,17 @@ impl<T: FixedToolPort + ?Sized> RockUsbPort for T {
         })
     }
 
-    fn write_partition_by_name(
+    fn write_partition(
         &self,
         partition: &str,
-        image: &Path,
+        _begin_sector: u64,
+        image: &StagedImage,
     ) -> Result<RockUsbMutationReceipt, RockUsbPortFailure> {
         let receipt = legacy_run(
             self,
             &RockUsbCommand::WriteByName {
                 partition: partition.into(),
-                image: image.to_path_buf(),
+                image: image.path.clone(),
             },
             1 << 20,
         )?;
@@ -355,6 +368,7 @@ impl<T: FixedToolPort + ?Sized> RockUsbPort for T {
             exited_zero: receipt.exited_zero,
             duration_ms: receipt.duration_ms,
             detail,
+            progress: None,
         })
     }
 
@@ -367,6 +381,7 @@ impl<T: FixedToolPort + ?Sized> RockUsbPort for T {
             exited_zero: receipt.exited_zero,
             duration_ms: receipt.duration_ms,
             detail,
+            progress: None,
         })
     }
 }
@@ -903,10 +918,9 @@ fn write_partition(
         .clone();
     image.revalidate()?;
 
-    // 4. It has to fit inside the span the device's table gives it. `wlx`
-    //    resolves the address itself, so this is a refusal, not an addressing
-    //    step: a write that would cross into the next partition is refused
-    //    before the tool is spawned.
+    // 4. It has to fit inside the span the device's table gives it. This is a
+    //    refusal, not an addressing step: a write that would cross into the
+    //    next partition is refused before external I/O begins.
     let image_sectors = ceil_div(image.size_bytes, TOOL_SECTOR_BYTES);
     if let Some(size_sectors) = entry.size_sectors {
         if image_sectors > size_sectors {
@@ -918,16 +932,33 @@ fn write_partition(
         }
     }
 
-    // 5. Only now, the write. From the moment the child is spawned the device
-    //    may have changed, so nothing after this point may report "no effect".
+    // 5. Only now, the write. Address the native transfer from the observed
+    //    entry itself — the equality checks above prove the plan and Profile
+    //    agree, but neither is allowed to replace the device fact. From the
+    //    first external I/O the device may have changed, so nothing after this
+    //    point may report "no effect".
     let receipt = port
-        .write_partition_by_name(partition, &image.path)
-        .map_err(|error| port_error("writePartitionByName", error))?;
+        .write_partition(partition, entry.offset_sectors, &image)
+        .map_err(|error| port_error("writePartition", error))?;
+    if let Some(progress) = &receipt.progress {
+        if progress.payload_bytes != image.size_bytes || progress.payload_digest != image.sha256 {
+            return Err(ExecutionError::ToolPort {
+                argv: "writePartition".into(),
+                message: format!(
+                    "native WRITE_LBA sent {} bytes hashing to {}; staged image is {} bytes hashing to {}",
+                    progress.payload_bytes,
+                    progress.payload_digest,
+                    image.size_bytes,
+                    image.sha256
+                ),
+            });
+        }
+    }
     let disposition = if receipt.semantic_success {
         ActionDisposition::SemanticSuccess
     } else {
-        // The tool was spawned. Whether it wrote anything is not knowable from
-        // a missing marker (architecture.md 14.1).
+        // External I/O began. Whether it wrote anything is not knowable from
+        // an unconfirmed receipt (architecture.md 14.1).
         ActionDisposition::OutcomeUnknown
     };
 
@@ -938,6 +969,12 @@ fn write_partition(
         fact("imageBytes", image.size_bytes.to_string()),
         fact("beginSector", begin_sector.to_string()),
     ];
+    if let Some(progress) = &receipt.progress {
+        facts.push(fact("writePayloadBytes", progress.payload_bytes.to_string()));
+        facts.push(fact("writeWireSectors", progress.wire_sectors.to_string()));
+        facts.push(fact("writeChunks", progress.chunks.to_string()));
+        facts.push(fact("writePayloadSha256", progress.payload_digest.to_string()));
+    }
     if disposition != ActionDisposition::SemanticSuccess {
         // The receipt text itself is digested, not stored, so an unexplained
         // write used to leave nothing behind but "unknown" — the one fact that
@@ -1818,6 +1855,121 @@ mod tests {
         .unwrap_err();
         assert_eq!(error, ExecutionError::TableNotObservedYet);
         assert!(port.invocations.borrow().is_empty());
+    }
+
+    #[derive(Debug, Default)]
+    struct NativeRecordingPort {
+        writes: RefCell<Vec<(String, u64, PathBuf)>>,
+    }
+
+    impl RockUsbPort for NativeRecordingPort {
+        fn discover(
+            &self,
+        ) -> Result<RockUsbObservation<Vec<RockUsbDevice>>, RockUsbPortFailure> {
+            Err(RockUsbPortFailure::BeforeIo("not used by this test".into()))
+        }
+
+        fn read_partition_table(
+            &self,
+        ) -> Result<RockUsbObservation<PartitionTableFact>, RockUsbPortFailure> {
+            Err(RockUsbPortFailure::BeforeIo("not used by this test".into()))
+        }
+
+        fn read_sectors(
+            &self,
+            _begin_sector: u64,
+            _sectors: u64,
+            _scratch: &Path,
+        ) -> Result<RockUsbObservation<Vec<u8>>, RockUsbPortFailure> {
+            Err(RockUsbPortFailure::BeforeIo("not used by this test".into()))
+        }
+
+        fn write_partition(
+            &self,
+            partition: &str,
+            begin_sector: u64,
+            image: &StagedImage,
+        ) -> Result<RockUsbMutationReceipt, RockUsbPortFailure> {
+            self.writes.borrow_mut().push((
+                partition.to_string(),
+                begin_sector,
+                image.path.clone(),
+            ));
+            let bytes = std::fs::read(&image.path).unwrap();
+            Ok(RockUsbMutationReceipt {
+                semantic_success: true,
+                evidence_digest: sha256(b"typed native write receipt"),
+                // A native port has no child exit or stdout marker. These
+                // compatibility fields must not decide native success.
+                exited_zero: false,
+                duration_ms: 7,
+                detail: "no vendor stdout marker exists".into(),
+                progress: Some(RockUsbWriteProgress {
+                    payload_bytes: bytes.len() as u64,
+                    wire_sectors: ceil_div(bytes.len() as u64, TOOL_SECTOR_BYTES),
+                    chunks: 1,
+                    payload_digest: sha256(&bytes),
+                }),
+            })
+        }
+    }
+
+    #[test]
+    fn native_write_uses_the_observed_lba_and_projects_typed_progress() {
+        let root = std::env::temp_dir().join(format!(
+            "arkforge-native-write-{}-{:?}",
+            std::process::id(),
+            std::thread::current().id()
+        ));
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(&root).unwrap();
+        let image_path = root.join("uboot.img");
+        let bytes = vec![0xA5; 513];
+        std::fs::write(&image_path, &bytes).unwrap();
+
+        let mut session = ExecutionSession::new(BTreeMap::new());
+        session.set_observed_table(parse_ppt(REAL_PPT).unwrap());
+        session.stage(
+            "uboot.img".into(),
+            StagedImage {
+                member: "uboot.img".into(),
+                path: image_path.clone(),
+                size_bytes: bytes.len() as u64,
+                sha256: sha256(&bytes),
+            },
+        );
+        let port = NativeRecordingPort::default();
+
+        let outcome = write_partition(
+            &record_for_test(),
+            &mut session,
+            &profile(),
+            &port,
+            "uboot",
+            "uboot.img",
+            8192,
+        )
+        .unwrap();
+
+        assert_eq!(outcome.disposition, ActionDisposition::SemanticSuccess);
+        assert_eq!(
+            port.writes.borrow().as_slice(),
+            &[("uboot".into(), 8192, image_path)]
+        );
+        let value = |key: &str| {
+            outcome
+                .facts
+                .iter()
+                .find(|(candidate, _)| candidate.as_str() == key)
+                .map(|(_, value)| value.as_str())
+        };
+        assert_eq!(value("writePayloadBytes"), Some("513"));
+        assert_eq!(value("writeWireSectors"), Some("2"));
+        assert_eq!(value("writeChunks"), Some("1"));
+        let expected_digest = sha256(&bytes).to_hex();
+        assert_eq!(value("writePayloadSha256"), Some(expected_digest.as_str()));
+
+        let _ = std::fs::remove_dir_all(root);
     }
 
     fn record_for_test() -> PrivateActionRecord {

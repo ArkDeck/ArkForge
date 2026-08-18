@@ -41,6 +41,10 @@ providers:
     backend: rkdeveloptool-fixed
     minimumVersion: 1.32.0
     maximumVersionExclusive: 2.0.0
+  - id: arkforge.rockchip
+    backend: arkforged-native-rockusb
+    minimumVersion: 0.1.0
+    maximumVersionExclusive: 1.0.0
   # The transcript backend exists so contract tests can run the whole vertical
   # without a device. It can never be ProductionVerified — see
   # ToolchainKind::Replay.

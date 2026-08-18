@@ -68,7 +68,7 @@ fn usage() -> String {
         "  --profile          a DeviceProfile YAML document (repeatable)\n",
         "  --transcript       a golden transcript to serve as a replay transport (repeatable)\n",
         "  --pair-from-stdin  read the authority's pairing secret from stdin and close it\n",
-        "  --rockusb-port     RockUSB backend; default vendor during NRU-001 migration\n",
+        "  --rockusb-port     RockUSB backend; default vendor during the migration window\n",
         "  --rkdeveloptool    absolute path to the pinned vendor tool. Without it,\n",
         "                     startExecution refuses: a job that reached its first\n",
         "                     dispatch would have spent a permit before finding out\n",
@@ -325,13 +325,24 @@ fn run(arguments: &[String]) -> Result<(), String> {
                      migration lane and are not opened or spawned"
                 );
             }
+            let executable = std::env::current_exe()
+                .map_err(|error| format!("cannot identify the running arkforged build: {error}"))?;
+            let backend_digest = arkforged::dispatch::executable_digest(&executable)?;
+            {
+                let Ok(mut guard) = service.lock() else {
+                    return Err("the service lock is poisoned".into());
+                };
+                guard.bind_native_dispatcher(arkforge_engine::BoundToolchain {
+                    id: arkforge_core::ids::OpaqueId::new("arkforged-native-rockusb")
+                        .map_err(|error| error.to_string())?,
+                    backend_digest,
+                });
+            }
             println!(
-                "dispatch: native RockUSB read port (TEST_UNIT_READY/READ_LBA/GPT); \
-                 WRITE_LBA and DEVICE_RESET remain fail-closed until NRU-002"
+                "dispatch: native RockUSB port \
+                 (TEST_UNIT_READY/READ_LBA/GPT/WRITE_LBA/DEVICE_RESET); \
+                 arkforged-build-sha256={backend_digest}"
             );
-            // NRU-001 does not publish a native toolchain maturity identity.
-            // Therefore startExecution remains unavailable even though the
-            // selected dispatcher can exercise the read-only A/B harness.
             Some(spawn_dispatcher(
                 arkforged::dispatch::NativeRockUsbPort::new(),
                 runtime_dir.join("store"),

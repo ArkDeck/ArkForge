@@ -28,12 +28,13 @@ use arkforge_artifact::staging::stage_members;
 use arkforge_core::outcome::ActionDisposition;
 use arkforge_provider::rockchip_execute::{
     execute_action, ExecutionError, ExecutionSession, FixedToolPort, RockUsbDevice,
-    RockUsbLocation, RockUsbObservation, RockUsbPort, RockUsbPortFailure, StagedImage,
-    StoredAction,
+    RockUsbLocation, RockUsbMutationReceipt, RockUsbObservation, RockUsbPort,
+    RockUsbPortFailure, RockUsbWriteProgress, StagedImage, StoredAction,
 };
 use arkforge_provider::rockusb_protocol::{RockUsbBulkIo, RockUsbProtocol};
 use core::fmt;
 use std::collections::{BTreeMap, BTreeSet};
+use std::io::Read;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU32, Ordering};
 
@@ -208,18 +209,18 @@ impl<'a> Dispatcher<'a> {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum DispatchFailure {
     /// Refused before anything could reach the device. The device is untouched
-    /// and provably so: the tool was never spawned.
+    /// and provably so: no child process or native USB request was dispatched.
     BeforeAnyEffect(String),
-    /// The tool was spawned and did not report its own semantic success.
+    /// External I/O began and did not report its own semantic success.
     /// Whether the device changed is unknown (architecture.md 14.1).
-    AfterSpawn(String),
+    AfterExternalIo(String),
 }
 
 impl DispatchFailure {
     pub fn disposition(&self) -> ActionDisposition {
         match self {
             DispatchFailure::BeforeAnyEffect(_) => ActionDisposition::ConfirmedNoEffect,
-            DispatchFailure::AfterSpawn(_) => ActionDisposition::OutcomeUnknown,
+            DispatchFailure::AfterExternalIo(_) => ActionDisposition::OutcomeUnknown,
         }
     }
 }
@@ -228,16 +229,16 @@ impl fmt::Display for DispatchFailure {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             DispatchFailure::BeforeAnyEffect(detail) => {
-                write!(f, "refused before the tool was spawned: {detail}")
+                write!(f, "refused before external I/O began: {detail}")
             }
-            DispatchFailure::AfterSpawn(detail) => {
-                write!(f, "the tool ran and did not confirm its effect: {detail}")
+            DispatchFailure::AfterExternalIo(detail) => {
+                write!(f, "external I/O began and did not confirm its effect: {detail}")
             }
         }
     }
 }
 
-/// Which side of the spawn an execution error falls on.
+/// Which side of the first external I/O an execution error falls on.
 ///
 /// This is the only judgement this module makes, and it is the one that
 /// matters: everything the executor refuses *before* running the tool leaves
@@ -267,9 +268,9 @@ fn classify(error: ExecutionError) -> DispatchFailure {
         | ExecutionError::ScratchUnusable(_) => {
             DispatchFailure::BeforeAnyEffect(error.to_string())
         }
-        // The port was reached, so a child may have run.
+        // The port was reached, so a child or native USB request may have run.
         ExecutionError::ToolPort { .. } | ExecutionError::ReadFailed { .. } => {
-            DispatchFailure::AfterSpawn(error.to_string())
+            DispatchFailure::AfterExternalIo(error.to_string())
         }
     }
 }
@@ -288,9 +289,9 @@ pub struct HostFixedToolPort {
 /// Explicit name for the transitional vendor implementation.
 pub type VendorToolPort = HostFixedToolPort;
 
-/// Native DAYU200 Loader port.  Each semantic call claims the exact Loader
-/// interface, runs TEST_UNIT_READY, performs one bounded read operation, and
-/// releases the claim.  Mutation methods remain unavailable until NRU-002.
+/// Native DAYU200 Loader port. Each semantic call claims the exact Loader
+/// interface, confirms TEST_UNIT_READY, performs one typed protocol operation,
+/// and releases the claim.
 #[derive(Debug)]
 pub struct NativeRockUsbPort {
     usb: arkforge_usb::NativeUsb,
@@ -465,6 +466,173 @@ impl RockUsbPort for NativeRockUsbPort {
             value: bytes,
         })
     }
+
+    fn write_partition(
+        &self,
+        partition: &str,
+        begin_sector: u64,
+        image: &StagedImage,
+    ) -> Result<RockUsbMutationReceipt, RockUsbPortFailure> {
+        if partition.is_empty() {
+            return Err(RockUsbPortFailure::BeforeIo(
+                "native WRITE_LBA target has an empty partition name".into(),
+            ));
+        }
+        // Open and size the already revalidated staging file before claiming
+        // USB. A local path failure cannot become an unknown device effect.
+        let mut file = std::fs::File::open(&image.path).map_err(|error| {
+            RockUsbPortFailure::BeforeIo(format!("{}: {error}", image.path.display()))
+        })?;
+        let observed_bytes = file
+            .metadata()
+            .map_err(|error| {
+                RockUsbPortFailure::BeforeIo(format!("{}: {error}", image.path.display()))
+            })?
+            .len();
+        if observed_bytes != image.size_bytes {
+            return Err(RockUsbPortFailure::BeforeIo(format!(
+                "{} is {observed_bytes} bytes; the staged input is exactly {} bytes",
+                image.path.display(),
+                image.size_bytes
+            )));
+        }
+        let total_bytes = image.size_bytes;
+        if total_bytes == 0 {
+            return Err(RockUsbPortFailure::BeforeIo(format!(
+                "{} is empty; refusing a zero-length WRITE_LBA",
+                image.path.display()
+            )));
+        }
+        let total_sectors = total_bytes / 512 + u64::from(total_bytes % 512 != 0);
+        let end_sector = begin_sector.checked_add(total_sectors).ok_or_else(|| {
+            RockUsbPortFailure::BeforeIo("native WRITE_LBA sector range overflows".into())
+        })?;
+        if begin_sector > u32::MAX as u64 || end_sector > u32::MAX as u64 + 1 {
+            return Err(RockUsbPortFailure::BeforeIo(format!(
+                "native WRITE_LBA range {begin_sector}+{total_sectors} exceeds the protocol"
+            )));
+        }
+
+        let interface = self
+            .usb
+            .open_unique(self.selector)
+            .map_err(|error| RockUsbPortFailure::BeforeIo(error.to_string()))?;
+        let mut io = NativeBulkIo { interface };
+        let first_tag = self.next_tag.fetch_add(0x100, Ordering::Relaxed);
+        let mut protocol = RockUsbProtocol::new(&mut io, first_tag);
+        // Read-only readiness happens before the mutation boundary. If it
+        // fails, no WRITE_LBA CBW was sent and no write effect is possible.
+        protocol
+            .test_unit_ready()
+            .map_err(|error| RockUsbPortFailure::BeforeIo(error.to_string()))?;
+
+        let started = std::time::Instant::now();
+        let mut hasher = arkforge_core::digest::Sha256::new();
+        let mut buffer = vec![0u8; 128 * 512];
+        let mut remaining = total_bytes;
+        let mut position = begin_sector;
+        let mut chunks = 0u64;
+        let local_failure = |message: String, chunks: u64| {
+            if chunks == 0 {
+                RockUsbPortFailure::BeforeIo(message)
+            } else {
+                RockUsbPortFailure::AfterIo(message)
+            }
+        };
+        while remaining > 0 {
+            let wanted = usize::try_from(remaining.min(buffer.len() as u64))
+                .expect("bounded by the host buffer");
+            let mut filled = 0usize;
+            while filled < wanted {
+                let read = file.read(&mut buffer[filled..wanted]).map_err(|error| {
+                    local_failure(format!("{}: {error}", image.path.display()), chunks)
+                })?;
+                if read == 0 {
+                    return Err(local_failure(
+                        format!(
+                            "{} became shorter while native WRITE_LBA was reading it",
+                            image.path.display()
+                        ),
+                        chunks,
+                    ));
+                }
+                filled += read;
+            }
+            hasher.update(&buffer[..filled]);
+            let progress = protocol
+                .write_lba(position, &buffer[..filled])
+                .map_err(|error| RockUsbPortFailure::AfterIo(error.to_string()))?;
+            position += progress.wire_sectors;
+            remaining -= filled as u64;
+            chunks += progress.chunks;
+        }
+        let mut extra = [0u8; 1];
+        let extra_read = file
+            .read(&mut extra)
+            .map_err(|error| {
+                RockUsbPortFailure::AfterIo(format!("{}: {error}", image.path.display()))
+            })?;
+        if extra_read != 0 {
+            return Err(RockUsbPortFailure::AfterIo(format!(
+                "{} grew while native WRITE_LBA was reading it",
+                image.path.display()
+            )));
+        }
+
+        let payload_digest = hasher.finalize();
+        if payload_digest != image.sha256 {
+            return Err(RockUsbPortFailure::AfterIo(format!(
+                "native WRITE_LBA payload hashes to {payload_digest}; staged input is {}",
+                image.sha256
+            )));
+        }
+        let progress = RockUsbWriteProgress {
+            payload_bytes: total_bytes,
+            wire_sectors: total_sectors,
+            chunks,
+            payload_digest,
+        };
+        let detail = format!(
+            "native WRITE_LBA confirmed partition={partition} begin={begin_sector} bytes={} sectors={} chunks={}",
+            progress.payload_bytes, progress.wire_sectors, progress.chunks
+        );
+        Ok(RockUsbMutationReceipt {
+            semantic_success: true,
+            evidence_digest: arkforge_core::digest::sha256(
+                format!("{detail} sha256={payload_digest}").as_bytes(),
+            ),
+            exited_zero: true,
+            duration_ms: started.elapsed().as_millis() as u64,
+            detail,
+            progress: Some(progress),
+        })
+    }
+
+    fn reset_device(&self) -> Result<RockUsbMutationReceipt, RockUsbPortFailure> {
+        let interface = self
+            .usb
+            .open_unique(self.selector)
+            .map_err(|error| RockUsbPortFailure::BeforeIo(error.to_string()))?;
+        let mut io = NativeBulkIo { interface };
+        let first_tag = self.next_tag.fetch_add(0x100, Ordering::Relaxed);
+        let mut protocol = RockUsbProtocol::new(&mut io, first_tag);
+        protocol
+            .test_unit_ready()
+            .map_err(|error| RockUsbPortFailure::BeforeIo(error.to_string()))?;
+        let started = std::time::Instant::now();
+        protocol
+            .reset_device()
+            .map_err(|error| RockUsbPortFailure::AfterIo(error.to_string()))?;
+        let detail = "native DEVICE_RESET confirmed by matching CSW".to_string();
+        Ok(RockUsbMutationReceipt {
+            semantic_success: true,
+            evidence_digest: arkforge_core::digest::sha256(detail.as_bytes()),
+            exited_zero: true,
+            duration_ms: started.elapsed().as_millis() as u64,
+            detail,
+            progress: None,
+        })
+    }
 }
 
 impl HostFixedToolPort {
@@ -477,7 +645,7 @@ impl HostFixedToolPort {
         }
         Ok(HostFixedToolPort {
             executable: executable.to_path_buf(),
-            digest: file_digest(executable)?,
+            digest: executable_digest(executable)?,
         })
     }
 
@@ -513,7 +681,6 @@ impl HostFixedToolPort {
         expect_marker: &str,
         timeout: std::time::Duration,
     ) -> Result<ToolSelfTest, ToolSelfTestFailure> {
-        use std::io::Read;
         use std::process::Stdio;
 
         let started = std::time::Instant::now();
@@ -691,8 +858,7 @@ impl fmt::Display for ToolSelfTestFailure {
     }
 }
 
-fn file_digest(path: &Path) -> Result<arkforge_core::Sha256Digest, String> {
-    use std::io::Read;
+pub fn executable_digest(path: &Path) -> Result<arkforge_core::Sha256Digest, String> {
     let mut file =
         std::fs::File::open(path).map_err(|error| format!("{}: {error}", path.display()))?;
     let mut hasher = arkforge_core::digest::Sha256::new();
@@ -841,24 +1007,48 @@ mod tests {
     }
 
     #[test]
-    fn the_nru_001_native_port_refuses_mutations_before_usb_io() {
+    fn native_write_local_preconditions_are_checked_before_usb_io() {
         let port = NativeRockUsbPort::new();
         assert!(matches!(
-            port.write_partition_by_name("uboot", Path::new("/never-opened.img")),
+            port.write_partition(
+                "uboot",
+                0x2000,
+                &StagedImage {
+                    member: "uboot.img".into(),
+                    path: PathBuf::from("/never-opened.img"),
+                    size_bytes: 512,
+                    sha256: arkforge_core::digest::sha256(b"missing"),
+                }
+            ),
             Err(RockUsbPortFailure::BeforeIo(_))
         ));
+        let empty = std::env::temp_dir().join(format!(
+            "arkforge-native-empty-write-{}",
+            std::process::id()
+        ));
+        std::fs::write(&empty, []).unwrap();
         assert!(matches!(
-            port.reset_device(),
+            port.write_partition(
+                "uboot",
+                0x2000,
+                &StagedImage {
+                    member: "uboot.img".into(),
+                    path: empty.clone(),
+                    size_bytes: 0,
+                    sha256: arkforge_core::digest::sha256(b""),
+                }
+            ),
             Err(RockUsbPortFailure::BeforeIo(_))
         ));
+        let _ = std::fs::remove_file(empty);
     }
 
     #[test]
-    fn a_refusal_before_the_spawn_confirms_no_effect() {
+    fn a_refusal_before_external_io_confirms_no_effect() {
         for error in [
             ExecutionError::PortRefused {
                 operation: "writePartitionByName".into(),
-                message: "native writes are disabled in NRU-001".into(),
+                message: "port refused before external I/O".into(),
             },
             ExecutionError::TargetNotAllowed("misc".into()),
             ExecutionError::TableNotObservedYet,
@@ -879,7 +1069,7 @@ mod tests {
     }
 
     #[test]
-    fn a_failure_after_the_spawn_leaves_the_outcome_unknown() {
+    fn a_failure_after_external_io_leaves_the_outcome_unknown() {
         for error in [
             ExecutionError::ToolPort {
                 argv: "wlx system /staged/system.img".into(),

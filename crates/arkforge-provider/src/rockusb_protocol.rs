@@ -1,10 +1,11 @@
-//! Native RockUSB read protocol.
+//! Native RockUSB protocol.
 //!
 //! The byte grammar is pinned to
 //! `rockchip-linux/rkdeveloptool@304f073752fd25c854e1bcf05d8e7f925b1f4e14`:
 //! `RKComm.h` defines the 31-byte CBW and 13-byte CSW; `RKComm.cpp` defines
-//! TEST_UNIT_READY, READ_LBA and READ_FLASH_INFO.  This module owns only that
-//! pure byte protocol.  Claiming USB and moving bytes are separate concerns.
+//! TEST_UNIT_READY, READ_LBA, WRITE_LBA, READ_FLASH_INFO and DEVICE_RESET.
+//! This module owns only that pure byte protocol. Claiming USB and moving bytes
+//! are separate concerns.
 
 use arkforge_artifact::manifest::{GrammarBranch, PartitionEntryFact, PartitionTableFact};
 use core::fmt;
@@ -18,7 +19,9 @@ const CBW_SIGNATURE: [u8; 4] = *b"USBC";
 const CSW_SIGNATURE: [u8; 4] = *b"USBS";
 const TEST_UNIT_READY: u8 = 0x00;
 const READ_LBA: u8 = 0x14;
+const WRITE_LBA: u8 = 0x15;
 const READ_FLASH_INFO: u8 = 0x1a;
+const DEVICE_RESET: u8 = 0xff;
 const DEVICE_STRING: &str = "rk29xxnand";
 
 /// The safe transport surface consumed by the protocol engine.
@@ -28,12 +31,21 @@ pub trait RockUsbBulkIo: fmt::Debug {
     fn read_exact(&mut self, bytes: &mut [u8]) -> Result<(), String>;
 }
 
-/// The native read subset.  A fresh instance owns one exclusively claimed USB
+/// The native protocol engine. A fresh instance owns one exclusively claimed USB
 /// interface, so tags and CSWs cannot be interleaved with another caller.
 #[derive(Debug)]
 pub struct RockUsbProtocol<'a> {
     io: &'a mut dyn RockUsbBulkIo,
     next_tag: u32,
+}
+
+/// Structured progress from native WRITE_LBA. `payload_bytes` excludes the
+/// zero padding in the final sector; `wire_sectors` includes it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct RockUsbTransferProgress {
+    pub payload_bytes: u64,
+    pub wire_sectors: u64,
+    pub chunks: u64,
 }
 
 impl<'a> RockUsbProtocol<'a> {
@@ -56,7 +68,7 @@ impl<'a> RockUsbProtocol<'a> {
     pub fn read_capacity_sectors(&mut self) -> Result<u64, RockUsbProtocolError> {
         let tag = self.next_tag;
         self.next_tag = self.next_tag.wrapping_add(1);
-        let cbw = command_block(tag, READ_FLASH_INFO, 0, 0, 11, 6);
+        let cbw = command_block(tag, READ_FLASH_INFO, 0, 0, 11, 6, true);
         self.io
             .write_all(&cbw)
             .map_err(RockUsbProtocolError::Transport)?;
@@ -126,6 +138,53 @@ impl<'a> RockUsbProtocol<'a> {
         Ok(all)
     }
 
+    /// Writes bytes at an exact LBA using the pinned vendor tool's 128-sector
+    /// chunks. The final partial sector is zero-filled, matching `write_lba`.
+    pub fn write_lba(
+        &mut self,
+        begin_sector: u64,
+        bytes: &[u8],
+    ) -> Result<RockUsbTransferProgress, RockUsbProtocolError> {
+        if bytes.is_empty() {
+            return Err(RockUsbProtocolError::EmptyWrite);
+        }
+        let sectors = ceil_div(bytes.len(), LOGICAL_BLOCK_BYTES) as u64;
+        validate_sector_range(begin_sector, sectors)?;
+
+        let mut position = begin_sector;
+        let mut offset = 0usize;
+        let mut chunks = 0u64;
+        let max_chunk_bytes = VENDOR_PARITY_CHUNK_SECTORS as usize * LOGICAL_BLOCK_BYTES;
+        while offset < bytes.len() {
+            let payload_end = (offset + max_chunk_bytes).min(bytes.len());
+            let payload = &bytes[offset..payload_end];
+            let chunk_sectors = ceil_div(payload.len(), LOGICAL_BLOCK_BYTES) as u16;
+            let wire_bytes = chunk_sectors as usize * LOGICAL_BLOCK_BYTES;
+            let mut padded = Vec::new();
+            let data = if payload.len() == wire_bytes {
+                payload
+            } else {
+                padded.resize(wire_bytes, 0);
+                padded[..payload.len()].copy_from_slice(payload);
+                &padded
+            };
+            self.execute_out(WRITE_LBA, position as u32, chunk_sectors, data, 10)?;
+            position += chunk_sectors as u64;
+            offset = payload_end;
+            chunks += 1;
+        }
+        Ok(RockUsbTransferProgress {
+            payload_bytes: bytes.len() as u64,
+            wire_sectors: sectors,
+            chunks,
+        })
+    }
+
+    /// Reboots the Loader after its CSW confirms DEVICE_RESET.
+    pub fn reset_device(&mut self) -> Result<(), RockUsbProtocolError> {
+        self.execute_out(DEVICE_RESET, 0, 0, &[], 6)
+    }
+
     /// Reads and validates the device's primary GPT, then projects it into the
     /// same partition semantics the vendor `ppt` adapter exposes.
     pub fn read_partition_table(&mut self) -> Result<PartitionTableFact, RockUsbProtocolError> {
@@ -163,6 +222,7 @@ impl<'a> RockUsbProtocol<'a> {
             sectors,
             transfer_bytes,
             command_length,
+            true,
         );
         self.io
             .write_all(&cbw)
@@ -180,6 +240,44 @@ impl<'a> RockUsbProtocol<'a> {
         validate_csw(&csw, tag)?;
         Ok(data)
     }
+
+    fn execute_out(
+        &mut self,
+        opcode: u8,
+        address: u32,
+        sectors: u16,
+        data: &[u8],
+        command_length: u8,
+    ) -> Result<(), RockUsbProtocolError> {
+        let transfer_bytes = u32::try_from(data.len())
+            .map_err(|_| RockUsbProtocolError::TransferTooLarge {
+                sectors: sectors as u64,
+            })?;
+        let tag = self.next_tag;
+        self.next_tag = self.next_tag.wrapping_add(1);
+        let cbw = command_block(
+            tag,
+            opcode,
+            address,
+            sectors,
+            transfer_bytes,
+            command_length,
+            false,
+        );
+        self.io
+            .write_all(&cbw)
+            .map_err(RockUsbProtocolError::Transport)?;
+        if !data.is_empty() {
+            self.io
+                .write_all(data)
+                .map_err(RockUsbProtocolError::Transport)?;
+        }
+        let mut csw = [0u8; CSW_BYTES];
+        self.io
+            .read_exact(&mut csw)
+            .map_err(RockUsbProtocolError::Transport)?;
+        validate_csw(&csw, tag)
+    }
 }
 
 fn command_block(
@@ -189,12 +287,13 @@ fn command_block(
     sectors: u16,
     transfer_bytes: u32,
     command_length: u8,
+    direction_in: bool,
 ) -> [u8; CBW_BYTES] {
     let mut cbw = [0u8; CBW_BYTES];
     cbw[0..4].copy_from_slice(&CBW_SIGNATURE);
     cbw[4..8].copy_from_slice(&tag.to_le_bytes());
     cbw[8..12].copy_from_slice(&transfer_bytes.to_le_bytes());
-    cbw[12] = 0x80; // DIRECTION_IN
+    cbw[12] = if direction_in { 0x80 } else { 0x00 };
     cbw[13] = 0; // LUN
     cbw[14] = command_length;
     cbw[15] = opcode;
@@ -202,6 +301,25 @@ fn command_block(
     cbw[17..21].copy_from_slice(&address.to_be_bytes());
     cbw[22..24].copy_from_slice(&sectors.to_be_bytes());
     cbw
+}
+
+fn validate_sector_range(
+    begin_sector: u64,
+    sectors: u64,
+) -> Result<(), RockUsbProtocolError> {
+    let end = begin_sector
+        .checked_add(sectors)
+        .ok_or(RockUsbProtocolError::AddressOutOfRange {
+            begin_sector,
+            sectors,
+        })?;
+    if begin_sector > u32::MAX as u64 || end > u32::MAX as u64 + 1 {
+        return Err(RockUsbProtocolError::AddressOutOfRange {
+            begin_sector,
+            sectors,
+        });
+    }
+    Ok(())
 }
 
 fn validate_csw(bytes: &[u8; CSW_BYTES], expected_tag: u32) -> Result<(), RockUsbProtocolError> {
@@ -394,6 +512,7 @@ pub enum RockUsbProtocolError {
     Transport(String),
     AddressOutOfRange { begin_sector: u64, sectors: u64 },
     TransferTooLarge { sectors: u64 },
+    EmptyWrite,
     CswSignature([u8; 4]),
     CswTag { expected: u32, observed: u32 },
     CommandFailed { status: u8, residue: u32 },
@@ -415,6 +534,7 @@ impl fmt::Display for RockUsbProtocolError {
             Self::TransferTooLarge { sectors } => {
                 write!(f, "{sectors} sectors do not fit in host memory")
             }
+            Self::EmptyWrite => f.write_str("WRITE_LBA payload is empty"),
             Self::CswSignature(observed) => {
                 write!(f, "CSW signature is {:02x?}, expected USBS", observed)
             }
@@ -514,6 +634,71 @@ mod tests {
         assert_eq!(cbw[15], READ_LBA);
         assert_eq!(&cbw[17..21], &1u32.to_be_bytes());
         assert_eq!(&cbw[22..24], &1u16.to_be_bytes());
+    }
+
+    #[test]
+    fn write_lba_uses_the_pinned_out_cbw_and_zero_pads_only_the_final_sector() {
+        let payload = vec![0x5au8; LOGICAL_BLOCK_BYTES + 1];
+        let mut io = ScriptedIo::with_reads(vec![csw(0x2233_4455)]);
+        let mut protocol = RockUsbProtocol::new(&mut io, 0x2233_4455);
+        let progress = protocol.write_lba(0x2000, &payload).unwrap();
+        assert_eq!(
+            progress,
+            RockUsbTransferProgress {
+                payload_bytes: 513,
+                wire_sectors: 2,
+                chunks: 1,
+            }
+        );
+        let writes = io.writes.borrow();
+        assert_eq!(writes.len(), 2);
+        let cbw = &writes[0];
+        assert_eq!(&cbw[0..4], b"USBC");
+        assert_eq!(&cbw[8..12], &1024u32.to_le_bytes());
+        assert_eq!(cbw[12], 0x00);
+        assert_eq!(cbw[14], 10);
+        assert_eq!(cbw[15], WRITE_LBA);
+        assert_eq!(&cbw[17..21], &0x2000u32.to_be_bytes());
+        assert_eq!(&cbw[22..24], &2u16.to_be_bytes());
+        assert_eq!(&writes[1][..payload.len()], &payload);
+        assert!(writes[1][payload.len()..].iter().all(|byte| *byte == 0));
+    }
+
+    #[test]
+    fn write_lba_chunks_at_the_vendor_128_sector_boundary() {
+        let payload = vec![0xabu8; 129 * LOGICAL_BLOCK_BYTES];
+        let mut io = ScriptedIo::with_reads(vec![csw(5), csw(6)]);
+        let mut protocol = RockUsbProtocol::new(&mut io, 5);
+        let progress = protocol.write_lba(9, &payload).unwrap();
+        assert_eq!(progress.wire_sectors, 129);
+        assert_eq!(progress.chunks, 2);
+        let writes = io.writes.borrow();
+        assert_eq!(writes.len(), 4);
+        assert_eq!(&writes[0][17..21], &9u32.to_be_bytes());
+        assert_eq!(&writes[0][22..24], &128u16.to_be_bytes());
+        assert_eq!(&writes[2][17..21], &137u32.to_be_bytes());
+        assert_eq!(&writes[2][22..24], &1u16.to_be_bytes());
+    }
+
+    #[test]
+    fn device_reset_has_no_data_stage_and_requires_its_csw() {
+        let mut io = ScriptedIo::with_reads(vec![csw(77)]);
+        let mut protocol = RockUsbProtocol::new(&mut io, 77);
+        protocol.reset_device().unwrap();
+        let writes = io.writes.borrow();
+        assert_eq!(writes.len(), 1);
+        assert_eq!(&writes[0][8..12], &0u32.to_le_bytes());
+        assert_eq!(writes[0][12], 0x00);
+        assert_eq!(writes[0][14], 6);
+        assert_eq!(writes[0][15], DEVICE_RESET);
+    }
+
+    #[test]
+    fn an_empty_write_is_refused_before_a_cbw() {
+        let mut io = ScriptedIo::default();
+        let mut protocol = RockUsbProtocol::new(&mut io, 1);
+        assert_eq!(protocol.write_lba(0, &[]), Err(RockUsbProtocolError::EmptyWrite));
+        assert!(io.writes.borrow().is_empty());
     }
 
     #[test]
