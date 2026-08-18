@@ -535,7 +535,21 @@ impl FixedToolPort for HostFixedToolPort {
         let truncate = |bytes: &[u8]| -> (String, bool) {
             let text = String::from_utf8_lossy(bytes).to_string();
             if text.len() > invocation.stdout_budget {
-                (text.chars().take(invocation.stdout_budget).collect(), true)
+                // Keep the tail, not the head. The semantic markers this
+                // receipt is judged by — "Write LBA from file (100%)", the
+                // reset marker — are the *last* thing the tool prints, after
+                // however much progress chatter came first. Keeping the head
+                // read a successful long write as outcome-unknown: the budget
+                // filled with progress lines and the marker fell off the end.
+                let kept: String = text
+                    .chars()
+                    .rev()
+                    .take(invocation.stdout_budget)
+                    .collect::<Vec<_>>()
+                    .into_iter()
+                    .rev()
+                    .collect();
+                (kept, true)
             } else {
                 (text, false)
             }

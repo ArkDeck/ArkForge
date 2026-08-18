@@ -656,6 +656,16 @@ impl JobRegistry {
                     key: "outcome".into(),
                     value: outcome.disposition.as_str().to_string(),
                 });
+                // The dispatch facts name what actually happened — the tool's
+                // exit, its duration, the tail of what it printed. Publishing
+                // only "unknown" made the authority's timeline end in a word
+                // while the explanation sat in this daemon's CBOR journal.
+                for (key, value) in &outcome.facts {
+                    event.facts.push(KeyValue {
+                        key: key.clone(),
+                        value: value.clone(),
+                    });
+                }
             });
             return Ok(());
         }

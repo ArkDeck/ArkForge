@@ -714,16 +714,34 @@ fn write_partition(
         ActionDisposition::OutcomeUnknown
     };
 
+    let mut facts = vec![
+        fact("partition", partition),
+        fact("member", member),
+        fact("imageSha256", image.sha256.to_string()),
+        fact("imageBytes", image.size_bytes.to_string()),
+        fact("beginSector", begin_sector.to_string()),
+    ];
+    if disposition != ActionDisposition::SemanticSuccess {
+        // The receipt text itself is digested, not stored, so an unexplained
+        // write used to leave nothing behind but "unknown" — the one fact that
+        // names the cause was the one fact thrown away. The tail is where the
+        // tool says why it stopped.
+        facts.push(fact("toolExitedZero", receipt.exited_zero.to_string()));
+        facts.push(fact("toolDurationMs", receipt.duration_ms.to_string()));
+        let tail: String = output
+            .chars()
+            .rev()
+            .take(400)
+            .collect::<Vec<_>>()
+            .into_iter()
+            .rev()
+            .collect();
+        facts.push(fact("toolOutputTail", tail));
+    }
     Ok(outcome(
         record,
         disposition,
-        vec![
-            fact("partition", partition),
-            fact("member", member),
-            fact("imageSha256", image.sha256.to_string()),
-            fact("imageBytes", image.size_bytes.to_string()),
-            fact("beginSector", begin_sector.to_string()),
-        ],
+        facts,
         receipt.evidence_digest(),
         None,
     ))
