@@ -36,7 +36,7 @@ use arkforge_provider::{
 };
 use arkforge_transport::replay::TranscriptTransport;
 use arkforge_transport::{transcript, DeviceTransport, TypedDiscoveryFilter};
-use arkforged::jobs::{JobRegistry, JobStop};
+use arkforged::jobs::{canonical_facts_digest, JobRegistry, JobStop};
 use std::path::PathBuf;
 
 const PROFILE_SOURCE: &str = include_str!("../../../profiles/dayu200.yaml");
@@ -277,7 +277,13 @@ fn a_job_walks_from_admission_to_a_durable_intent_to_a_control_receipt() {
     assert_eq!(control.action, ManagedControlAction::EnterUpdater);
     assert_eq!(control.permit_id, "PERMIT-1");
 
-    // The authority reports what its own channel observed.
+    // The authority reports what its own channel observed. The evidence
+    // digest is defined, not opaque: the canonical digest of the receipt's
+    // own facts, which the daemon recomputes before accepting.
+    let facts = vec![KeyValue {
+        key: "mode".into(),
+        value: "updater".into(),
+    }];
     registry
         .submit_control_receipt(
             &SubmitManagedControlReceiptRequest {
@@ -285,11 +291,8 @@ fn a_job_walks_from_admission_to_a_durable_intent_to_a_control_receipt() {
                 request_id: control.request_id.clone(),
                 action: ManagedControlAction::EnterUpdater,
                 accepted: true,
-                facts: vec![KeyValue {
-                    key: "mode".into(),
-                    value: "updater".into(),
-                }],
-                evidence_sha256: sha256(b"control evidence").as_bytes().to_vec(),
+                evidence_sha256: canonical_facts_digest(&facts).as_bytes().to_vec(),
+                facts,
                 failure_reason: String::new(),
             },
             &fixture.envelope,
@@ -566,6 +569,10 @@ fn an_unconfirmed_control_action_is_unknown_rather_than_failed() {
         .and_then(|event| event.control_request)
         .unwrap();
 
+    // A refusal made no observation, so it carries no evidence bytes. That is
+    // the receipt the authority actually sends; demanding a digest of nothing
+    // forced it to invent one, and the invented bytes were then refused —
+    // leaving both sides waiting on the other.
     registry
         .submit_control_receipt(
             &SubmitManagedControlReceiptRequest {
@@ -574,7 +581,7 @@ fn an_unconfirmed_control_action_is_unknown_rather_than_failed() {
                 action: ManagedControlAction::EnterUpdater,
                 accepted: false,
                 facts: Vec::new(),
-                evidence_sha256: sha256(b"nothing observed").as_bytes().to_vec(),
+                evidence_sha256: Vec::new(),
                 failure_reason: "no device rebound within the deadline".into(),
             },
             &fixture.envelope,
@@ -589,6 +596,130 @@ fn an_unconfirmed_control_action_is_unknown_rather_than_failed() {
         job.stopped(),
         Some(JobStop::ControlOutcomeUnknown { .. })
     ));
+    // The classification event names the cause. The journal always kept it;
+    // the authority watching the stream used to get "unknown" with no reason,
+    // which is a diagnosis that costs a bench visit instead of a read.
+    let classified = job
+        .events_from(0)
+        .into_iter()
+        .rev()
+        .find(|event| event.kind == JobEventKind::OutcomeClassified)
+        .expect("the classification was published");
+    assert!(classified.facts.iter().any(|fact| fact.key == "reason"
+        && fact.value == "no device rebound within the deadline"));
+}
+
+/// The evidence digest of an accepted receipt is the canonical digest of its
+/// own facts, recomputed by the daemon. Bytes that disagree with the facts are
+/// refused with a code naming the drift — not stored as if they were evidence.
+#[test]
+fn an_accepted_receipt_whose_evidence_disagrees_with_its_facts_is_refused() {
+    let root = TempRoot::new("evidence-mismatch");
+    let fixture = plan_fixture();
+    let mut registry = JobRegistry::new(&root.0);
+    let job_id = registry
+        .start(&fixture.envelope, &fixture.private_plan, NOW)
+        .unwrap();
+    let snapshot = pending_snapshot(&registry, &job_id);
+    let (permit, tag, epoch) = mint(&snapshot, "PERMIT-1", NOW + 60_000);
+    registry
+        .submit_permit(
+            &job_id,
+            &snapshot.request_id,
+            Some((permit, tag, epoch)),
+            "",
+            &secret(),
+            &fixture.envelope,
+            &fixture.private_plan,
+            &fixture.profile,
+            NOW + 10,
+        )
+        .unwrap();
+    let control = registry
+        .job(&job_id)
+        .unwrap()
+        .events_from(0)
+        .into_iter()
+        .rev()
+        .find(|event| event.kind == JobEventKind::ManagedControlRequested)
+        .and_then(|event| event.control_request)
+        .unwrap();
+
+    let error = registry
+        .submit_control_receipt(
+            &SubmitManagedControlReceiptRequest {
+                job_id: job_id.clone(),
+                request_id: control.request_id.clone(),
+                action: ManagedControlAction::EnterUpdater,
+                accepted: true,
+                facts: vec![KeyValue {
+                    key: "mode".into(),
+                    value: "updater".into(),
+                }],
+                evidence_sha256: sha256(b"not the facts").as_bytes().to_vec(),
+                failure_reason: String::new(),
+            },
+            &fixture.envelope,
+            &fixture.private_plan,
+            NOW + 20,
+        )
+        .unwrap_err();
+    assert_eq!(error.code(), "CONTROL_EVIDENCE_MISMATCH");
+
+    // The refusal answered nothing: the request is still pending, and a
+    // corrected receipt is still takeable.
+    let facts = vec![KeyValue {
+        key: "mode".into(),
+        value: "updater".into(),
+    }];
+    registry
+        .submit_control_receipt(
+            &SubmitManagedControlReceiptRequest {
+                job_id: job_id.clone(),
+                request_id: control.request_id,
+                action: ManagedControlAction::EnterUpdater,
+                accepted: true,
+                evidence_sha256: canonical_facts_digest(&facts).as_bytes().to_vec(),
+                facts,
+                failure_reason: String::new(),
+            },
+            &fixture.envelope,
+            &fixture.private_plan,
+            NOW + 30,
+        )
+        .unwrap();
+}
+
+/// Golden vector, mirrored in ArkDeck's
+/// `ArkForgeManagedControlPortContractTests`
+/// (`testTheCanonicalFactsDigestMatchesTheDaemonsSpelling`). The authority
+/// computes this digest when it builds an accepted receipt and this daemon
+/// recomputes it before taking one, so if either side respells it, exactly one
+/// of the two suites goes red.
+#[test]
+fn the_canonical_facts_digest_matches_the_authoritys_spelling() {
+    let facts = vec![
+        KeyValue {
+            key: "mode".into(),
+            value: "Loader".into(),
+        },
+        KeyValue {
+            key: "stableIdentitySHA256".into(),
+            value: "94a25a89c9c214dc9f8a0cf1b2cb3703a466e132a97fa015dfdbebfc65546f42".into(),
+        },
+        KeyValue {
+            key: "usbTopology".into(),
+            value: "17956864".into(),
+        },
+    ];
+    assert_eq!(
+        canonical_facts_digest(&facts).to_string(),
+        "68c995f4a099a63f61c3226a70e6691889050b767100d991f383c5f09962ad1f"
+    );
+    assert_eq!(
+        canonical_facts_digest(&[]).to_string(),
+        "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    );
 }
 
 /// architecture.md 13.4. Once an intent is durable there is an unresolved
@@ -803,6 +934,10 @@ fn walk_to_completion(
                         .map_or(false, |receipt| receipt.step_id == control.step_id)
             });
             if !already_answered {
+                let facts = vec![KeyValue {
+                    key: "mode".into(),
+                    value: "updater".into(),
+                }];
                 registry
                     .submit_control_receipt(
                         &SubmitManagedControlReceiptRequest {
@@ -810,11 +945,10 @@ fn walk_to_completion(
                             request_id: control.request_id.clone(),
                             action: control.action,
                             accepted: true,
-                            facts: vec![KeyValue {
-                                key: "mode".into(),
-                                value: "updater".into(),
-                            }],
-                            evidence_sha256: sha256(b"control").as_bytes().to_vec(),
+                            evidence_sha256: canonical_facts_digest(&facts)
+                                .as_bytes()
+                                .to_vec(),
+                            facts,
                             failure_reason: String::new(),
                         },
                         &fixture.envelope,
@@ -988,7 +1122,7 @@ fn a_dispatch_refused_before_the_spawn_confirms_no_effect() {
                             action: control.action,
                             accepted: true,
                             facts: Vec::new(),
-                            evidence_sha256: sha256(b"c").as_bytes().to_vec(),
+                            evidence_sha256: canonical_facts_digest(&[]).as_bytes().to_vec(),
                             failure_reason: String::new(),
                         },
                         &fixture.envelope,

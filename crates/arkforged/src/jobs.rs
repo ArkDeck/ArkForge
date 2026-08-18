@@ -33,6 +33,7 @@ use arkforge_authority_api::{
     verify_permit, ControllerPairingSecret, DispatchIntent, PairingEpoch, PermitIntegrityTag,
     PermitVerificationError, StepPermit,
 };
+use arkforge_core::digest::sha256;
 use arkforge_core::ids::OpaqueId;
 use arkforge_core::outcome::ActionDisposition;
 use arkforge_core::plan::FlashPlanEnvelope;
@@ -461,7 +462,21 @@ impl JobRegistry {
                     now_epoch_ms,
                     1,
                     id(&step_id)?,
-                    vec![(id(fact::PERMIT_ID)?, permit_id.clone())],
+                    vec![
+                        (id(fact::PERMIT_ID)?, permit_id.clone()),
+                        // The journal names what this permit is waiting on. A
+                        // job parked here used to be indistinguishable from one
+                        // that asked for nothing — the record ended at
+                        // `permitConsuming` and the wait lived only in memory —
+                        // so the request is now a recorded fact beside the
+                        // permit that spent itself asking.
+                        (id("controlRequestId")?, control.request_id.clone()),
+                        (id("controlAction")?, control.action.as_str().to_string()),
+                        (
+                            id("controlDeadlineEpochMs")?,
+                            control.deadline_epoch_ms.to_string(),
+                        ),
+                    ],
                 )?;
                 job.move_to(JobState::Dispatching)?;
                 job.pending = Some(Pending::Control {
@@ -707,7 +722,6 @@ impl JobRegistry {
         }
 
         let step_id = asked.step_id.clone();
-        let evidence = digest_from(&request.evidence_sha256).ok_or(JobError::TagNotADigest)?;
         job.journal.append(
             JournalRecordKind::TransportEvidenceRecorded,
             now_epoch_ms,
@@ -723,6 +737,13 @@ impl JobRegistry {
         if !request.accepted {
             // Not "nothing happened". The device may have changed and the
             // authority simply did not observe it (architecture.md 14.1).
+            //
+            // A refusal carries no evidence digest, and none is demanded: the
+            // refusal made no observation, so there is nothing to digest.
+            // Demanding one here forced the authority to either invent bytes or
+            // be rejected — and a rejected refusal left this job parked at
+            // `permitConsuming` with both sides waiting on the other, which is
+            // the deadlock that held the bench for three days.
             job.move_to(JobState::OutcomeUnknown)?;
             let digest = job.journal.append(
                 JournalRecordKind::OutcomeClassified,
@@ -744,8 +765,26 @@ impl JobRegistry {
                     key: "outcome".into(),
                     value: "outcomeUnknown".into(),
                 });
+                // The journal keeps the reason; the event must carry it too,
+                // or the authority ends its job knowing only "unknown" while
+                // the one line naming the cause sits in a CBOR file.
+                event.facts.push(KeyValue {
+                    key: "reason".into(),
+                    value: request.failure_reason.clone(),
+                });
             });
             return Ok(());
+        }
+
+        // An accepted receipt's evidence digest is defined, not opaque: the
+        // canonical digest of its own facts. Recomputing it here means a
+        // receipt whose facts and evidence disagree — hand-rolled encoders
+        // drifting apart is precisely how this channel failed before — is
+        // refused at the boundary with a code that names the drift.
+        let evidence = digest_from(&request.evidence_sha256).ok_or(JobError::TagNotADigest)?;
+        let computed = canonical_facts_digest(&request.facts);
+        if computed != evidence {
+            return Err(JobError::ControlEvidenceMismatch);
         }
 
         job.journal.append(
@@ -1005,6 +1044,29 @@ fn private_action_digest(snapshot: &StepAdmissionSnapshot) -> Result<Sha256Diges
     digest_from(&snapshot.private_action_sha256).ok_or(JobError::TagNotADigest)
 }
 
+/// The defined evidence digest of an accepted control receipt: SHA-256 over
+/// `key=value\n` lines with the keys in byte order.
+///
+/// Both sides compute this — the authority when it builds an accepted receipt,
+/// this daemon before taking one — so the facts and their evidence cannot
+/// drift apart. Every fact key the port publishes is ASCII and unique, so byte
+/// order is total and the lines cannot collide.
+pub fn canonical_facts_digest(facts: &[KeyValue]) -> Sha256Digest {
+    let mut ordered: Vec<(&str, &str)> = facts
+        .iter()
+        .map(|fact| (fact.key.as_str(), fact.value.as_str()))
+        .collect();
+    ordered.sort();
+    let mut bytes = Vec::new();
+    for (key, value) in ordered {
+        bytes.extend_from_slice(key.as_bytes());
+        bytes.push(b'=');
+        bytes.extend_from_slice(value.as_bytes());
+        bytes.push(b'\n');
+    }
+    sha256::sha256(&bytes)
+}
+
 fn digest_from(bytes: &[u8]) -> Option<Sha256Digest> {
     if bytes.len() != 32 {
         return None;
@@ -1036,6 +1098,7 @@ pub enum JobError {
     },
     SnapshotExpired,
     TagNotADigest,
+    ControlEvidenceMismatch,
     ReceiptCarriesForbiddenFacts(Vec<String>),
     UnknownControlAction(String),
     CancelWouldHideAnUnresolvedEffect,
@@ -1063,6 +1126,7 @@ impl JobError {
             JobError::WrongControlAction { .. } => "WRONG_CONTROL_ACTION",
             JobError::SnapshotExpired => "SNAPSHOT_EXPIRED",
             JobError::TagNotADigest => "NOT_A_DIGEST",
+            JobError::ControlEvidenceMismatch => "CONTROL_EVIDENCE_MISMATCH",
             JobError::ReceiptCarriesForbiddenFacts(_) => "RECEIPT_CARRIES_FORBIDDEN_FACTS",
             JobError::UnknownControlAction(_) => "UNKNOWN_CONTROL_ACTION",
             JobError::CancelWouldHideAnUnresolvedEffect => "CANCEL_NOT_SAFE",
@@ -1108,6 +1172,9 @@ impl fmt::Display for JobError {
                  (architecture.md 8.3)",
             ),
             JobError::TagNotADigest => f.write_str("a digest field is not 32 bytes"),
+            JobError::ControlEvidenceMismatch => f.write_str(
+                "the receipt's evidence digest is not the canonical digest of its own facts",
+            ),
             JobError::ReceiptCarriesForbiddenFacts(keys) => write!(
                 f,
                 "the control receipt carries {}, which the typed control port must never pass to \
