@@ -140,6 +140,12 @@ impl CanonicalCbor for ArtifactIdentity {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum ToolchainKind {
     /// A pinned vendor executable invoked with a closed argument vocabulary.
+    ///
+    /// Retired by NRU-004 (`c049a11`): nothing in production constructs this
+    /// variant any more — the vendor runtime is gone and the shipping backend
+    /// is `NativeProtocol`. It stays in the vocabulary so historical plans
+    /// and maturity keys that named `fixedTool` still decode; a plan carrying
+    /// it is refused at startExecution by the toolchain-digest comparison.
     FixedTool,
     /// A protocol implemented inside ArkForge.
     NativeProtocol,

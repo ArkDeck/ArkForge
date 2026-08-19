@@ -50,25 +50,28 @@ message HelloAck {
   // Whether this daemon could execute any plan at all, and what is missing.
   //
   // Carried on the handshake because these are standing facts, established at
-  // startup and unchangeable by a request: an authority paired, and a fixed
-  // tool bound. A client learns them before it materializes a plan it could
-  // not run, rather than after it has created a job.
+  // startup and unchangeable by a request: an authority paired, and a
+  // toolchain bound (since NRU-004 the daemon binds its own native
+  // implementation and measures its own executable). A client learns them
+  // before it materializes a plan it could not run, rather than after it has
+  // created a job.
   //
   // `execution_blockers` holds stable codes (NO_PAIRED_AUTHORITY,
   // NO_DISPATCHER). It is empty exactly when `execution_ready` is true.
   bool execution_ready = 6;
   repeated string execution_blockers = 7;
 
-  // The bound tool's identity, empty when none is bound. A client compares
-  // `toolchain_sha256` against the toolchain its plan was materialized for:
-  // the digest is part of the maturity combination (architecture.md 12.3), so
-  // a mismatch means the pairing was never published. The daemon refuses that
-  // pairing too, at startExecution; this is so a client need not find out by
-  // being refused.
+  // The bound toolchain's identity — since NRU-004 this is
+  // "arkforged-native-rockusb" plus the daemon's own build digest, measured
+  // at startup. A client compares `toolchain_sha256` against the toolchain
+  // its plan was materialized for: the digest is part of the maturity
+  // combination (architecture.md 12.3), so a mismatch means the pairing was
+  // never published. The daemon refuses that pairing too, at startExecution;
+  // this is so a client need not find out by being refused.
   //
-  // Byte equality is not a promise the tool runs. A quarantined executable
-  // with the right digest hangs in dyld (ArkForge AD-015), and nothing in this
-  // message would show it.
+  // Historical caveat, kept for the vendor era this field carried a child
+  // tool's digest: byte equality was not a promise the tool runs — a
+  // quarantined executable with the right digest hangs in dyld (AD-015).
   string toolchain_id = 8;
   string toolchain_sha256 = 9;
 }

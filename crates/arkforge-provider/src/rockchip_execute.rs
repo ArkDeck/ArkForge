@@ -731,8 +731,9 @@ fn write_partition(
     if disposition != ActionDisposition::SemanticSuccess {
         // The receipt text itself is digested, not stored, so an unexplained
         // write used to leave nothing behind but "unknown" — the one fact that
-        // names the cause was the one fact thrown away. The tail is where the
-        // tool says why it stopped.
+        // names the cause was the one fact thrown away. The tail of the
+        // executor's own detail string is where it says why it stopped
+        // (AD-032's lesson, restated for the native receipt).
         facts.push(fact("operationDurationMs", receipt.duration_ms.to_string()));
         let tail: String = receipt
             .detail
