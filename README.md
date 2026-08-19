@@ -37,7 +37,7 @@ cargo run -p arkforged --bin arkforge-cli -- --socket /tmp/arkforge/public.sock 
 ## 文档
 
 - 架构正本：[docs/architecture.md](docs/architecture.md)(状态 Proposed；ArkDeck 审计基线 `2849c5c1`)
-- 任务台账：[TASKS.md](TASKS.md)(AF-V1 完成、AF-V3 软件半完成；AF-V2/AF-V4 阻塞于真机与证据门)
+- 任务台账：[TASKS.md](TASKS.md)(AF-V1 完成；AF-V2 真机全量刷写已两过——2026-08-18 首过、08-19 原生复验，余真机 crash 半与掉电；AF-V3 软件半完成；AF-V4 阻塞于证据门)
 - 证据账本：[docs/evidence/ledger.md](docs/evidence/ledger.md)
 - 实施决定：[docs/decisions/](docs/decisions/)
 - 验收证据：[docs/evidence/](docs/evidence/)
@@ -45,7 +45,7 @@ cargo run -p arkforged --bin arkforge-cli -- --socket /tmp/arkforge/public.sock 
 ## 工程布局
 
 ```text
-crates/          八个边界 crate(architecture.md 4.2)
+crates/          九个边界 crate(architecture.md 4.2；含唯一 unsafe 的 arkforge-usb)
 adapters/        arkforge-arkdeck-adapter：published step 映射表
 profiles/        DeviceProfile 数据(schema 中性，设备在数据里)
 proto/           IPC 正本 schema

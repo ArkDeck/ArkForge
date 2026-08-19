@@ -56,7 +56,7 @@ ArkDeck 不应再包含：
 5. 安全摘要使用 RFC 8949 deterministic CBOR + SHA-256；
 6. Provider 初期静态注册；
 7. ArkDeck 通过独立的 arkforge-arkdeck-adapter 接入；
-8. DAYU200 首版继续封装固定哈希 rkdeveloptool；
+8. DAYU200 首版继续封装固定哈希 rkdeveloptool（NRU-004 已退役——现行实现为 `arkforged` 原生 RockUSB，见 §27）；
 9. DAYU600 在证据门通过前只支持 inspect 和非可执行 PlanAssessment；discover/probe 待对应只读 USB identity 证据取得后开放(当前 UNI-U01 = missing，见 17.1)；
 10. outcomeUnknown 永不 replay，但保留 ArkDeck 已有的 distinct complete-overwrite supersession recovery。
 
@@ -125,7 +125,9 @@ importArtifact
 - 同协议、同固件格式、同 effect model：优先只新增 DeviceProfile 与测试；
 - 新固件格式：新增 Artifact Parser；
 - 新协议：新增 Transport + Provider；
-- 新执行工具：Provider 内新增 fixed tool backend；
+- 新执行后端：Provider 内新增协议引擎（DAYU200 的现行形状是进程内原生协议 +
+  `arkforge-usb` 传输；fixed tool backend 是被 NRU-004 退役的历史形状，重新引入
+  须重过 AFD-0003 的签名/信任设计）；
 - 新验证方式：新增 typed verification capability；
 - ArkDeck production lowering 不增加厂商或型号分支。
 
@@ -183,7 +185,7 @@ refactor(TASK-AIN-021): adopt app concurrency defaults (#1302)
 
 另一条必须进入 arkforged 打包设计的仓内定案：macOS Rockchip 组件曾出现 entitlement 死锁——运行时校验器要求 app-sandbox+inherit，而打包契约(#1052)要求空 entitlements，两者互斥无解，最终以修改校验器收口，spec/ADR 对齐仍留白。新的 Rust daemon + 捆绑固定哈希工具会原样踏入同一区域，打包契约必须对齐当前校验器语义设计(见 21.2 Stage B 与 AD-007)。
 
-**该留白已于 2026-08-16 对齐**：见 [AFD-0003](decisions/AFD-0003-arkforged-signing-packaging.md)。结论是两个二进制的 entitlement 字典都为空，并由 `arkforged` 在绑定工具之前读 Mach-O 代码签名强制；`arkforged` 不注册第二个 LaunchAgent，而是由 `arkdeck-agentd` spawn、pairing secret 走继承的 stdin。同一份实测查出 AD-023：ArkDeck 当前钉给破坏性 flash 的那份工具链接 Homebrew libusb，不可出厂。
+**该留白已于 2026-08-16 对齐**：见 [AFD-0003](decisions/AFD-0003-arkforged-signing-packaging.md)。结论是两个二进制的 entitlement 字典都为空，并由 `arkforged` 在绑定工具之前读 Mach-O 代码签名强制；`arkforged` 不注册第二个 LaunchAgent，而是由 `arkdeck-agentd` spawn、pairing secret 走继承的 stdin。同一份实测查出 AD-023：ArkDeck 当前钉给破坏性 flash 的那份工具链接 Homebrew libusb，不可出厂。（NRU-004 后发布二进制只剩 `arkforged` 一个，同一 Mach-O reader 改守 daemon 自身的绑定；且 `arkforge-usb` 让 daemon 直接触 IOKit——AFD-0003 自己声明的复审触发条件已成立，空 entitlement 结论待按 §27 复审。）
 
 ### 2.2 已确认的 DAYU600 静态证据
 
@@ -307,7 +309,7 @@ flowchart LR
     PR --> UNI[Unisoc Provider]
 
     RK --> ART200[DAYU200 Artifact Parser]
-    RK --> RKT[RockUSB fixed-tool/native Transport]
+    RK --> RKT[RockUSB native Transport]
 
     UNI --> PAC[PAC Parser]
     UNI --> UT[Unisoc Download Transport]
@@ -328,12 +330,15 @@ flowchart LR
 
 ### 4.2 建议的首版 workspace
 
-首版不建议一开始拆成二十多个 crate。建议先保持八个稳定边界：
+首版不建议一开始拆成二十多个 crate。首版为八个稳定边界；NRU-001 起为九个——
+新增 `arkforge-usb`（唯一允许 `unsafe`/FFI 的 IOKit 传输 crate，叶子依赖，
+只有 `arkforged` 可以依赖它，均由架构守卫强制）：
 
 ~~~text
 arkforge/
 ├── crates/
 │   ├── arkforge-core
+│   ├── arkforge-usb
 │   ├── arkforge-authority-api
 │   ├── arkforge-artifact
 │   ├── arkforge-transport
@@ -1103,7 +1108,7 @@ RebindExpectation 同时必须携带显式的瞬态容忍策略。真机重枚�
 - status；
 - timing；
 - attach/detach/rebind；
-- tool exit 与输出 evidence hash。
+- 执行结果与输出 evidence hash（vendor 时代为 tool exit；原生面为操作时长与细节尾部摘要）。
 
 完整固件 payload 只进入单独授权的加密研究证据库。
 
@@ -1366,7 +1371,7 @@ ReadOnlyObservationRecorded）为 buffered——丢失只损失记录里的细�
 - mode transition dispatch 后：等待 rebind/reconcile；
 - critical write：排队到 safe boundary；
 - unresolved intent 存在时不能返回 CancelledSafe；
-- kill tool 不等于安全 cancel；
+- kill 执行方（vendor 时代的 tool 进程，今天的 daemon 写线程）不等于安全 cancel；
 - protocol 未证明可原子取消时不能中断 transport。
 
 ---
@@ -1551,22 +1556,27 @@ Protobuf 负责通信兼容，deterministic CBOR 负责安全摘要。
 
 ### 16.1 Provider 路线
 
-首版：
+**现行（NRU-004，2026-08-19 起）——原生 RockUSB**：
 
-- 使用当前已经真机验证的 rkdeveloptool；
-- 固定 executable hash/version/signature/ACL；
-- 直接 Process API spawn；
-- 无 shell；
-- 无 PATH 解析；
-- 无 caller argv；
-- Provider 内部 closed enum lowering；
-- stdout/stderr parser 与 tool digest 绑定。
+- 协议字节文法进程内实现（`rockusb_protocol.rs`，31 字节 CBW / 13 字节 CSW，
+  钉上游 `rkdeveloptool@304f0737…` 的 `RKComm` 定义为文法出处）；
+- USB 由唯一 unsafe crate `arkforge-usb` 直连 IOKit，按语义调用逐次 claim/release；
+- 无子进程、无 argv、无 stdout parser——回执事实由执行器自产
+  （`writePayloadSha256` 等，写线摘要与 staged digest 比对）；
+- Provider 内部 closed enum lowering 不变（七个语义动作）；
+- toolchain 身份 = `arkforged` 自身构建摘要，启动时自量，
+  不符拒为 `TOOLCHAIN_DIGEST_MISMATCH`。
 
-后续原生 RockUSB：
+启用条件当时立的门后来是这样过的：协议 transcript、错误语义与读面事实由
+AF-V1/AF-V2 真机取证与 2026-08-18 的 Loader 读 parity（NRU-001 证据文件）补足；
+public plan/effect/result 未变化；backend digest 变化按规则重新 plan/authorize
+（2026-08-19 原生面全量复验，见 AD-033）。
 
-- 只有协议 transcript、错误语义和 fault matrix 足够后才启用；
-- public plan/effect/result 不变化；
-- backend digest 变化必须重新 plan/authorize。
+**首版（历史，2026-08-18 前）——fixed-tool**：使用真机验证过的 rkdeveloptool，
+固定 executable hash/version/signature/ACL，直接 Process API spawn，无 shell/
+PATH/caller argv，Provider 内 closed enum lowering，stdout/stderr parser 与
+tool digest 绑定。2026-08-18 的首次真机全量通过用的是这条路线；同日起它被
+NRU-001..004 替换并于 `c049a11` 移除。
 
 ### 16.2 动作映射
 
@@ -1788,7 +1798,7 @@ identity:
     allow: [verified-revision-id]
 providers:
   - id: arkforge.rockchip
-    backend: rkdeveloptool-fixed
+    backend: arkforged-native-rockusb   # NRU-004 前的历史值：rkdeveloptool-fixed
     versionRange: ">=1.0.0 <2.0.0"
 artifactCompatibility:
   formats: [rockchip-images-targz]
@@ -1924,7 +1934,7 @@ evidenceRefs: [AD-006]
 | 恶意 artifact | sandbox、limits、fuzz、CAS |
 | 设备替换 | unique lineage、fresh facts、same session recheck |
 | Provider 错误地址 | Profile allowlist、public/private projection、digest |
-| vendor tool 替换 | fixed hash/signature/ACL/no PATH |
+| toolchain 替换（NRU-004 前为 vendor tool，今天为 daemon 自身） | 启动自量摘要 + Mach-O 签名/entitlement 强制 + `TOOLCHAIN_DIGEST_MISMATCH` 拒绝（历史控制：fixed hash/signature/ACL/no PATH） |
 | rogue local process | inherited controller handle、peer identity、no public execute |
 | USB spoof | protocol identity、lineage、postflight |
 | crash/power loss | dual journal、permit、unknown no replay |
@@ -1987,11 +1997,11 @@ evidenceRefs: [AD-006]
 - ArkDeck authority adapter；
 - ManagedDeviceControlPort；
 - durable engine；
-- fixed-tool Rockchip Provider；
+- Rockchip Provider（交付时 fixed-tool；NRU-004 起原生 RockUSB）；
 - complete-overwrite recovery；
 - generic ArkDeck integration；
 - real DAYU200 parity/fault/recovery；
-- packaging/signing/license：arkforged 与捆绑工具的签名、entitlement、LaunchAgent 与打包契约对齐 #1299 后的 helper signing 体系与当前运行时校验器语义(entitlement 死锁教训见 2.1/AD-007)——显式设计工作项，不是打包杂务；
+- packaging/signing/license：arkforged 的签名、entitlement、LaunchAgent 与打包契约对齐 #1299 后的 helper signing 体系与当前运行时校验器语义(entitlement 死锁教训见 2.1/AD-007；「捆绑工具」半随 NRU-004 退出发布包)——显式设计工作项，不是打包杂务；
 - flash.dayu200 compatibility alias。
 
 ArkDeck 侧作为一个垂直产品 PR。
@@ -2096,7 +2106,7 @@ inspect
 - ArkDeck adapter；
 - StepPermit；
 - ManagedDeviceControlPort；
-- Rockchip fixed-tool Provider；
+- Rockchip Provider（交付时 fixed-tool；NRU-004 起原生 RockUSB）；
 - generic Runtime integration；
 - generic UI；
 - compatibility alias；
@@ -2226,7 +2236,7 @@ CLI 仅用于 read-only/offline diagnostics。
 | FW-001 | fwupd daemon/plugin lifecycle | [fwupd official source](https://github.com/fwupd/fwupd) | A/B | confirmed; pin revision |
 | DFU-001 | DFU detach/download/upload/reset | [dfu-util official manual](https://dfu-util.sourceforge.net/dfu-util.1.html) | A | confirmed |
 | UUU-001 | UUU multi-stage protocol/tool model | [NXP mfgtools official source](https://github.com/nxp-imx/mfgtools) | A/B | confirmed; pin revision |
-| RK-001 | rkdeveloptool source/tool behavior/license | [Rockchip official repository](https://github.com/rockchip-linux/rkdeveloptool) + pinned local source | A/B | pin required |
+| RK-001 | rkdeveloptool source——现仅作 RockUSB 字节文法出处(`rockusb_protocol.rs` 钉 `304f0737…`)；tool behavior/license 维度随 NRU-004 退役 | [Rockchip official repository](https://github.com/rockchip-linux/rkdeveloptool) + pinned commit | A | confirmed(文法出处) |
 | UNI-U01 | UIS7885 PAC/FDL wire protocol | official docs/capture | U | missing |
 | USB-001 | libusb transport substrate | [libusb official source](https://github.com/libusb/libusb) | A | confirmed; pin revision |
 | IPC-001 | Protobuf evolution rules | [Protobuf official guide](https://protobuf.dev/programming-guides/proto3/) | A | confirmed |
@@ -2304,8 +2314,23 @@ DAYU600 同期只进入严格 evidence lane。直到 PAC、FDL、USB identity、
 
 ## 27. 当前实现状态附录（2026-08-19，TASK-NRU-004）
 
-第 0.1 节第 8 项、第 16.1 节的 vendor-first 路线及第 18.2 节的旧 backend
-示例仅记录最初提案的实施顺序，不再描述当前实现。当前发布实现只存在
-`arkforged` 原生 RockUSB transport；vendor 二进制、端口选择、CLI 参数、命令
-lowering/parser 与迁移 fallback 均已删除。现行 backend 事实以
-`profiles/dayu200.yaml` 为准。
+当前发布实现只存在 `arkforged` 原生 RockUSB transport；vendor 二进制、端口
+选择、CLI 参数、命令 lowering/parser 与迁移 fallback 均已删除（`c049a11`）。
+现行 backend 事实以 `profiles/dayu200.yaml` 为准；两次真机全量通过
+（首过 fixed-tool、复验原生）见 ledger AD-033。
+
+本文正文的 vendor-era 表述已于 2026-08-19 逐处对齐（各处均留了历史注记）：
+
+- §0.1 第 8 项（首版封装 rkdeveloptool）——标注退役；
+- §2.1 AFD-0003 摘述——「两个二进制」改注单二进制现实，并指出 AFD-0003
+  自己声明的复审触发条件（仓内出现进程内 USB 后端）已因 `arkforge-usb` 成立，
+  空 entitlement 结论待复审——**这是本附录唯一留待维护者的决定**；
+- §4.1 架构图 RKT 节点、§4.2 crate 数（八→九，`arkforge-usb`）；
+- §1.1「新执行后端」扩展指引——原生为现行形状；
+- §11.4 evidence 字段（tool exit → 执行结果）与 §13.4 cancel 条目（kill tool →
+  kill 执行方）；
+- §16.1 Provider 路线——原生为现行、fixed-tool 降为历史段；
+- §18.2 profile 示例 backend 值；
+- §20 威胁模型「vendor tool 替换」行——改为 toolchain（daemon 自身）替换；
+- §22 AF-V2 交付清单两处 fixed-tool 字样；
+- §24 ledger RK-001——收窄为字节文法出处。

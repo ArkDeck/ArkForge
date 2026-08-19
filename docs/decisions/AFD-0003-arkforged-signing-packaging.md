@@ -8,11 +8,13 @@
 > AFD-0001、ArkDeck #1299(helper signing 现代化)、ArkDeck ADR-0003、
 > ArkDeck `docs/release/rockchip-component-packaging.md`(TASK-BRC-003)
 
-> **NRU-004 修订（2026-08-18）**：原生 RockUSB 已成为默认执行端口，发布包
-> 只携带并签名 `arkforged`；不再复制、重签或在 receipt 中声明 vendor
-> 二进制，也不再接受 `ARKFORGE_RKDEVELOPTOOL*` 打包输入。下文关于 vendor
-> 签名、自检和 entitlement 的条款保留为迁移期显式 `--rockusb-port vendor`
-> fallback 的运行时约束及历史实测，不再描述当前发布包形状。
+> **NRU-004 修订（2026-08-18；2026-08-19 更正）**：原生 RockUSB 已成为唯一
+> 执行端口，发布包只携带并签名 `arkforged`；不再复制、重签或在 receipt 中
+> 声明 vendor 二进制，也不再接受 `ARKFORGE_RKDEVELOPTOOL*` 打包输入。
+> 08-18 本注曾称 vendor 条款保留为「迁移期显式 `--rockusb-port vendor`
+> fallback 的运行时约束」——`c049a11` 已把该 fallback 连同端口选择一并删除，
+> 下文 vendor 条款**只是历史实测**，不描述任何当前可调用的实现（见文末
+> 「NRU-004 后续状态」与「复核条件已触发」两节）。
 
 ## 背景
 
@@ -60,6 +62,8 @@ AD-007 是 entitlement 让它在 `main` 之前中止；AD-015 是 Gatekeeper 让
 `arkforged` 与它绑定的 vendor tool，entitlement 字典都必须为空——
 `packaging/macos/arkforged.entitlements`、
 `packaging/macos/rkdeveloptool.entitlements`，都是 `<dict/>`。
+（2026-08-19 注：后者已随 `8129a7a` 删除，仓内现存前者一份；
+「绑定前读 Mach-O 强制空字典」的机制不变，对象改为 daemon 自身。）
 
 空不是省事，空是机制：
 
@@ -224,3 +228,14 @@ which is not a system library
 删除；本文此前记录的 vendor 条款只作为历史实测保留，不描述任何当前可调用或
 可恢复的实现。本附录取代文首 2026-08-18 修订中“仍保留 migration fallback”
 的状态描述。
+
+## 复核条件已触发（2026-08-19，待维护者重开）
+
+「复核条件」第一条——**仓内出现进程内 USB 后端**——已因 NRU-001 的
+`crates/arkforge-usb` 成立：`arkforged` 如今在自己的进程内直连 IOKit 做
+bulk 传输，而本决定的「空 entitlement 字典」结论是在「USB 由子进程触达」
+的世界里得出的。实测事实是：台架上该形状已两次完成全量刷写
+（ledger AD-033，daemon 由 `arkdeck-agentd` 以 LaunchAgent 会话身份 spawn，
+未见 IOKit 授权失败）——但「实测能跑」不等于「契约已复审」：
+USB 权限、App Sandbox 相邻性与公证语义需按本决定自己的规则重开一节
+评审后落为新的 AFD（或本文修订）。此节只登记触发，不替维护者做结论。
