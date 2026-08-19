@@ -1,11 +1,15 @@
 # ArkForge 实施任务台账
 
-> 状态总览(2026-08-15)：AF-V1 完成；AF-V3 软件半完成；AF-V2 除写入外全部完成。任务定义正本是 [docs/architecture.md](docs/architecture.md) 第 22 节；本文件是执行台账，若两处出入，以 architecture.md 为准并回改本文件。
+> 状态总览(2026-08-19)：AF-V1 完成；AF-V2 第一验收项(真机全量刷写)已通过且执行面已
+> 原生化(NRU-001..004)，真机 crash 半与掉电仍未验；AF-V3 软件半完成。任务定义正本是
+> [docs/architecture.md](docs/architecture.md) 第 22 节；本文件是执行台账，若两处出入，
+> 以 architecture.md 为准并回改本文件。
 
 | 任务 | 内容 | 依赖 | 状态 |
 |---|---|---|---|
 | AF-V1 | ArkForge Core + DAYU200 read-only parity | — | ✅ 完成([验收证据](docs/evidence/AF-V1-acceptance.md)) |
-| AF-V2 | DAYU200 ArkForge production cutover | AF-V1 | 🟡 除写入外全部完成([验收证据](docs/evidence/AF-V2-acceptance.md))；写入待 ArkDeck 侧实现 permit 签发 |
+| AF-V2 | DAYU200 ArkForge production cutover | AF-V1 | 🟡 真机全量刷写 2026-08-18 首过、08-19 原生复验([验收证据](docs/evidence/AF-V2-acceptance.md) §6)；余：真机 crash 半、掉电、multi-device、recovery 物化 |
+| NRU | 原生 RockUSB 换轨(ArkDeck chg-2026-063 的 ArkForge 半) | AF-V2 首过 | ✅ 完成：`a935798`/`26aa527`(读+parity)、`3567484`(写)、`8129a7a`(默认原生)、`c049a11`(移除 vendor 运行时)；[换轨证据](docs/evidence/runs/2026-08-19-dayu200-green-flash-and-native-cutover.md) |
 | AF-V3 | DAYU600 evidence + plan-only | AF-V1(共用 API 面) | 🟡 软件半完成([验收证据](docs/evidence/AF-V3-acceptance.md))；证据半需真机 |
 | AF-V4 | DAYU600 production execute | AF-V3 + AF-V2(engine) + 17.5 证据门全 PASS | ⛔ 阻塞：18 条证据门 0 条 PASS |
 
@@ -34,7 +38,7 @@ artifact import
 
 **生产代码**
 
-- [x] Rust workspace(八个边界 crate，见 architecture.md 4.2)
+- [x] Rust workspace(交付时八个边界 crate，见 architecture.md 4.2；NRU-001 起为九个——新增唯一 unsafe/FFI 的 `arkforge-usb`)
 - [x] neutral Authority API
 - [x] Artifact/CAS
 - [x] DAYU200 parser/profile
@@ -64,20 +68,20 @@ artifact import
 
 ## AF-V2：DAYU200 ArkForge production cutover
 
-> **状态(2026-08-15)**：硬件已到位，ArkForge 侧「除写入外的全部」已在真机上跑通，
-> 见 [2026-08-15 彩排](docs/evidence/runs/2026-08-15-dayu200-flash-rehearsal.md)：
-> 真实归档导入、真实计划物化、九个镜像真实落盘并 revalidate、设备自身分区表实测比对、
-> 读域实测(独立复现 AD-006)、九个目标的 readback 三态判定全部来自真机。
-> 九条 `wlx` 与一条 `rd` 被降解成真实 argv、逐项前置校验、然后**不派发**。设备写入次数 0。
+> **状态(2026-08-19)**：**第一验收项已通过。** 2026-08-18 `job-a4b7d539…`
+> 首次真机全量刷写 `succeeded`(当日 fixed-tool 执行面，ArkDeck authority 签发
+> permit)；同日起步的 NRU-001..004 把执行面换成原生 RockUSB 并移除 vendor
+> 运行时，2026-08-19 纯原生二进制全量复验 `succeeded`(`job-b00e006a…`)。
+> 见[首过与原生换轨](docs/evidence/runs/2026-08-19-dayu200-green-flash-and-native-cutover.md)
+> 与 [AF-V2 验收证据](docs/evidence/AF-V2-acceptance.md) §6 的逐项表。
 >
-> **剩下的不是代码，是一个决定：谁做 authority。** 一次写入需要 StepPermit，
-> 一张 permit 需要 authority 签发，而本仓刻意做不到——架构守卫禁止 `crates/arkforged`
-> 引用签发函数(8.6)。两条路都要拍板：(a) ArkDeck 做 authority(22 节 AF-V2 原意，
-> 需 ArkDeck 侧 OpenSpec + maintainer review)；(b) 本仓新增 bench authority crate
-> (需在 4.3 crate 边界图与架构守卫允许表里各加一行)。
+> 仍未验证：写入中途 SIGKILL 的真机 crash 半、掉电(AD-017)、multi-device、
+> complete-overwrite recovery 的 plan 物化。maturity 是组合键，每次通过只发布
+> 自己那一个组合，`ProductionVerified` 提升另需决定(AD-025)。
 >
-> 另有一条独立的门 `RK-M02`：maturity 现为 `hardwareGated`——「AF-V2 要求先有一次
-> 真机全量刷写通过」。它现在正按设计挡着，彩排产出的是 PlanAssessment 而非 Executable plan。
+> (2026-08-15 的状态记录——「除写入外全部完成、authority 归属待拍板」——
+> 已按当日事实沉淀在 [2026-08-15 彩排](docs/evidence/runs/2026-08-15-dayu200-flash-rehearsal.md)
+> 与验收文档 §1–§5，不在此复述。)
 
 **目标**
 
@@ -96,16 +100,18 @@ inspect
 
 - [x] ArkForge durable engine(journal 落盘 + fsync policy 随 record kind 固定；
       撕裂尾部穷举复原；13.3 崩溃处置表由 journal 推导)
-- [~] ArkDeck adapter — ArkForge 半已完成并**固定**：step 映射表、控制动作映射表、
+- [x] ArkDeck adapter — ArkForge 半固定：step 映射表、控制动作映射表、
       ArkDeck provider action 归属表、permit 交叉验证向量，以及
       **controller execution/admission surface**(API 6/7/8/12/13 全部实现)
-      与 **dispatch**(服务锁之外运行)，十一条端到端测试。Swift 半是 ArkDeck 仓变更，提案已贴进
-      `ArkDeck/openspec/changes/chg-2026-059-arkdeck-arkforge-authority/`
+      与 **dispatch**(服务锁之外运行)。Swift 半已随 ArkDeck chg-2026-059 落地
+      (2026-08-18 真机首过即经它签发 permit)
 - [x] StepPermit(含 8.6 完整性与重传信任模型；single-use 跨重启由 durable ledger 保证，
       顺序由类型强制：admit → begin_dispatch → record_receipt → checkpoint，逐个 by value 消费)
 - [x] ManagedDeviceControlPort(typed 动作 + Provider 侧「这属于 authority」的显式拒绝)
-- [x] Rockchip fixed-tool Provider(封闭命令面 `ld`/`ppt`/`wlx`/`rl`/`rd`；
-      argv 只在 Provider 内降解；读域三态判定；真机实测见彩排证据)
+- [x] Rockchip Provider——交付时为 fixed-tool(封闭命令面 `ld`/`ppt`/`wlx`/`rl`/`rd`，
+      argv 只在 Provider 内降解；2026-08-18 首过用的就是它)；NRU-004 起为原生
+      RockUSB(七个语义动作 + `NativeRockUsbPort`，vendor 运行时已移除)。
+      读域三态判定两代同形，真机实测见彩排与换轨证据
 - [ ] generic Runtime integration — **ArkDeck 仓变更，需拍板**
 - [ ] generic UI
 - [ ] compatibility alias(flash.dayu200 → generic adapter，不保留 Rockchip lowering)
@@ -119,26 +125,27 @@ inspect
 
 **验收**
 
-- [ ] real DAYU200 full flash pass — **已定：ArkDeck 做 authority**(2026-08-15)。
-      除写入外全部已在真机跑通;写入待 ArkDeck 侧 OpenSpec 合入并实现 permit 签发。
-      台架/真机的任何一次通过只发布它自己那一个 maturity 组合
+- [x] real DAYU200 full flash pass — **2026-08-18 通过**(`job-a4b7d539…`，fixed-tool 面)；
+      2026-08-19 原生面复验同绿(`job-b00e006a…`)。每次通过只发布它自己那一个
+      maturity 组合([换轨证据](docs/evidence/runs/2026-08-19-dayu200-green-flash-and-native-cutover.md))
 - [x] exact identity(两种人格均 `serialAndTopology`；locationID 跨模式变化第二次复现)
       / multi-device — 单板环境，多板未验
-- [x] nine partitions/userdata — 九个目标全部降解、前置校验通过、镜像 revalidate 通过(未派发)
-- [x] read-domain-aware verification(readback/typed-skip)— 真机实测：1 Verified / 2 Failed /
-      6 TypedSkip，读窗边界与 AD-006 相容(AD-019)；+ build postflight — 期望值已从
-      真实 `system.img` 提取(`OpenHarmony-7.0.0.36`，AD-016)，比对待写入后执行
+- [x] nine partitions/userdata — 真机派发：九个目标全部写入并逐一摘要比对(两次全刷)
+- [x] read-domain-aware verification(readback/typed-skip)— 真机实测，两次全刷逐分区同形：
+      2 Verified / 1 结构性 Failed(`boot_linux` 跨读窗边界) / 6 TypedSkip，与 AD-006/AD-019
+      相容；+ build postflight — 比对已执行，设备答出被写入归档声明的 `OpenHarmony-7.0.0.37`
 - [~] rebind 瞬态容忍 — ✅ 真机实测两个方向的空窗(3,725 ms / 15,579 ms)、
       serial 与 topology 双双变化、窗口内始终唯一匹配(AD-020)；
-      normal 别名 — 未验：它是 hdc 的词汇，需走 ManagedDeviceControlPort，那一侧是 authority 的
-- [~] crash/cancel/fault — 软件层 ✅(13.3 逐行测试、撕裂尾部穷举、`wlx` 不可中断)；
-      真机版需要先有写入
+      normal 别名的验证发生在 authority 侧(委托 postflight 以 bound-HDC 别名重认)，本仓不代验收
+- [~] crash/cancel/fault — 软件层 ✅(13.3 逐行测试、撕裂尾部穷举、写入不可中断)；
+      真机版(写入中途 SIGKILL)仍未做
 - [~] outcomeUnknown no replay — 软件层 ✅(状态机无回边、四个 disposition 均拒绝重派、
-      重启后消费中断的 permit 判 unknown)；真机版需要先有写入
+      重启后消费中断的 permit 判 unknown)；真机版仍未做
 - [~] eligible complete-overwrite recovery — 只读半 ✅(possible effects / reconcile 四态 /
       eligibility 判定，`arkforge-engine::superseding`)；当前所有 Profile 均判为不合格，
-      因为没有已发布的覆盖声明。recovery plan 物化需真实写入产生的 effect set
-- [ ] ArkDeck production lowering 无 Rockchip command/address
+      因为没有已发布的覆盖声明。recovery plan 物化待覆盖声明发布
+- [x] ArkDeck production lowering 无 Rockchip command/address — ArkDeck chg-2026-059 已落地，
+      该仓 contract tests 守卫；本仓 adapter 归属表照旧断言仅两个 case 移交
 
 ## AF-V3：DAYU600 evidence + plan-only
 

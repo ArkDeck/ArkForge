@@ -1,17 +1,26 @@
-# AF-V2 验收证据（进行中：除写入外全部完成）
+# AF-V2 验收证据（第一验收项已通过；余项见 §6 后记）
 
-> 日期：2026-08-15
+> 首记日期：2026-08-15；后记日期：2026-08-19
 >
 > 范围：architecture.md 22 `AF-V2：DAYU200 ArkForge production cutover`
 >
-> **本文不是「AF-V2 已验收」。** AF-V2 验收的第一条是
-> `real DAYU200 full flash pass`，它**没有通过**——设备写入次数至今为 **0**。
-> 本文记录的是：哪些条目已经在真机上通过、哪些还没有、以及没通过的每一条为什么。
+> **2026-08-18，第一验收项 `real DAYU200 full flash pass` 通过。**
+> `flash.dayu200` 端到端 `succeeded`：ArkDeck 签发 permit，`arkforged` 写入
+> 全部九个分区、自发复位、postflight 验证身份与构建(设备答
+> `OpenHarmony-7.0.0.37`)。job `job-a4b7d539571082b1958ebaaf2c14bd2c`——
+> **用的是当日的 fixed-tool 执行面**；同日起步的 NRU-001..004 随后把执行面
+> 换成原生 RockUSB 并移除 vendor 运行时，2026-08-19 纯原生二进制全量复验
+> 亦 `succeeded`(`job-b00e006a1fbe9d6de388efab4138b9a2`)。两次运行与换轨
+> 过程见 [首过与原生换轨](runs/2026-08-19-dayu200-green-flash-and-native-cutover.md)。
 >
-> 之所以现在写，是为了把「已经证明了什么」钉住。一份等到全绿才写的验收文档，
-> 会让中途的部分结论无处安放，最后被整体读成通过。
+> **本文仍不整体宣布「AF-V2 已验收」**：逐项状态见 §6 后记——真机 crash 半、
+> 掉电、多设备仍未验证，ProductionVerified 的成熟度提升是另一个决定(AD-025)。
 >
-> 复现：`cargo test --workspace --offline`(441 tests，全绿)。
+> §1–§5 是 2026-08-15 的原文，按当日事实记录(当日设备写入次数为 0，
+> 且执行面还是后来被 NRU-004 退役的 fixed-tool 路径)。保留它是同一个理由：
+> 一份等到全绿才写的验收文档，会让中途的部分结论无处安放。
+>
+> 复现(当日)：`cargo test --workspace --offline`(441 tests，全绿)。
 > 真机部分见 [2026-08-15 彩排](runs/2026-08-15-dayu200-flash-rehearsal.md)。
 
 ---
@@ -239,3 +248,31 @@ ArkDeck 仓变更。提案 §1 列出了要删的两个 case 及其全部实现�
   不是 Executable plan。任何一次通过只发布它自己那一个组合——maturity 是组合键。
 - **simulation / plan-only 不记 real hardware pass**（ledger §5）：
   本文每一条 ✅ 都注明了是软件层还是真机。
+
+---
+
+## 6. 后记（2026-08-19）：全绿之后的逐项状态
+
+通过在前、换轨在后：第一次真机写入(2026-08-18 `job-a4b7d539…`)走的正是
+§2 描述的 fixed-tool 路径——那是它第一次也是最后一批写入。同日 16:20 起
+NRU-001..004 落地原生 RockUSB(`NativeRockUsbPort` + 七个语义动作)、默认切换、
+移除 vendor 运行时；2026-08-19 纯原生二进制全量复验 `succeeded`
+(`job-b00e006a…`，其回执自证 daemon 摘要)。所以 §2 表格从"现行机制描述"
+变成了"当时已交付什么"的历史记录，现行机制见
+[首过与原生换轨](runs/2026-08-19-dayu200-green-flash-and-native-cutover.md)。
+
+| §3 验收项 | 2026-08-15 | 现状 |
+|---|---|---|
+| 3.1 real DAYU200 full flash pass | ⛔ 写入 0 | **✅ 2026-08-18 通过**(fixed-tool 面；08-19 原生面复验同绿，[证据](runs/2026-08-19-dayu200-green-flash-and-native-cutover.md)) |
+| 3.2 exact identity | ✅(单板) | ✅ 不变；multi-device 仍未验 |
+| 3.3 nine partitions/userdata | 软件层 | **✅ 真机派发**，九目标全部写入并逐一摘要比对 |
+| 3.4 read-domain-aware verification | ✅ 真机 | ✅ 两次全刷逐分区同形(2 Verified / 1 结构性 Failed / 6 TypedSkip，见换轨证据 §4) |
+| 3.5 build postflight | 🟡 比对未执行 | **✅ 已执行**：设备答出被写入归档声明的 `OpenHarmony-7.0.0.37`(期望值来自镜像本身，与 AD-016 的原则一致) |
+| 3.6 rebind / normal 别名 | 🟡 | ✅ 瞬态容忍不变；绿刷的委托 postflight 以 bound-HDC 别名重认(`verification: exact-published-profile-and-bound-hdc`)——别名验证发生在 authority 侧，本仓照旧不代它验收 |
+| 3.7 crash/cancel/fault(真机半) | ⛔ | **仍 ⛔**：写入中途 SIGKILL 未在真机做过 |
+| 3.8 outcomeUnknown no replay(真机半) | ⛔ | **仍 ⛔**：同上 |
+| 3.9 complete-overwrite recovery | 🟡 只读半 | 🟡 不变：Profile 仍声明 `supportsCompleteOverwrite: false`，plan 物化待覆盖声明 |
+| 3.10 ArkDeck lowering 无 Rockchip command/address | ⛔ | ✅ ArkDeck 侧 chg-2026-059 已落地(该仓 contract tests 守卫)；本仓适配层归属表照旧断言仅两个 case 移交 |
+
+ProductionVerified 的提升不随本次通过自动发生——那需要维护者按 AD-025
+对着 evidence set 另做决定。

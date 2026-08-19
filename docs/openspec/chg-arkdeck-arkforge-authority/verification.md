@@ -3,14 +3,16 @@
 > Change:CHG-YYYY-NNN-arkdeck-arkforge-authority@r1
 > Status:planned；proposal merge 只批准 scope，不代表实现或真机通过
 
-> **NRU-004 超越声明（2026-08-19，ArkForge main `c049a11`）**：Environment 中
-> 「pinned rkdeveloptool（homebrew 那份不算，quarantine 会挂死在 dyld）」一条
-> 作废——`arkforged` 原生执行，不再绑定任何外部工具。AFA-AC-6 的观测点
-> 「九条 `wlx` 全部 `Write LBA from file (100%)`」由九条 `write-partition`
-> 语义回执替代（`writePayloadSha256` 与 staged digest 逐一比对）；九条验收的
-> 语义均不变。2026-08-18 原生路径 `flash.dayu200` 全绿：
-> `job-a4b7d539571082b1958ebaaf2c14bd2c`，见
-> `../../evidence/runs/2026-08-18-dayu200-native-green-flash.md`。
+> **NRU-004 超越声明（2026-08-19，ArkForge main `c049a11`）**：本矩阵的九条
+> 验收于 2026-08-18 以**当时的 fixed-tool 执行面**通过
+> （`job-a4b7d539571082b1958ebaaf2c14bd2c`——AC-6 的「九条 `wlx` 全部
+> `Write LBA from file (100%)`」正是那个执行面的观测点）。其后 NRU-004 退役了
+> 该执行面：Environment 中「pinned rkdeveloptool（homebrew 那份不算，quarantine
+> 会挂死在 dyld）」一条作废，`arkforged` 原生执行、不再绑定任何外部工具；AC-6
+> 的观测点在原生面由九条 `write-partition` 语义回执承担（`writePayloadSha256`
+> 与 staged digest 逐一比对）。2026-08-19 vendor 移除后的原生面全量复验全绿：
+> `job-b00e006a1fbe9d6de388efab4138b9a2`，见
+> `../../evidence/runs/2026-08-19-dayu200-green-flash-and-native-cutover.md`。
 
 ## Environment
 

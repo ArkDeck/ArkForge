@@ -284,22 +284,69 @@ fn the_unshippable_toolchain_finding_is_closed_by_native_packaging() {
     assert!(!package_script.contains("RKDEVELOPTOOL"));
 }
 
-/// AF-V2 is not accepted, and its acceptance document must keep saying so.
+/// The AF-V2 flash claim is bound to one specific run, not to optimism.
 ///
-/// A document titled "AF-V2 验收证据" is exactly the artifact that gets skimmed
-/// and read as "AF-V2 passed". The first acceptance line is a real DAYU200
-/// flash; until that happens, the document has to state the device write count
-/// and the reason, and this asserts it does.
+/// Until 2026-08-18 this test pinned "device write count 0". The first real
+/// flash passed that day (native RockUSB, NRU-004), so the pin inverts: the
+/// acceptance document must cite the exact job and its evidence record, must
+/// still refuse a blanket "AF-V2 accepted" reading, and must keep naming what
+/// remains unverified. A pass claim that names no evidence is the same drift
+/// the zero-claim used to guard against, in the other direction.
 #[test]
-fn the_af_v2_acceptance_document_does_not_claim_a_flash_that_did_not_happen() {
+fn the_af_v2_flash_claim_is_bound_to_recorded_evidence() {
     const ACCEPTANCE: &str = include_str!("../../../docs/evidence/AF-V2-acceptance.md");
+    const GREEN_RUN: &str = include_str!(
+        "../../../docs/evidence/runs/2026-08-19-dayu200-green-flash-and-native-cutover.md"
+    );
+
+    // The claim names its job and its evidence file.
     assert!(
-        ACCEPTANCE.contains("设备写入次数至今为 **0**"),
-        "the document must state the device write count"
+        ACCEPTANCE.contains("job-a4b7d539571082b1958ebaaf2c14bd2c"),
+        "the acceptance document must cite the job that passed"
     );
     assert!(
-        ACCEPTANCE.contains("**本文不是「AF-V2 已验收」。**"),
-        "the document must refuse the reading it would otherwise get"
+        ACCEPTANCE.contains("runs/2026-08-19-dayu200-green-flash-and-native-cutover.md"),
+        "the acceptance document must point at the run record"
+    );
+    // The run record carries the identities that make the claim checkable:
+    // the first pass (fixed-tool era, run A) and the post-retirement native
+    // pass (run B), each with its job, plan digest, and daemon identity.
+    for pinned in [
+        // Run A — the AF-V2 acceptance pass, on the since-retired fixed tool.
+        "job-a4b7d539571082b1958ebaaf2c14bd2c",
+        "JOB-000001A013991062",
+        "c8837ff0137b037e06b96129fce71951337b58d051a2bc5c006dfff015eebc5c",
+        // Run B — the vendor-free native pass after c049a11.
+        "job-b00e006a1fbe9d6de388efab4138b9a2",
+        "JOB-000001A0180894B7",
+        "dde51435593d77027d5c111d00711c95b69bd2331ea6137fae2c025efe30c4cb",
+        "f3dfc624f24c0e7ebd586b12acd0d64c145721f17e96db5557e07b2fbb1766d9",
+        // Both runs verified the same flashed build.
+        "OpenHarmony-7.0.0.37",
+    ] {
+        assert!(GREEN_RUN.contains(pinned), "the run record must pin {pinned}");
+    }
+    // The record must keep the backend attribution honest in both directions.
+    assert!(
+        GREEN_RUN.contains("fixed-tool") && GREEN_RUN.contains("NativeRockUsbPort"),
+        "the run record must attribute each pass to its actual backend"
+    );
+
+    // Still no blanket acceptance, and the open boundaries stay named.
+    assert!(
+        ACCEPTANCE.contains("**本文仍不整体宣布「AF-V2 已验收」**"),
+        "one green run is one acceptance item, not the whole list"
+    );
+    for open_boundary in ["掉电", "SIGKILL", "multi-device"] {
+        assert!(
+            ACCEPTANCE.contains(open_boundary),
+            "the document must keep naming the unverified boundary {open_boundary}"
+        );
+    }
+    // Maturity promotion stays a separate decision (AD-025).
+    assert!(
+        ACCEPTANCE.contains("ProductionVerified 的提升不随本次通过自动发生"),
+        "a campaign pass must not read as a maturity promotion"
     );
     // The ledger's own rule (§5): plan-only never counts as a hardware pass.
     assert!(

@@ -30,9 +30,10 @@
 >   `writePayloadBytes`/`writeWireSectors`/`writeChunks`/`writePayloadSha256`。
 > - **§8.2 的失败二分**「tool 被 spawn 之前/之后」现读作
 >   「第一条 WRITE_LBA CBW 发出之前/之后」（`dispatch.rs` 的 `classify`）。
-> - **顶注「还没有真机跑一次」已过时**：2026-08-18 `flash.dayu200` 全绿
->   （`job-a4b7d539571082b1958ebaaf2c14bd2c`，见
->   `../../evidence/runs/2026-08-18-dayu200-native-green-flash.md`）。
+> - **顶注「还没有真机跑一次」已过时**：2026-08-18 `flash.dayu200` 首过
+>   （`job-a4b7d539571082b1958ebaaf2c14bd2c`，当日 fixed-tool 面），2026-08-19
+>   vendor 移除后原生面亦全绿（`job-b00e006a1fbe9d6de388efab4138b9a2`），见
+>   `../../evidence/runs/2026-08-19-dayu200-green-flash-and-native-cutover.md`。
 >
 > 治理版在 ArkDeck 仓 `openspec/changes/chg-2026-059-arkdeck-arkforge-authority/`，
 > 已同步加同等声明。authority 分界本身（permit 签发、managed control、
