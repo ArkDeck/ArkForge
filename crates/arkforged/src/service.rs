@@ -97,11 +97,10 @@ pub struct Service {
     /// `ExecutionReadiness` deliberately carries only the id and digest needed
     /// by the engine's start gate. Materialization additionally needs the
     /// backend kind and version because those are part of the maturity key, so
-    /// the daemon retains the full identity here rather than reconstructing a
-    /// fixed-tool identity for the native protocol path.
+    /// the daemon retains the full native identity here.
     rockchip_toolchain: Option<ToolchainIdentity>,
     /// The acceptance campaign this daemon runs, if any. Held because
-    /// `bind_dispatcher` republishes maturity and must publish the same
+    /// Native dispatcher binding republishes maturity and must publish the same
     /// campaign the construction did — a binding that silently dropped it
     /// would turn an authorized campaign back into `hardwareGated`.
     campaign: Option<String>,
@@ -140,7 +139,7 @@ impl Service {
                 .iter()
                 .any(|format| format.as_str() == dayu200::FORMAT_ID)
             {
-                for toolchain in [fixed_tool_identity(), replay_toolchain_identity()] {
+                for toolchain in [unbound_native_toolchain_identity(), replay_toolchain_identity()] {
                     publish_dayu200_maturity(
                         &mut maturity,
                         &rockchip,
@@ -222,42 +221,6 @@ impl Service {
         self.readiness.authority_paired = true;
     }
 
-    /// Binds the fixed tool a dispatcher will run, and publishes the maturity
-    /// of the combination that binding creates.
-    ///
-    /// Identity, not a path. What the rest of the daemon needs to know is
-    /// whether these are the bytes a plan's maturity was published against;
-    /// which file they came from is the host's business.
-    ///
-    /// # Why maturity is republished here
-    ///
-    /// It used not to be, and the constant and the binding drifted. Maturity
-    /// was published at construction against [`fixed_tool_identity`] — a
-    /// literal digest — while the tool actually bound comes from
-    /// `--rkdeveloptool-sha256`. After AD-023 replaced the shipped
-    /// `rkdeveloptool` those were two different tools, so every plan
-    /// materialized under the constant was refused at `startExecution`:
-    ///
-    /// ```text
-    /// TOOLCHAIN_DIGEST_MISMATCH: the plan was materialized for toolchain
-    /// 038a8a0e… and this daemon has 231a05ef… bound
-    /// ```
-    ///
-    /// The refusal was correct — the toolchain digest is part of the maturity
-    /// combination (architecture.md 12.3), and that pairing was never
-    /// published. What was wrong is that the daemon published a combination it
-    /// could not execute and none it could. So the binding now publishes its
-    /// own combination: one source of truth, the tool actually loaded.
-    pub fn bind_dispatcher(&mut self, toolchain: BoundToolchain) {
-        let identity = ToolchainIdentity {
-            id: toolchain.id.clone(),
-            kind: ToolchainKind::FixedTool,
-            backend_digest: toolchain.backend_digest,
-            ..fixed_tool_identity()
-        };
-        self.bind_rockchip_dispatcher(toolchain, identity);
-    }
-
     /// Binds ArkForge's in-process RockUSB implementation.
     ///
     /// Its backend digest is the currently running `arkforged` executable,
@@ -305,14 +268,14 @@ impl Service {
 
     /// The RockUSB identity of the backend this daemon actually bound.
     ///
-    /// Falls back to the published literal when nothing is bound, which is
+    /// Falls back to a non-executable native placeholder when nothing is bound, which is
     /// the read-only daemon: it materializes assessments, and an assessment
     /// names the combination it was assessed against rather than one it
     /// could run.
     fn bound_rockchip_toolchain_identity(&self) -> ToolchainIdentity {
         self.rockchip_toolchain
             .clone()
-            .unwrap_or_else(fixed_tool_identity)
+            .unwrap_or_else(unbound_native_toolchain_identity)
     }
 
     /// What this daemon can do. Standing facts, established at startup.
@@ -1014,14 +977,10 @@ impl Service {
                 binding_revision: 0,
                 stable_identity_digest: probe.facts_digest,
             },
-            // The tool this daemon actually bound, not a constant. A plan
-            // materialized for one toolchain and started on a daemon holding
-            // another is refused at `startExecution` — correctly, since the
-            // digest is part of the maturity combination — so materializing
-            // against anything but the binding produces plans that can never
-            // run. That is what happened after AD-023 replaced the shipped
-            // `rkdeveloptool`: the literal still said 038a8a0e… while every
-            // daemon bound 231a05ef….
+            // The native implementation this daemon actually bound, not a
+            // source-revision constant. A plan materialized for one build and
+            // started on another is refused because the executable digest is
+            // part of the maturity combination.
             toolchain: if profile
                 .artifact_formats
                 .iter()
@@ -1222,24 +1181,6 @@ fn research_toolchain_identity() -> ToolchainIdentity {
     }
 }
 
-/// The pinned rkdeveloptool ArkDeck ships
-/// (`RockchipFlashProfile.pinnedToolchainFingerprint`).
-pub fn fixed_tool_identity() -> ToolchainIdentity {
-    ToolchainIdentity {
-        id: OpaqueId::new("rkdeveloptool-fixed").expect("literal identifier"),
-        kind: ToolchainKind::FixedTool,
-        version: Version::new(1, 32, 0),
-        backend_digest: Sha256Digest::parse_hex(
-            "038a8a0ea26ef7eb77451789f310c0c9fbeaf43a78af1d6146e02311a9c23611",
-        )
-        .expect("pinned literal digest"),
-        // ArkDeck records this alongside the hash. Two builds of this commit
-        // exist on the reference host with different digests, which is why the
-        // digest stays the discriminator and this is only provenance (AD-010).
-        upstream_ref: Some("rkdeveloptool@304f073752fd25c854e1bcf05d8e7f925b1f4e14".into()),
-    }
-}
-
 /// The in-process RockUSB backend compiled into this `arkforged` build.
 pub fn native_toolchain_identity(backend_digest: Sha256Digest) -> ToolchainIdentity {
     ToolchainIdentity {
@@ -1249,6 +1190,15 @@ pub fn native_toolchain_identity(backend_digest: Sha256Digest) -> ToolchainIdent
         backend_digest,
         upstream_ref: option_env!("ARKFORGE_SOURCE_REVISION").map(str::to_string),
     }
+}
+
+/// Identity used only for assessments built before the daemon binds its own
+/// executable. It can never pass execution readiness because no dispatcher is
+/// bound; the digest exists only to keep the assessment's maturity key exact.
+fn unbound_native_toolchain_identity() -> ToolchainIdentity {
+    native_toolchain_identity(arkforge_core::digest::sha256(
+        b"arkforge/native-rockusb/unbound",
+    ))
 }
 
 fn replay_toolchain_identity() -> ToolchainIdentity {

@@ -11,9 +11,10 @@ ArkForge 决定：该已授权语义计划如何通过具体固件格式、Provi
 ## 状态
 
 AF-V1(Core + DAYU200 read-only parity)已完成，见
-[验收证据](docs/evidence/AF-V1-acceptance.md)；AF-V3 的软件半已完成，见
-[AF-V3 验收证据](docs/evidence/AF-V3-acceptance.md)。当前构建是**只读垂直**：
-`startExecution` 不可用，仓内没有 USB 后端，也没有 vendor 可执行调用路径。
+[验收证据](docs/evidence/AF-V1-acceptance.md)；DAYU200 的 Loader-mode 枚举、
+读写、复位与九分区完整覆写均由 `arkforged` 原生 RockUSB 实现。仓内没有 vendor
+可执行调用路径。AF-V3 的软件半已完成，见
+[AF-V3 验收证据](docs/evidence/AF-V3-acceptance.md)。
 
 DAYU600 只有 inspect 与非可执行 PlanAssessment：PAC 格式、下载协议与数据影响
 全部未知(UNI-U01..U12)，17.5 的十八条证据门 0 条 PASS，见
@@ -59,9 +60,8 @@ Protobuf wire codec 均在仓内实现并对公开测试向量，理由见
 
 ## 目标设备
 
-- DAYU200(Rockchip RK3568 / RockUSB)：首个生产垂直，默认由 arkforged 原生
-  RockUSB typed 端口完成枚举、读写与复位；vendor 端口仅保留为迁移期显式 fallback，
-  不进入发布包；
+- DAYU200(Rockchip RK3568 / RockUSB)：首个生产垂直，仅由 arkforged 原生
+  RockUSB typed 端口完成枚举、读写与复位；
 - DAYU600(Unisoc uis7885 / PAC)：证据门(architecture.md 17.5)通过前仅 inspect 与非可执行 PlanAssessment。
   当前 0/18 通过；`arkforge-artifact::pac` 是结构观测器而非 PAC parser。
 

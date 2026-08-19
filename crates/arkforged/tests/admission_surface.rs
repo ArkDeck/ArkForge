@@ -101,10 +101,10 @@ fn plan_fixture() -> Fixture {
         .unwrap();
 
     let toolchain = ToolchainIdentity {
-        id: OpaqueId::new("example-tool-fixed").unwrap(),
-        kind: ToolchainKind::FixedTool,
-        version: Version::new(1, 32, 0),
-        backend_digest: sha256(b"fixed tool"),
+        id: OpaqueId::new("arkforged-native-rockusb").unwrap(),
+        kind: ToolchainKind::NativeProtocol,
+        version: Version::new(0, 1, 0),
+        backend_digest: sha256(b"native arkforged build"),
         upstream_ref: None,
     };
     let host = HostPlatform::new("macos", "aarch64").unwrap();
@@ -861,96 +861,182 @@ fn a_permit_round_trips_through_its_canonical_bytes() {
 // Dispatch
 // ---------------------------------------------------------------------------
 
-/// A tool port that answers like the real one, without a device.
-///
-/// The outputs are the shapes measured on a DAYU200 in Loader mode on
-/// 2026-08-15 (AD-018, AD-019): the three-column partition listing, a windowed
-/// read face, and the vendor tool's own success markers. Scripting them is what
-/// lets the whole job walk — writes included — run in a test suite that must
-/// never touch hardware.
+/// A native semantic port that answers like a DAYU200 without touching hardware.
 #[derive(Debug, Default)]
 struct ScriptedPort {
-    argv_log: std::cell::RefCell<Vec<Vec<String>>>,
+    operations: std::cell::RefCell<Vec<String>>,
+    written: std::cell::RefCell<Vec<String>>,
 }
-
-const REAL_PPT: &str = concat!(
-    "**********Partition Info(GPT)**********\r\n",
-    "NO  LBA       Name                \r\n",
-    "00  00002000  uboot\r\n",
-    "01  00004000  misc\r\n",
-    "02  00006000  bootctrl\r\n",
-    "03  00007000  resource\r\n",
-    "04  0000A000  boot_linux\r\n",
-    "05  0003A000  ramdisk\r\n",
-    "06  0003C000  system\r\n",
-    "07  0043C000  vendor\r\n",
-    "08  0063C000  sys-prod\r\n",
-    "09  00655000  chip-prod\r\n",
-    "10  0066E000  updater\r\n",
-    "11  0067E000  eng_system\r\n",
-    "12  00686000  eng_chipset\r\n",
-    "13  0069E000  chip_ckm\r\n",
-    "14  01308000  userdata\r\n",
-);
 
 impl ScriptedPort {
-    fn writes(&self) -> Vec<Vec<String>> {
-        self.argv_log
-            .borrow()
-            .iter()
-            .filter(|argv| argv.first().map(String::as_str) == Some("wlx"))
-            .cloned()
-            .collect()
+    fn writes(&self) -> Vec<String> {
+        self.written.borrow().clone()
     }
 
-    fn issued(&self, command: &str) -> usize {
-        self.argv_log
+    fn issued(&self, operation: &str) -> usize {
+        self.operations
             .borrow()
             .iter()
-            .filter(|argv| argv.first().map(String::as_str) == Some(command))
+            .filter(|observed| observed.as_str() == operation)
             .count()
+    }
+
+    fn table() -> arkforge_artifact::manifest::PartitionTableFact {
+        let rows = [
+            ("uboot", 8_192),
+            ("misc", 16_384),
+            ("bootctrl", 24_576),
+            ("resource", 28_672),
+            ("boot_linux", 40_960),
+            ("ramdisk", 237_568),
+            ("system", 245_760),
+            ("vendor", 4_440_064),
+            ("sys-prod", 6_537_216),
+            ("chip-prod", 6_639_616),
+            ("updater", 6_742_016),
+            ("eng_system", 6_815_744),
+            ("eng_chipset", 6_848_512),
+            ("chip_ckm", 6_938_624),
+            ("userdata", 19_955_712),
+        ];
+        let entries = rows
+            .iter()
+            .enumerate()
+            .map(|(index, (name, offset))| {
+                let next = rows.get(index + 1).map(|(_, next)| *next);
+                arkforge_artifact::manifest::PartitionEntryFact {
+                    index: index as u32,
+                    name: (*name).to_string(),
+                    offset_sectors: *offset,
+                    size_sectors: next.map(|next| next - *offset),
+                    attribute: None,
+                    grammar_branch: if next.is_some() {
+                        arkforge_artifact::manifest::GrammarBranch::Fixed
+                    } else {
+                        arkforge_artifact::manifest::GrammarBranch::RemainderGrow
+                    },
+                }
+            })
+            .collect();
+        arkforge_artifact::manifest::PartitionTableFact {
+            device: "native-rockusb".into(),
+            logical_block_size: 512,
+            entries,
+        }
     }
 }
 
-impl arkforge_provider::rockchip_execute::FixedToolPort for ScriptedPort {
-    fn run(
+impl arkforge_provider::rockchip_execute::RockUsbPort for ScriptedPort {
+    fn discover(
         &self,
-        invocation: &arkforge_provider::rockchip_execute::ToolInvocation,
-    ) -> Result<arkforge_provider::rockchip_execute::ToolReceipt, String> {
-        self.argv_log.borrow_mut().push(invocation.argv.clone());
-        let receipt = |stdout: String| arkforge_provider::rockchip_execute::ToolReceipt {
-            exited_zero: true,
-            stdout,
-            stderr: String::new(),
-            truncated: false,
-            duration_ms: 1,
+    ) -> Result<
+        arkforge_provider::rockchip_execute::RockUsbObservation<
+            Vec<arkforge_provider::rockchip_execute::RockUsbDevice>,
+        >,
+        arkforge_provider::rockchip_execute::RockUsbPortFailure,
+    > {
+        self.operations.borrow_mut().push("discover".into());
+        Ok(arkforge_provider::rockchip_execute::RockUsbObservation {
+            value: vec![arkforge_provider::rockchip_execute::RockUsbDevice {
+                vendor_id: 0x2207,
+                product_id: 0x350a,
+                usb_specification: Some(0x0200),
+                location: arkforge_provider::rockchip_execute::RockUsbLocation::IokitTopology(
+                    0x0112_0000,
+                ),
+                mode: "loader".into(),
+                serial: Some("SCRIPTED".into()),
+                product_name: Some("DAYU200 Loader".into()),
+                vendor_name: Some("Rockchip".into()),
+                device_release: Some(0x0100),
+            }],
+            evidence_digest: sha256(b"scripted native discovery"),
+        })
+    }
+
+    fn read_partition_table(
+        &self,
+    ) -> Result<
+        arkforge_provider::rockchip_execute::RockUsbObservation<
+            arkforge_artifact::manifest::PartitionTableFact,
+        >,
+        arkforge_provider::rockchip_execute::RockUsbPortFailure,
+    > {
+        self.operations.borrow_mut().push("readPartitionTable".into());
+        Ok(arkforge_provider::rockchip_execute::RockUsbObservation {
+            value: Self::table(),
+            evidence_digest: sha256(b"scripted native GPT"),
+        })
+    }
+
+    fn read_sectors(
+        &self,
+        begin_sector: u64,
+        sectors: u64,
+        _scratch: &std::path::Path,
+    ) -> Result<
+        arkforge_provider::rockchip_execute::RockUsbObservation<Vec<u8>>,
+        arkforge_provider::rockchip_execute::RockUsbPortFailure,
+    > {
+        self.operations.borrow_mut().push("readSectors".into());
+        let mut bytes = if begin_sector == 1 {
+            vec![0u8; sectors as usize * 512]
+        } else {
+            vec![0xCC; sectors as usize * 512]
         };
-        match invocation.argv.first().map(String::as_str) {
-            Some("ld") => Ok(receipt(
-                "DevNo=1\tVid=0x2207,Pid=0x350a,LocationID=102\tLoader\n".into(),
-            )),
-            Some("ppt") => Ok(receipt(REAL_PPT.into())),
-            Some("rd") => Ok(receipt("Reset Device OK.\n".into())),
-            Some("wlx") => Ok(receipt("Write LBA from file (100%)\n".into())),
-            Some("rl") => {
-                let begin: u64 = invocation.argv[1].parse().map_err(|_| "bad sector")?;
-                let sectors: usize = invocation.argv[2].parse().map_err(|_| "bad count")?;
-                let out = std::path::PathBuf::from(&invocation.argv[3]);
-                // Sector 1 carries a real table; everything else reads as the
-                // erased-medium filler, which is what a windowed read face
-                // returns regardless of what is on the medium (AD-006).
-                let bytes = if begin == 1 {
-                    let mut block = vec![0u8; sectors * 512];
-                    block[..8].copy_from_slice(b"EFI PART");
-                    block
-                } else {
-                    vec![0xCC; sectors * 512]
-                };
-                std::fs::write(&out, &bytes).map_err(|error| error.to_string())?;
-                Ok(receipt(String::new()))
-            }
-            other => Err(format!("this port scripts no answer for {other:?}")),
+        if begin_sector == 1 {
+            bytes[..8].copy_from_slice(b"EFI PART");
         }
+        Ok(arkforge_provider::rockchip_execute::RockUsbObservation {
+            evidence_digest: sha256(&bytes),
+            value: bytes,
+        })
+    }
+
+    fn write_partition(
+        &self,
+        partition: &str,
+        _begin_sector: u64,
+        image: &arkforge_provider::rockchip_execute::StagedImage,
+    ) -> Result<
+        arkforge_provider::rockchip_execute::RockUsbMutationReceipt,
+        arkforge_provider::rockchip_execute::RockUsbPortFailure,
+    > {
+        let bytes = std::fs::read(&image.path)
+            .map_err(|error| arkforge_provider::rockchip_execute::RockUsbPortFailure::BeforeIo(
+                error.to_string(),
+            ))?;
+        self.operations.borrow_mut().push("writePartition".into());
+        self.written.borrow_mut().push(partition.to_string());
+        Ok(arkforge_provider::rockchip_execute::RockUsbMutationReceipt {
+            semantic_success: true,
+            evidence_digest: sha256(b"scripted native WRITE_LBA"),
+            duration_ms: 1,
+            detail: "native WRITE_LBA confirmed".into(),
+            progress: Some(arkforge_provider::rockchip_execute::RockUsbWriteProgress {
+                payload_bytes: bytes.len() as u64,
+                wire_sectors: bytes.len() as u64 / 512
+                    + u64::from(bytes.len() % 512 != 0),
+                chunks: 1,
+                payload_digest: sha256(&bytes),
+            }),
+        })
+    }
+
+    fn reset_device(
+        &self,
+    ) -> Result<
+        arkforge_provider::rockchip_execute::RockUsbMutationReceipt,
+        arkforge_provider::rockchip_execute::RockUsbPortFailure,
+    > {
+        self.operations.borrow_mut().push("resetDevice".into());
+        Ok(arkforge_provider::rockchip_execute::RockUsbMutationReceipt {
+            semantic_success: true,
+            evidence_digest: sha256(b"scripted native DEVICE_RESET"),
+            duration_ms: 1,
+            detail: "native DEVICE_RESET confirmed".into(),
+            progress: None,
+        })
     }
 }
 
@@ -1081,29 +1167,28 @@ fn a_job_dispatches_every_step_and_reaches_a_verdict_on_each() {
     );
     assert_eq!(job.state(), JobState::Succeeded);
 
-    // Nine partitions were written, each by name, each from a staged file.
+    // Nine partitions were written through native typed calls in Profile order.
     let writes = port.writes();
     assert_eq!(writes.len(), 9, "{writes:?}");
-    let written: Vec<&str> = writes.iter().map(|argv| argv[1].as_str()).collect();
     assert_eq!(
-        written,
+        writes,
         vec![
-            "uboot",
-            "resource",
-            "boot_linux",
-            "ramdisk",
-            "system",
-            "vendor",
-            "updater",
-            "chip_ckm",
-            "userdata",
+            "uboot".to_string(),
+            "resource".to_string(),
+            "boot_linux".to_string(),
+            "ramdisk".to_string(),
+            "system".to_string(),
+            "vendor".to_string(),
+            "updater".to_string(),
+            "chip_ckm".to_string(),
+            "userdata".to_string(),
         ],
         "writes run in the profile's declared order"
     );
 
     // The device's own table was read before any of them.
-    assert_eq!(port.issued("ppt"), 1);
-    assert_eq!(port.issued("rd"), 1);
+    assert_eq!(port.issued("readPartitionTable"), 1);
+    assert_eq!(port.issued("resetDevice"), 1);
 
     // Every readback landed outside the measured read window, so every one is a
     // typed skip — and a typed skip carries no strength (architecture.md 16.4).
@@ -1125,10 +1210,10 @@ fn a_job_dispatches_every_step_and_reaches_a_verdict_on_each() {
     }
 }
 
-/// A write the profile does not allow never reaches the tool, and the job says
-/// so without becoming unknown: nothing was spawned, so nothing happened.
+/// A refused staging precondition never reaches native USB, and the job says
+/// so without becoming unknown.
 #[test]
-fn a_dispatch_refused_before_the_spawn_confirms_no_effect() {
+fn a_dispatch_refused_before_native_usb_confirms_no_effect() {
     let root = TempRoot::new("dispatch-refused");
     let fixture = plan_fixture();
     let mut registry = JobRegistry::new(root.0.join("jobs"));
@@ -1136,7 +1221,7 @@ fn a_dispatch_refused_before_the_spawn_confirms_no_effect() {
     let mut dispatcher =
         arkforged::dispatch::Dispatcher::new(root.0.join("store"), root.0.join("work"), &port);
     // No archive in the store, so staging cannot resolve — a refusal that
-    // happens before any tool runs.
+    // happens before native USB runs.
     let job_id = registry
         .start(&fixture.envelope, &fixture.private_plan, NOW)
         .unwrap();

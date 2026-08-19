@@ -18,10 +18,6 @@ path = "src/main.rs"
 name = "arkforge-inspect"
 path = "src/bin/arkforge-inspect.rs"
 
-[[bin]]
-name = "arkforge-capture"
-path = "src/bin/arkforge-capture.rs"
-
 [dependencies]
 arkforge-core = { path = "../arkforge-core" }
 arkforge-usb = { path = "../arkforge-usb" }

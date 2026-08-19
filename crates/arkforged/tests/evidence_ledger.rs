@@ -239,8 +239,8 @@ fn the_entitlement_deadlock_stays_closed_by_something_that_exists() {
     assert!(row.contains("resolved"), "{row}");
     assert!(row.contains("AFD-0003"), "AD-007 must name what closed it: {row}");
 
-    // The native daemon is the only release input after NRU-004. The optional
-    // migration fallback is still checked by the same Mach-O reader at bind.
+    // The native daemon is the only release input after NRU-004. The same
+    // Mach-O reader remains the fail-closed check at native bind.
     for source in [arkforged::packaging::ARKFORGED_ENTITLEMENTS] {
         assert!(
             arkforged::packaging::plist_keys(source).is_empty(),

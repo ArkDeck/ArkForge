@@ -84,3 +84,9 @@ campaign 计划与 production 计划能得到相同摘要，一次验收活动�
 - `ProductionVerified` 仍无任何生产代码发布点。把一次成功的 campaign 提升为
   `ProductionVerified` 是**另一个决定**，需要 evidence set 支撑(2225 行)，
   不在本决定范围内。
+
+## NRU-004 后续状态（2026-08-19）
+
+本决定记录的是 vendor 迁移阶段如何打开第一次真机验收路径。ArkForge 当前只
+保留原生 RockUSB transport；上文的 vendor 二进制、命令与彩排工具均为历史
+观测，不是现行 runtime surface。

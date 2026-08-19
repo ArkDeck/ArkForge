@@ -11,7 +11,7 @@ use arkforge_artifact::manifest::{GrammarBranch, PartitionEntryFact, PartitionTa
 use core::fmt;
 
 pub const LOGICAL_BLOCK_BYTES: usize = 512;
-pub const VENDOR_PARITY_CHUNK_SECTORS: u16 = 128;
+pub const ROCKUSB_TRANSFER_CHUNK_SECTORS: u16 = 128;
 
 const CBW_BYTES: usize = 31;
 const CSW_BYTES: usize = 13;
@@ -99,8 +99,7 @@ impl<'a> RockUsbProtocol<'a> {
         Ok(sectors as u64)
     }
 
-    /// Reads an exact sector range using the same 128-sector transfer chunks
-    /// as the pinned vendor tool's `rl` path.
+    /// Reads an exact sector range using 128-sector RockUSB transfer chunks.
     pub fn read_lba(
         &mut self,
         begin_sector: u64,
@@ -127,7 +126,7 @@ impl<'a> RockUsbProtocol<'a> {
         let mut position = begin_sector;
         let mut remaining = sectors;
         while remaining > 0 {
-            let chunk = remaining.min(VENDOR_PARITY_CHUNK_SECTORS as u64) as u16;
+            let chunk = remaining.min(ROCKUSB_TRANSFER_CHUNK_SECTORS as u64) as u16;
             let transfer_bytes = chunk as usize * LOGICAL_BLOCK_BYTES;
             let bytes =
                 self.execute_in(READ_LBA, position as u32, chunk, transfer_bytes as u32, 10)?;
@@ -138,8 +137,8 @@ impl<'a> RockUsbProtocol<'a> {
         Ok(all)
     }
 
-    /// Writes bytes at an exact LBA using the pinned vendor tool's 128-sector
-    /// chunks. The final partial sector is zero-filled, matching `write_lba`.
+    /// Writes bytes at an exact LBA using 128-sector RockUSB chunks. The final
+    /// partial sector is zero-filled, matching `write_lba`.
     pub fn write_lba(
         &mut self,
         begin_sector: u64,
@@ -154,7 +153,7 @@ impl<'a> RockUsbProtocol<'a> {
         let mut position = begin_sector;
         let mut offset = 0usize;
         let mut chunks = 0u64;
-        let max_chunk_bytes = VENDOR_PARITY_CHUNK_SECTORS as usize * LOGICAL_BLOCK_BYTES;
+        let max_chunk_bytes = ROCKUSB_TRANSFER_CHUNK_SECTORS as usize * LOGICAL_BLOCK_BYTES;
         while offset < bytes.len() {
             let payload_end = (offset + max_chunk_bytes).min(bytes.len());
             let payload = &bytes[offset..payload_end];
@@ -185,8 +184,8 @@ impl<'a> RockUsbProtocol<'a> {
         self.execute_out(DEVICE_RESET, 0, 0, &[], 6)
     }
 
-    /// Reads and validates the device's primary GPT, then projects it into the
-    /// same partition semantics the vendor `ppt` adapter exposes.
+    /// Reads and validates the device's primary GPT, then projects it into
+    /// ArkForge partition semantics.
     pub fn read_partition_table(&mut self) -> Result<PartitionTableFact, RockUsbProtocolError> {
         let header_block = self.read_lba(1, 1)?;
         let header = GptHeader::parse(&header_block)?;
@@ -617,7 +616,7 @@ mod tests {
     }
 
     #[test]
-    fn read_lba_is_the_pinned_vendor_cbw_byte_for_byte() {
+    fn read_lba_emits_the_pinned_rockusb_cbw_byte_for_byte() {
         let mut data = vec![0u8; LOGICAL_BLOCK_BYTES];
         data[0..8].copy_from_slice(b"EFI PART");
         let mut io = ScriptedIo::with_reads(vec![data.clone(), csw(0x1122_3344)]);
@@ -665,7 +664,7 @@ mod tests {
     }
 
     #[test]
-    fn write_lba_chunks_at_the_vendor_128_sector_boundary() {
+    fn write_lba_chunks_at_the_rockusb_128_sector_boundary() {
         let payload = vec![0xabu8; 129 * LOGICAL_BLOCK_BYTES];
         let mut io = ScriptedIo::with_reads(vec![csw(5), csw(6)]);
         let mut protocol = RockUsbProtocol::new(&mut io, 5);
@@ -725,7 +724,7 @@ mod tests {
     }
 
     #[test]
-    fn capacity_accepts_the_vendor_anticipated_padded_flash_info() {
+    fn capacity_accepts_the_reference_implementation_padded_flash_info() {
         let mut info = vec![0u8; LOGICAL_BLOCK_BYTES];
         info[0..4].copy_from_slice(&31_250_000u32.to_le_bytes());
         let mut io = ScriptedIo::with_reads(vec![info, csw(17)]);
@@ -750,7 +749,7 @@ mod tests {
     }
 
     #[test]
-    fn a_valid_gpt_projects_the_vendor_partition_semantics() {
+    fn a_valid_gpt_projects_arkforge_partition_semantics() {
         let mut entries = vec![0u8; 128 * 128];
         write_entry(&mut entries[0..128], 0x2000, 0x3fff, "uboot");
         write_entry(&mut entries[128..256], 0x4000, 0x7fff, "userdata");

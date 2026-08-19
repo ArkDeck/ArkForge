@@ -27,9 +27,9 @@ use arkforge_artifact::dayu200;
 use arkforge_artifact::staging::stage_members;
 use arkforge_core::outcome::ActionDisposition;
 use arkforge_provider::rockchip_execute::{
-    execute_action, ExecutionError, ExecutionSession, FixedToolPort, RockUsbDevice,
-    RockUsbLocation, RockUsbMutationReceipt, RockUsbObservation, RockUsbPort,
-    RockUsbPortFailure, RockUsbWriteProgress, StagedImage, StoredAction,
+    execute_action, ExecutionError, ExecutionSession, RockUsbDevice, RockUsbLocation,
+    RockUsbMutationReceipt, RockUsbObservation, RockUsbPort, RockUsbPortFailure,
+    RockUsbWriteProgress, StagedImage, StoredAction,
 };
 use arkforge_provider::rockusb_protocol::{RockUsbBulkIo, RockUsbProtocol};
 use core::fmt;
@@ -247,8 +247,7 @@ impl fmt::Display for DispatchFailure {
 /// every refused precondition into an unresolved job.
 fn classify(error: ExecutionError) -> DispatchFailure {
     match error {
-        // Every one of these is a refusal the executor makes with no child
-        // process in existence.
+        // Every one of these is a refusal before native USB I/O begins.
         ExecutionError::RequiresAuthority { .. }
         | ExecutionError::ActionUndecodable(_)
         | ExecutionError::PortRefused { .. }
@@ -268,26 +267,12 @@ fn classify(error: ExecutionError) -> DispatchFailure {
         | ExecutionError::ScratchUnusable(_) => {
             DispatchFailure::BeforeAnyEffect(error.to_string())
         }
-        // The port was reached, so a child or native USB request may have run.
-        ExecutionError::ToolPort { .. } | ExecutionError::ReadFailed { .. } => {
+        // The port was reached, so a native USB request may have run.
+        ExecutionError::ExternalIo { .. } | ExecutionError::ReadFailed { .. } => {
             DispatchFailure::AfterExternalIo(error.to_string())
         }
     }
 }
-
-/// The fixed-tool port against a pinned host executable.
-///
-/// architecture.md 16.1: one bound executable, direct spawn, no shell, no PATH
-/// resolution. The argv arrives already lowered from the Provider's closed
-/// command enum — this type has no way to build one.
-#[derive(Debug)]
-pub struct HostFixedToolPort {
-    executable: PathBuf,
-    digest: arkforge_core::Sha256Digest,
-}
-
-/// Explicit name for the transitional vendor implementation.
-pub type VendorToolPort = HostFixedToolPort;
 
 /// Native DAYU200 Loader port. Each semantic call claims the exact Loader
 /// interface, confirms TEST_UNIT_READY, performs one typed protocol operation,
@@ -601,7 +586,6 @@ impl RockUsbPort for NativeRockUsbPort {
             evidence_digest: arkforge_core::digest::sha256(
                 format!("{detail} sha256={payload_digest}").as_bytes(),
             ),
-            exited_zero: true,
             duration_ms: started.elapsed().as_millis() as u64,
             detail,
             progress: Some(progress),
@@ -627,234 +611,10 @@ impl RockUsbPort for NativeRockUsbPort {
         Ok(RockUsbMutationReceipt {
             semantic_success: true,
             evidence_digest: arkforge_core::digest::sha256(detail.as_bytes()),
-            exited_zero: true,
             duration_ms: started.elapsed().as_millis() as u64,
             detail,
             progress: None,
         })
-    }
-}
-
-impl HostFixedToolPort {
-    pub fn open(executable: &Path) -> Result<Self, String> {
-        if !executable.is_absolute() {
-            return Err(format!(
-                "{} is not an absolute path; this port resolves no PATH",
-                executable.display()
-            ));
-        }
-        Ok(HostFixedToolPort {
-            executable: executable.to_path_buf(),
-            digest: executable_digest(executable)?,
-        })
-    }
-
-    /// The bytes that will run. Part of the maturity combination
-    /// (architecture.md 12.3), so a caller can record which tool it was.
-    pub fn digest(&self) -> arkforge_core::Sha256Digest {
-        self.digest
-    }
-
-    pub fn executable(&self) -> &Path {
-        &self.executable
-    }
-
-    /// Proves the tool can actually run, before anything depends on it.
-    ///
-    /// **Byte equality is not usability.** AD-015: the same bytes that work
-    /// normally hang forever in dyld when the file carries
-    /// `com.apple.quarantine`, and a digest check sees nothing wrong. So the
-    /// check is behavioural — spawn it, and require it to finish.
-    ///
-    /// `probe_argv` must be a device-free invocation. Which one that is
-    /// belongs to whoever knows the tool, so it is passed in rather than
-    /// guessed here: a self-test that enumerated USB would make starting the
-    /// daemon a device interaction.
-    ///
-    /// The timeout is the whole mechanism. A quarantined binary produces no
-    /// output and never exits, so "it printed something" would never be
-    /// reached and "it exited non-zero" would never fire either. Only the
-    /// clock distinguishes hung from slow.
-    pub fn self_test(
-        &self,
-        probe_argv: &[&str],
-        expect_marker: &str,
-        timeout: std::time::Duration,
-    ) -> Result<ToolSelfTest, ToolSelfTestFailure> {
-        use std::process::Stdio;
-
-        let started = std::time::Instant::now();
-        let mut child = std::process::Command::new(&self.executable)
-            .args(probe_argv)
-            .stdin(Stdio::null())
-            .stdout(Stdio::piped())
-            .stderr(Stdio::piped())
-            .spawn()
-            .map_err(|error| ToolSelfTestFailure::DidNotStart(error.to_string()))?;
-
-        // Poll rather than wait: `wait` has no deadline, and a hung child would
-        // hang the daemon's startup along with it.
-        let status = loop {
-            match child.try_wait() {
-                Ok(Some(status)) => break Some(status),
-                Ok(None) if started.elapsed() >= timeout => break None,
-                Ok(None) => std::thread::sleep(std::time::Duration::from_millis(10)),
-                Err(error) => {
-                    return Err(ToolSelfTestFailure::DidNotStart(error.to_string()));
-                }
-            }
-        };
-
-        if status.is_none() {
-            let _ = child.kill();
-            let _ = child.wait();
-            return Err(ToolSelfTestFailure::HungBeforeExiting {
-                after_ms: started.elapsed().as_millis() as u64,
-                quarantine: quarantine_evidence(&self.executable),
-            });
-        }
-
-        // Read after exit. The probe is expected to write a line, not a stream;
-        // a tool that filled the pipe would have blocked on the write and been
-        // caught by the timeout above, which is the honest outcome for a probe
-        // that was supposed to be trivial.
-        let mut output = String::new();
-        if let Some(mut stdout) = child.stdout.take() {
-            let _ = stdout.read_to_string(&mut output);
-        }
-        if let Some(mut stderr) = child.stderr.take() {
-            let _ = stderr.read_to_string(&mut output);
-        }
-
-        if !output.contains(expect_marker) {
-            // A quarantined binary does not always hang: it can also exit at
-            // once having produced nothing, which is what /tmp/rkq did on
-            // 2026-08-15 after macOS had already assessed it. Same cause,
-            // different shape, so the same evidence is gathered.
-            return Err(ToolSelfTestFailure::Unrecognized {
-                expected: expect_marker.to_string(),
-                observed: output.chars().take(200).collect(),
-                quarantine: quarantine_evidence(&self.executable),
-            });
-        }
-        Ok(ToolSelfTest {
-            duration_ms: started.elapsed().as_millis() as u64,
-            first_line: output.lines().next().unwrap_or_default().trim().to_string(),
-        })
-    }
-}
-
-/// What a passing self-test observed.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct ToolSelfTest {
-    pub duration_ms: u64,
-    /// The tool's own first line, so a log records what answered.
-    pub first_line: String,
-}
-
-/// Why the tool could not be shown to run.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum ToolSelfTestFailure {
-    DidNotStart(String),
-    /// Spawned and never finished. On macOS this is overwhelmingly quarantine
-    /// (AD-015), so the diagnosis says so and carries whatever evidence could
-    /// be gathered for it.
-    HungBeforeExiting {
-        after_ms: u64,
-        quarantine: QuarantineEvidence,
-    },
-    /// Ran and said nothing this tool would say. An empty answer is the
-    /// common shape: a binary that cannot load produces no output and exits.
-    Unrecognized {
-        expected: String,
-        observed: String,
-        quarantine: QuarantineEvidence,
-    },
-}
-
-impl QuarantineEvidence {
-    /// The sentence to append to a failure, if there is one worth appending.
-    fn remedy(&self) -> String {
-        match self {
-            QuarantineEvidence::Present(value) => format!(
-                " It carries com.apple.quarantine ({value}); clear it with \
-                 `xattr -d com.apple.quarantine <path>` (ArkForge AD-015)."
-            ),
-            QuarantineEvidence::Absent => " It carries no com.apple.quarantine, so the cause is \
-                 something else — a missing dynamic library or the wrong architecture would look \
-                 the same."
-                .to_string(),
-            QuarantineEvidence::Unknown => " Quarantine could not be checked here; if this is \
-                 macOS, try `xattr -p com.apple.quarantine <path>` (ArkForge AD-015)."
-                .to_string(),
-        }
-    }
-}
-
-/// What could be established about a quarantine attribute.
-///
-/// Best-effort and only consulted when the self-test already failed: reading an
-/// extended attribute needs a helper this daemon does not otherwise depend on,
-/// and a dependency acquired to explain a failure is cheaper than one acquired
-/// to do the work.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum QuarantineEvidence {
-    /// The attribute is present, with its value.
-    Present(String),
-    /// The helper ran and found none. The hang is something else.
-    Absent,
-    /// No helper available, so this says nothing either way.
-    Unknown,
-}
-
-fn quarantine_evidence(path: &Path) -> QuarantineEvidence {
-    const HELPER: &str = "/usr/bin/xattr";
-    if !Path::new(HELPER).exists() {
-        return QuarantineEvidence::Unknown;
-    }
-    let Ok(output) = std::process::Command::new(HELPER)
-        .args(["-p", "com.apple.quarantine"])
-        .arg(path)
-        .output()
-    else {
-        return QuarantineEvidence::Unknown;
-    };
-    if !output.status.success() {
-        // `xattr -p` fails when the attribute is absent, which is an answer.
-        return QuarantineEvidence::Absent;
-    }
-    QuarantineEvidence::Present(
-        String::from_utf8_lossy(&output.stdout).trim().to_string(),
-    )
-}
-
-impl fmt::Display for ToolSelfTestFailure {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            ToolSelfTestFailure::DidNotStart(detail) => {
-                write!(f, "the tool could not be started: {detail}")
-            }
-            ToolSelfTestFailure::HungBeforeExiting {
-                after_ms,
-                quarantine,
-            } => write!(
-                f,
-                "the tool did not finish a device-free probe within {after_ms} ms. Its bytes \
-                 match the pin, so this is not the wrong binary — it is a binary that cannot run \
-                 here.{}",
-                quarantine.remedy()
-            ),
-            ToolSelfTestFailure::Unrecognized {
-                expected,
-                observed,
-                quarantine,
-            } => write!(
-                f,
-                "the tool ran but did not identify itself: expected output containing \
-                 {expected:?}, observed {observed:?}.{}",
-                quarantine.remedy()
-            ),
-        }
     }
 }
 
@@ -875,136 +635,9 @@ pub fn executable_digest(path: &Path) -> Result<arkforge_core::Sha256Digest, Str
     Ok(hasher.finalize())
 }
 
-impl FixedToolPort for HostFixedToolPort {
-    fn run(
-        &self,
-        invocation: &arkforge_provider::rockchip_execute::ToolInvocation,
-    ) -> Result<arkforge_provider::rockchip_execute::ToolReceipt, String> {
-        let started = std::time::Instant::now();
-        let output = std::process::Command::new(&self.executable)
-            .args(&invocation.argv)
-            .output()
-            .map_err(|error| format!("{}: {error}", self.executable.display()))?;
-        let truncate = |bytes: &[u8]| -> (String, bool) {
-            let text = String::from_utf8_lossy(bytes).to_string();
-            if text.len() > invocation.stdout_budget {
-                // Keep the tail, not the head. The semantic markers this
-                // receipt is judged by — "Write LBA from file (100%)", the
-                // reset marker — are the *last* thing the tool prints, after
-                // however much progress chatter came first. Keeping the head
-                // read a successful long write as outcome-unknown: the budget
-                // filled with progress lines and the marker fell off the end.
-                let kept: String = text
-                    .chars()
-                    .rev()
-                    .take(invocation.stdout_budget)
-                    .collect::<Vec<_>>()
-                    .into_iter()
-                    .rev()
-                    .collect();
-                (kept, true)
-            } else {
-                (text, false)
-            }
-        };
-        let (stdout, stdout_truncated) = truncate(&output.stdout);
-        let (stderr, stderr_truncated) = truncate(&output.stderr);
-        Ok(arkforge_provider::rockchip_execute::ToolReceipt {
-            exited_zero: output.status.success(),
-            stdout,
-            stderr,
-            truncated: stdout_truncated || stderr_truncated,
-            duration_ms: started.elapsed().as_millis() as u64,
-        })
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    /// The classification is the whole judgement this module makes, so it is
-    /// asserted rather than trusted. A precondition refusal that reported
-    /// `OutcomeUnknown` would leave every rejected write needing reconciliation
-    /// it does not need.
-    /// The timeout is the mechanism, so it is tested against something that
-    /// genuinely never returns rather than against a binary that happens to be
-    /// broken today.
-    #[test]
-    fn a_tool_that_never_returns_is_killed_and_named_as_unable_to_run() {
-        let sleep = Path::new("/bin/sleep");
-        if !sleep.exists() {
-            eprintln!("skipped: no /bin/sleep on this host");
-            return;
-        }
-        let port = HostFixedToolPort::open(sleep).unwrap();
-        let started = std::time::Instant::now();
-        let failure = port
-            .self_test(&["60"], "never printed", std::time::Duration::from_millis(300))
-            .unwrap_err();
-
-        match failure {
-            ToolSelfTestFailure::HungBeforeExiting { after_ms, .. } => {
-                assert!(after_ms >= 300, "{after_ms} ms");
-            }
-            other => panic!("expected a hang, got {other}"),
-        }
-        // Killed, not waited out: the daemon's startup does not inherit the
-        // child's patience.
-        assert!(
-            started.elapsed() < std::time::Duration::from_secs(30),
-            "the self-test waited for the child instead of killing it"
-        );
-    }
-
-    /// A tool that runs but says nothing this daemon recognizes is refused too
-    /// — that is the other shape a binary which cannot load takes.
-    #[test]
-    fn a_tool_that_answers_with_something_else_is_refused() {
-        let echo = Path::new("/bin/echo");
-        if !echo.exists() {
-            eprintln!("skipped: no /bin/echo on this host");
-            return;
-        }
-        let port = HostFixedToolPort::open(echo).unwrap();
-        let failure = port
-            .self_test(
-                &["some other tool entirely"],
-                "the-tool-we-pinned",
-                std::time::Duration::from_secs(5),
-            )
-            .unwrap_err();
-        assert!(matches!(
-            failure,
-            ToolSelfTestFailure::Unrecognized { .. }
-        ));
-        // Every failure carries the quarantine question, answered one way or
-        // the other. AD-015 cost hours precisely because nothing asked it.
-        assert!(
-            failure.to_string().contains("quarantine"),
-            "{failure}"
-        );
-    }
-
-    #[test]
-    fn a_tool_that_is_not_there_is_named_as_not_starting() {
-        let missing = Path::new("/nonexistent/definitely-not-a-tool");
-        let Ok(port) = HostFixedToolPort::open(missing) else {
-            // `open` hashes the file, so a missing one fails there first. That
-            // is also a refusal, which is the point.
-            return;
-        };
-        assert!(matches!(
-            port.self_test(&[], "x", std::time::Duration::from_secs(1)),
-            Err(ToolSelfTestFailure::DidNotStart(_))
-        ));
-    }
-
-    #[test]
-    fn a_relative_tool_path_is_refused_rather_than_resolved() {
-        let error = HostFixedToolPort::open(Path::new("rkdeveloptool")).unwrap_err();
-        assert!(error.contains("resolves no PATH"), "{error}");
-    }
 
     #[test]
     fn native_write_local_preconditions_are_checked_before_usb_io() {
@@ -1071,8 +704,8 @@ mod tests {
     #[test]
     fn a_failure_after_external_io_leaves_the_outcome_unknown() {
         for error in [
-            ExecutionError::ToolPort {
-                argv: "wlx system /staged/system.img".into(),
+            ExecutionError::ExternalIo {
+                operation: "writePartition".into(),
                 message: "killed".into(),
             },
             ExecutionError::ReadFailed {

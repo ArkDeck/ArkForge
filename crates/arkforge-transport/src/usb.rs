@@ -577,8 +577,8 @@ mod tests {
         );
     }
 
-    /// AD-013: on 2026-08-14 `rkdeveloptool ld` reported `Mode=Maskrom` for
-    /// this exact device — PID 0x5000, product string "HDC Device", HDC
+    /// AD-013: on 2026-08-14 the retired mode probe reported `Mode=Maskrom`
+    /// for this exact device — PID 0x5000, product string "HDC Device", HDC
     /// answering `param get` — three times running.
     ///
     /// Maskrom is the stage where a loader is written into SRAM. A discovery
@@ -587,7 +587,7 @@ mod tests {
     /// mode comes from the Profile's measured VID/PID, and no vendor tool's
     /// output reaches it.
     #[test]
-    fn a_pid_the_vendor_tool_misreports_still_resolves_by_profile() {
+    fn a_pid_a_legacy_probe_misreported_still_resolves_by_profile() {
         let profile = dayu200_profile();
         let transport = UsbTransport::new(
             &profile,
@@ -605,9 +605,9 @@ mod tests {
             Some("hdc-normal")
         );
 
-        // Nothing in an observation carries the vendor tool's own vocabulary.
-        // These are the fields of the `ld` line — its mode word and its record
-        // shape — which is the output a mode must never be derived from.
+        // Nothing in an observation carries the retired probe's vocabulary.
+        // These are its mode word and record-shape fields, which are output a
+        // mode must never be derived from.
         // (The tool's *name* is deliberately not listed: the architecture guard
         // forbids naming it in this crate, and the property under test is about
         // the tool's output, not its name.)

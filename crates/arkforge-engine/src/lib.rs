@@ -11,7 +11,7 @@
 //!   distinct recovery plan could be offered (14.2–14.5).
 //!
 //! [`ExecutionReadiness`] says what this daemon can do, as standing facts — an
-//! authority paired and a fixed tool bound. Neither can be turned on by a
+//! authority paired and an execution dispatcher bound. Neither can be turned on by a
 //! request, and [`ExecutionBlocker`] has no variant meaning "allowed".
 
 #![forbid(unsafe_code)]
@@ -190,11 +190,10 @@ impl PlanStore {
     }
 }
 
-/// The tool this daemon has bound for dispatch.
+/// The implementation this daemon has bound for dispatch.
 ///
-/// Identity, not a path: which executable it is belongs to the host, and what
-/// matters downstream is whether its bytes are the ones a plan's maturity was
-/// published against (architecture.md 12.3).
+/// Identity, not a path: what matters downstream is whether its backend digest
+/// is the one a plan's maturity was published against (architecture.md 12.3).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct BoundToolchain {
     pub id: OpaqueId,
@@ -211,9 +210,10 @@ pub struct ExecutionReadiness {
     /// An authority handed this daemon a pairing secret, so a permit can be
     /// verified and receipts have somewhere to go.
     pub authority_paired: bool,
-    /// A fixed tool is bound, so a step this daemon must dispatch can actually
-    /// run. Without it a job would walk to its first dispatch and stop, which
-    /// is worse than refusing at the start: the permit would already be spent.
+    /// An execution dispatcher is bound, so a step this daemon must dispatch
+    /// can actually run. Without it a job would walk to its first dispatch and
+    /// stop, which is worse than refusing at the start: the permit would
+    /// already be spent.
     pub dispatcher: Option<BoundToolchain>,
 }
 
@@ -256,7 +256,7 @@ impl fmt::Display for ExecutionBlocker {
                  (architecture.md 8.6)",
             ),
             ExecutionBlocker::NoDispatcher => f.write_str(
-                "no fixed tool is bound, so a step this daemon must dispatch could not run. \
+                "no execution dispatcher is bound, so a step this daemon must dispatch could not run. \
                  Refused here rather than at the step: by then the permit would be spent and \
                  the job would have to be reconciled instead of simply not started",
             ),

@@ -1,22 +1,8 @@
-//! The Rockchip fixed-tool execution side.
+//! Native RockUSB execution for the DAYU200 Loader path.
 //!
-//! architecture.md 16.1: a fixed executable, direct spawn, no shell, no PATH
-//! resolution, no caller argv, and a closed enum lowering inside the Provider.
-//! The last clause is the one this module is built around — [`RockUsbCommand`]
-//! is the entire vocabulary, [`RockUsbCommand::argv`] is the only place an argv
-//! is constructed, and a caller has no way to reach a subprocess except through
-//! a command this enum can spell.
-//!
-//! Two commands the vendor tool offers are deliberately absent:
-//!
-//! - `db`/`ul`/`gpt` — Maskrom-stage commands. This Provider declares itself
-//!   applicable in Loader mode only, so on an inapplicable device it blocks
-//!   rather than reaching for something adjacent.
-//! - `wl` — sector-addressed write. `wlx` resolves the address from the
-//!   device's own table, which [`StoredAction::ValidatePartitionTable`] has
-//!   just proved equal to the plan's. A sector-addressed fallback would let a
-//!   write land at an address no observation confirmed, and no evidence has
-//!   ever shown `wlx` needing one (AD-006).
+//! Stored actions carry typed semantics only. The executor validates the
+//! Profile, observed partition table, staged artifact and read domain before
+//! calling the native [`RockUsbPort`]; there is no subprocess or argv surface.
 
 use arkforge_artifact::manifest::PartitionTableFact;
 use arkforge_core::digest::{sha256, CborValue, Sha256};
@@ -34,139 +20,14 @@ use std::collections::BTreeMap;
 use std::io::Read;
 use std::path::{Path, PathBuf};
 
-/// The tool's own success markers. Semantic success is the marker, never the
-/// exit status (architecture.md 12.4).
-pub const WRITE_SUCCESS_MARKER: &str = "Write LBA from file (100%)";
-pub const RESET_SUCCESS_MARKER: &str = "Reset Device OK.";
-
-/// The flash device string the tool and the archive both spell.
-const DEVICE_STRING: &str = "rk29xxnand";
-
 /// `a / b` rounded up. `u64::div_ceil` is unstable on this toolchain.
 fn ceil_div(numerator: u64, denominator: u64) -> u64 {
     numerator / denominator + u64::from(numerator % denominator != 0)
 }
 
-/// Sector size the tool addresses in. Not a Profile fact: it is the unit the
-/// `rl`/`wl` command grammar itself is written in.
-pub const TOOL_SECTOR_BYTES: u64 = 512;
+/// Logical sector size used by the native RockUSB protocol.
+pub const ROCKUSB_SECTOR_BYTES: u64 = 512;
 
-/// The entire command surface this Provider can express.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum RockUsbCommand {
-    /// `ld` — list devices and their mode.
-    ListDevices,
-    /// `ppt` — print the device's own partition table.
-    PrintPartitionTable,
-    /// `wlx <partition> <image>` — write, addressed by partition name.
-    WriteByName { partition: String, image: PathBuf },
-    /// `rl <begin> <count> <out>` — read sectors to a file.
-    ReadSectors {
-        begin_sector: u64,
-        sectors: u64,
-        out: PathBuf,
-    },
-    /// `rd` — reset the device.
-    ResetDevice,
-}
-
-impl RockUsbCommand {
-    /// The only place an argv is built.
-    pub fn argv(&self) -> Vec<String> {
-        match self {
-            RockUsbCommand::ListDevices => vec!["ld".into()],
-            RockUsbCommand::PrintPartitionTable => vec!["ppt".into()],
-            RockUsbCommand::WriteByName { partition, image } => vec![
-                "wlx".into(),
-                partition.clone(),
-                image.display().to_string(),
-            ],
-            RockUsbCommand::ReadSectors {
-                begin_sector,
-                sectors,
-                out,
-            } => vec![
-                "rl".into(),
-                begin_sector.to_string(),
-                sectors.to_string(),
-                out.display().to_string(),
-            ],
-            RockUsbCommand::ResetDevice => vec!["rd".into()],
-        }
-    }
-
-    /// The marker that means this command did what it claims, or `None` when
-    /// the command's evidence is its output rather than a marker.
-    pub fn success_marker(&self) -> Option<&'static str> {
-        match self {
-            RockUsbCommand::WriteByName { .. } => Some(WRITE_SUCCESS_MARKER),
-            RockUsbCommand::ResetDevice => Some(RESET_SUCCESS_MARKER),
-            RockUsbCommand::ListDevices
-            | RockUsbCommand::PrintPartitionTable
-            | RockUsbCommand::ReadSectors { .. } => None,
-        }
-    }
-
-    /// Whether killing the child is safe. A partition write is not
-    /// interruptible: the tool holds the device mid-transfer, and a kill leaves
-    /// the outcome unknown rather than cancelled (architecture.md 13.4).
-    pub fn is_interruptible(&self) -> bool {
-        !matches!(self, RockUsbCommand::WriteByName { .. })
-    }
-
-    /// Whether this command can change the device.
-    pub fn is_read_only(&self) -> bool {
-        matches!(
-            self,
-            RockUsbCommand::ListDevices
-                | RockUsbCommand::PrintPartitionTable
-                | RockUsbCommand::ReadSectors { .. }
-        )
-    }
-}
-
-/// One invocation, as the port receives it.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct ToolInvocation {
-    pub argv: Vec<String>,
-    /// Output beyond this is truncated rather than buffered without bound.
-    pub stdout_budget: usize,
-    pub interruptible: bool,
-}
-
-/// What the port observed.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct ToolReceipt {
-    pub exited_zero: bool,
-    pub stdout: String,
-    pub stderr: String,
-    pub truncated: bool,
-    pub duration_ms: u64,
-}
-
-impl ToolReceipt {
-    /// Everything the tool said, which is what evidence digests cover.
-    pub fn combined_output(&self) -> String {
-        let mut text = self.stdout.clone();
-        text.push_str(&self.stderr);
-        text
-    }
-
-    pub fn evidence_digest(&self) -> Sha256Digest {
-        sha256(self.combined_output().as_bytes())
-    }
-}
-
-/// The subprocess boundary.
-///
-/// The port receives an argv the Provider lowered from [`RockUsbCommand`]; it
-/// never receives one from outside. An implementation binds one pinned
-/// executable and is responsible for proving its identity before the first
-/// spawn — which executable is a host fact, not a plan fact, so it does not
-/// appear in the invocation.
-pub trait FixedToolPort: fmt::Debug {
-    fn run(&self, invocation: &ToolInvocation) -> Result<ToolReceipt, String>;
-}
 
 /// One device returned by the typed RockUSB port.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -182,22 +43,17 @@ pub struct RockUsbDevice {
     pub device_release: Option<u16>,
 }
 
-/// Location facts from the two migration backends are intentionally distinct.
-/// rkdeveloptool's `LocationID` is libusb `(bus << 8) | port`; IOKit's
-/// `locationID` is a controller topology bitfield. They describe attachment
-/// but are not numerically comparable.
+/// Native IOKit controller topology fact. It describes attachment and is not a
+/// stable device identity by itself.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum RockUsbLocation {
     IokitTopology(u32),
-    VendorBusPort(u64),
 }
 
 impl RockUsbDevice {
     pub fn summary(&self) -> String {
-        let location = match self.location {
-            RockUsbLocation::IokitTopology(value) => format!("iokit={value:08x}"),
-            RockUsbLocation::VendorBusPort(value) => format!("vendor={value}"),
-        };
+        let RockUsbLocation::IokitTopology(value) = self.location;
+        let location = format!("iokit={value:08x}");
         format!(
             "vid={:04x} pid={:04x} {location} mode={}",
             self.vendor_id, self.product_id, self.mode
@@ -219,14 +75,12 @@ pub struct RockUsbObservation<T> {
 pub struct RockUsbMutationReceipt {
     pub semantic_success: bool,
     pub evidence_digest: Sha256Digest,
-    pub exited_zero: bool,
     pub duration_ms: u64,
     pub detail: String,
     pub progress: Option<RockUsbWriteProgress>,
 }
 
-/// Native write progress derived from successful WRITE_LBA CSWs, never from
-/// parsing vendor stdout.
+/// Native write progress derived from successful WRITE_LBA CSWs.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RockUsbWriteProgress {
     pub payload_bytes: u64,
@@ -252,8 +106,8 @@ impl fmt::Display for RockUsbPortFailure {
     }
 }
 
-/// Closed, typed RockUSB semantics.  Vendor argv/stdout end at the adapter;
-/// the Provider and native implementation exchange only these values.
+/// Closed, typed RockUSB semantics. The Provider and native implementation
+/// exchange only these values.
 pub trait RockUsbPort: fmt::Debug {
     fn discover(&self) -> Result<RockUsbObservation<Vec<RockUsbDevice>>, RockUsbPortFailure>;
 
@@ -286,107 +140,6 @@ pub trait RockUsbPort: fmt::Debug {
     }
 }
 
-/// Transitional vendor adapter.  The subprocess vocabulary is private to
-/// this implementation and cannot leak into a native port caller.
-impl<T: FixedToolPort + ?Sized> RockUsbPort for T {
-    fn discover(&self) -> Result<RockUsbObservation<Vec<RockUsbDevice>>, RockUsbPortFailure> {
-        let receipt = legacy_run(self, &RockUsbCommand::ListDevices, 64 * 1024)?;
-        Ok(RockUsbObservation {
-            value: parse_ld(&receipt.stdout),
-            evidence_digest: receipt.evidence_digest(),
-        })
-    }
-
-    fn read_partition_table(
-        &self,
-    ) -> Result<RockUsbObservation<PartitionTableFact>, RockUsbPortFailure> {
-        let receipt = legacy_run(self, &RockUsbCommand::PrintPartitionTable, 256 * 1024)?;
-        let table = parse_ppt(&receipt.stdout)
-            .map_err(|error| RockUsbPortFailure::AfterIo(error.to_string()))?;
-        Ok(RockUsbObservation {
-            value: table,
-            evidence_digest: receipt.evidence_digest(),
-        })
-    }
-
-    fn read_sectors(
-        &self,
-        begin_sector: u64,
-        sectors: u64,
-        scratch: &Path,
-    ) -> Result<RockUsbObservation<Vec<u8>>, RockUsbPortFailure> {
-        let out = scratch.join(format!("vendor-read-{begin_sector}-{sectors}.bin"));
-        let receipt = legacy_run(
-            self,
-            &RockUsbCommand::ReadSectors {
-                begin_sector,
-                sectors,
-                out: out.clone(),
-            },
-            64 * 1024,
-        )?;
-        if !receipt.exited_zero {
-            return Err(RockUsbPortFailure::AfterIo(receipt.combined_output()));
-        }
-        let bytes = std::fs::read(&out)
-            .map_err(|error| RockUsbPortFailure::AfterIo(format!("{}: {error}", out.display())))?;
-        let _ = std::fs::remove_file(&out);
-        let expected = sectors
-            .checked_mul(TOOL_SECTOR_BYTES)
-            .and_then(|bytes| usize::try_from(bytes).ok())
-            .ok_or_else(|| RockUsbPortFailure::BeforeIo("read size overflows".into()))?;
-        if bytes.len() != expected {
-            return Err(RockUsbPortFailure::AfterIo(format!(
-                "vendor read returned {} bytes, expected {expected}",
-                bytes.len()
-            )));
-        }
-        Ok(RockUsbObservation {
-            evidence_digest: sha256(&bytes),
-            value: bytes,
-        })
-    }
-
-    fn write_partition(
-        &self,
-        partition: &str,
-        _begin_sector: u64,
-        image: &StagedImage,
-    ) -> Result<RockUsbMutationReceipt, RockUsbPortFailure> {
-        let receipt = legacy_run(
-            self,
-            &RockUsbCommand::WriteByName {
-                partition: partition.into(),
-                image: image.path.clone(),
-            },
-            1 << 20,
-        )?;
-        let detail = receipt.combined_output();
-        Ok(RockUsbMutationReceipt {
-            semantic_success: detail.contains(WRITE_SUCCESS_MARKER),
-            evidence_digest: receipt.evidence_digest(),
-            exited_zero: receipt.exited_zero,
-            duration_ms: receipt.duration_ms,
-            detail,
-            progress: None,
-        })
-    }
-
-    fn reset_device(&self) -> Result<RockUsbMutationReceipt, RockUsbPortFailure> {
-        let receipt = legacy_run(self, &RockUsbCommand::ResetDevice, 64 * 1024)?;
-        let detail = receipt.combined_output();
-        Ok(RockUsbMutationReceipt {
-            semantic_success: detail.contains(RESET_SUCCESS_MARKER),
-            evidence_digest: receipt.evidence_digest(),
-            exited_zero: receipt.exited_zero,
-            duration_ms: receipt.duration_ms,
-            detail,
-            progress: None,
-        })
-    }
-}
-
-/// An image extracted from a hashed archive and waiting to be written.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct StagedImage {
     pub member: String,
@@ -796,7 +549,7 @@ pub fn execute_action(
             Ok(outcome(
                 record,
                 disposition,
-                vec![fact("marker", RESET_SUCCESS_MARKER)],
+                vec![fact("operation", "DEVICE_RESET")],
                 receipt.evidence_digest,
                 None,
             ))
@@ -921,7 +674,7 @@ fn write_partition(
     // 4. It has to fit inside the span the device's table gives it. This is a
     //    refusal, not an addressing step: a write that would cross into the
     //    next partition is refused before external I/O begins.
-    let image_sectors = ceil_div(image.size_bytes, TOOL_SECTOR_BYTES);
+    let image_sectors = ceil_div(image.size_bytes, ROCKUSB_SECTOR_BYTES);
     if let Some(size_sectors) = entry.size_sectors {
         if image_sectors > size_sectors {
             return Err(ExecutionError::ImageOverrunsPartition {
@@ -942,8 +695,8 @@ fn write_partition(
         .map_err(|error| port_error("writePartition", error))?;
     if let Some(progress) = &receipt.progress {
         if progress.payload_bytes != image.size_bytes || progress.payload_digest != image.sha256 {
-            return Err(ExecutionError::ToolPort {
-                argv: "writePartition".into(),
+            return Err(ExecutionError::ExternalIo {
+                operation: "writePartition".into(),
                 message: format!(
                     "native WRITE_LBA sent {} bytes hashing to {}; staged image is {} bytes hashing to {}",
                     progress.payload_bytes,
@@ -980,8 +733,7 @@ fn write_partition(
         // write used to leave nothing behind but "unknown" — the one fact that
         // names the cause was the one fact thrown away. The tail is where the
         // tool says why it stopped.
-        facts.push(fact("toolExitedZero", receipt.exited_zero.to_string()));
-        facts.push(fact("toolDurationMs", receipt.duration_ms.to_string()));
+        facts.push(fact("operationDurationMs", receipt.duration_ms.to_string()));
         let tail: String = receipt
             .detail
             .chars()
@@ -991,7 +743,7 @@ fn write_partition(
             .into_iter()
             .rev()
             .collect();
-        facts.push(fact("toolOutputTail", tail));
+        facts.push(fact("operationDetailTail", tail));
     }
     Ok(outcome(
         record,
@@ -1024,7 +776,7 @@ fn readback_partition(
         .cloned()
         .ok_or(ExecutionError::ReadDomainNotCharacterized)?;
 
-    let sectors = ceil_div(range.length, TOOL_SECTOR_BYTES);
+    let sectors = ceil_div(range.length, ROCKUSB_SECTOR_BYTES);
     let bytes = read_sectors(port, scratch, begin_sector, sectors, partition)?;
     let read = &bytes[..(range.length as usize).min(bytes.len())];
 
@@ -1143,29 +895,14 @@ fn read_sectors(
         .map_err(|error| port_error("readSectors", error))
 }
 
-fn legacy_run<T: FixedToolPort + ?Sized>(
-    port: &T,
-    command: &RockUsbCommand,
-    budget: usize,
-) -> Result<ToolReceipt, RockUsbPortFailure> {
-    port.run(&ToolInvocation {
-        argv: command.argv(),
-        stdout_budget: budget,
-        interruptible: command.is_interruptible(),
-    })
-    .map_err(|message| {
-        RockUsbPortFailure::AfterIo(format!("running {:?}: {message}", command.argv().join(" ")))
-    })
-}
-
 fn port_error(operation: &str, error: RockUsbPortFailure) -> ExecutionError {
     match error {
         RockUsbPortFailure::BeforeIo(message) => ExecutionError::PortRefused {
             operation: operation.into(),
             message,
         },
-        RockUsbPortFailure::AfterIo(message) => ExecutionError::ToolPort {
-            argv: operation.into(),
+        RockUsbPortFailure::AfterIo(message) => ExecutionError::ExternalIo {
+            operation: operation.into(),
             message,
         },
     }
@@ -1195,138 +932,6 @@ fn fact(key: &str, value: impl Into<String>) -> (OpaqueId, String) {
     )
 }
 
-/// Parses the vendor adapter's `ld` rows into the typed device shape. Native
-/// discovery never passes through this parser.
-fn parse_ld(stdout: &str) -> Vec<RockUsbDevice> {
-    let mut devices = Vec::new();
-    for line in stdout.lines() {
-        if !line.contains("DevNo=") {
-            continue;
-        }
-        let normalized = line.replace(['\t', ','], " ");
-        let mut vendor_id = None;
-        let mut product_id = None;
-        let mut location = None;
-        let mut mode = None;
-        for field in normalized.split_whitespace() {
-            if let Some(value) = field.strip_prefix("Vid=") {
-                vendor_id = parse_hex(value).and_then(|value| u16::try_from(value).ok());
-            } else if let Some(value) = field.strip_prefix("Pid=") {
-                product_id = parse_hex(value).and_then(|value| u16::try_from(value).ok());
-            } else if let Some(value) = field.strip_prefix("LocationID=") {
-                location = parse_hex(value).map(RockUsbLocation::VendorBusPort);
-            } else if matches!(field, "Loader" | "Maskrom" | "Unknown") {
-                mode = Some(field.to_ascii_lowercase());
-            }
-        }
-        if let (Some(vendor_id), Some(product_id), Some(location), Some(mode)) =
-            (vendor_id, product_id, location, mode)
-        {
-            devices.push(RockUsbDevice {
-                vendor_id,
-                product_id,
-                usb_specification: None,
-                location,
-                mode,
-                serial: None,
-                product_name: None,
-                vendor_name: None,
-                device_release: None,
-            });
-        }
-    }
-    devices
-}
-
-/// Parses the tool's own partition table listing.
-///
-/// Measured on a DAYU200 in Loader mode, 2026-08-15 (AD-018). The real format
-/// is three columns, CRLF-terminated, and the LBA carries no `0x`:
-///
-/// ```text
-/// **********Partition Info(GPT)**********
-/// NO  LBA       Name
-/// 00  00002000  uboot
-/// 14  01308000  userdata
-/// ```
-///
-/// There is **no size column**. The device's table declares where each
-/// partition starts and nothing else, so `size_sectors` here is the distance to
-/// the next partition's start — an upper bound on what can be written without
-/// crossing into it, not a size the device declared. On this board the two
-/// differ: the archive gives `chip_ckm` 131072 sectors, and the next partition
-/// does not begin for 13017088, so the space between them is unallocated. The
-/// bound is what a refusal needs; the declared size belongs to the artifact.
-/// The last entry has no next, so its bound is `None` — the same thing the
-/// archive says with `-@...(userdata:grow)`.
-fn parse_ppt(stdout: &str) -> Result<PartitionTableFact, ExecutionError> {
-    use arkforge_artifact::manifest::{GrammarBranch, PartitionEntryFact};
-
-    let mut rows: Vec<(u32, u64, String)> = Vec::new();
-    for line in stdout.lines() {
-        let line = line.trim_end_matches(['\r', '\n']);
-        let fields: Vec<&str> = line.split_whitespace().collect();
-        if fields.len() != 3 {
-            continue;
-        }
-        // The header row is `NO LBA Name`, which has three fields too. An index
-        // that is not a number is what separates it from a partition row.
-        let (Ok(index), Some(offset)) = (fields[0].parse::<u32>(), parse_hex(fields[1])) else {
-            continue;
-        };
-        rows.push((index, offset, fields[2].to_string()));
-    }
-    if rows.is_empty() {
-        return Err(ExecutionError::PartitionTableUnreadable(
-            stdout.chars().take(200).collect(),
-        ));
-    }
-
-    let mut entries = Vec::with_capacity(rows.len());
-    for (position, (index, offset, name)) in rows.iter().enumerate() {
-        let size_sectors = rows
-            .get(position + 1)
-            .map(|(_, next_offset, _)| next_offset.saturating_sub(*offset));
-        entries.push(PartitionEntryFact {
-            index: *index,
-            name: name.clone(),
-            offset_sectors: *offset,
-            size_sectors,
-            attribute: None,
-            grammar_branch: if size_sectors.is_some() {
-                GrammarBranch::Fixed
-            } else {
-                GrammarBranch::RemainderGrow
-            },
-        });
-    }
-    Ok(PartitionTableFact {
-        device: DEVICE_STRING.to_string(),
-        logical_block_size: TOOL_SECTOR_BYTES as u32,
-        entries,
-    })
-}
-
-/// The tool prints LBAs as bare uppercase hex (`0003C000`), with no `0x`. The
-/// prefix is accepted too, so the same function reads a table written either
-/// way, but its absence is the normal case.
-fn parse_hex(text: &str) -> Option<u64> {
-    let body = text
-        .strip_prefix("0x")
-        .or_else(|| text.strip_prefix("0X"))
-        .unwrap_or(text);
-    if body.is_empty() || !body.chars().all(|character| character.is_ascii_hexdigit()) {
-        return None;
-    }
-    u64::from_str_radix(body, 16).ok()
-}
-
-/// Every Profile target must exist on the device where the Profile says, and
-/// every partition the device declares must be one the Profile knows.
-///
-/// This is the three-way agreement architecture.md 16.3 requires: an image in
-/// the artifact does not license a write, and neither does a partition on the
-/// device. Both have to be named by the Profile.
 fn check_conformance(
     observed: &PartitionTableFact,
     profile: &DeviceProfile,
@@ -1415,7 +1020,7 @@ pub enum ExecutionError {
         operation: String,
         message: String,
     },
-    ToolPort { argv: String, message: String },
+    ExternalIo { operation: String, message: String },
     LayoutMismatch {
         expected: Sha256Digest,
         observed: Sha256Digest,
@@ -1462,8 +1067,8 @@ impl fmt::Display for ExecutionError {
             ExecutionError::PortRefused { operation, message } => {
                 write!(f, "{operation} was refused before I/O: {message}")
             }
-            ExecutionError::ToolPort { argv, message } => {
-                write!(f, "running {argv:?}: {message}")
+            ExecutionError::ExternalIo { operation, message } => {
+                write!(f, "{operation} failed after native USB I/O began: {message}")
             }
             ExecutionError::LayoutMismatch { expected, observed } => write!(
                 f,
@@ -1548,112 +1153,65 @@ mod tests {
     fn profile() -> DeviceProfile {
         arkforge_core::profile::load(PROFILE_SOURCE).expect("the shipped profile parses")
     }
-
-    #[test]
-    fn the_command_surface_lowers_to_the_argv_the_evidence_was_produced_with() {
-        assert_eq!(RockUsbCommand::ListDevices.argv(), vec!["ld"]);
-        assert_eq!(RockUsbCommand::PrintPartitionTable.argv(), vec!["ppt"]);
-        assert_eq!(RockUsbCommand::ResetDevice.argv(), vec!["rd"]);
-        assert_eq!(
-            RockUsbCommand::WriteByName {
-                partition: "uboot".into(),
-                image: PathBuf::from("/staging/uboot.img"),
-            }
-            .argv(),
-            vec!["wlx", "uboot", "/staging/uboot.img"]
-        );
-        assert_eq!(
-            RockUsbCommand::ReadSectors {
-                begin_sector: 8192,
-                sectors: 4,
-                out: PathBuf::from("/scratch/read.bin"),
-            }
-            .argv(),
-            vec!["rl", "8192", "4", "/scratch/read.bin"]
-        );
+    fn device_table() -> PartitionTableFact {
+        let rows = [
+            ("uboot", 8_192),
+            ("misc", 16_384),
+            ("bootctrl", 24_576),
+            ("resource", 28_672),
+            ("boot_linux", 40_960),
+            ("ramdisk", 237_568),
+            ("system", 245_760),
+            ("vendor", 4_440_064),
+            ("sys-prod", 6_537_216),
+            ("chip-prod", 6_639_616),
+            ("updater", 6_742_016),
+            ("eng_system", 6_815_744),
+            ("eng_chipset", 6_848_512),
+            ("chip_ckm", 6_938_624),
+            ("userdata", 19_955_712),
+        ];
+        let entries = rows
+            .iter()
+            .enumerate()
+            .map(|(index, (name, offset))| {
+                let next = rows.get(index + 1).map(|(_, next)| *next);
+                arkforge_artifact::manifest::PartitionEntryFact {
+                    index: index as u32,
+                    name: (*name).to_string(),
+                    offset_sectors: *offset,
+                    size_sectors: next.map(|next| next - *offset),
+                    attribute: None,
+                    grammar_branch: if next.is_some() {
+                        arkforge_artifact::manifest::GrammarBranch::Fixed
+                    } else {
+                        arkforge_artifact::manifest::GrammarBranch::RemainderGrow
+                    },
+                }
+            })
+            .collect();
+        PartitionTableFact {
+            device: "native-rockusb".into(),
+            logical_block_size: ROCKUSB_SECTOR_BYTES as u32,
+            entries,
+        }
     }
 
     #[test]
-    fn only_a_write_is_non_interruptible() {
-        for command in [
-            RockUsbCommand::ListDevices,
-            RockUsbCommand::PrintPartitionTable,
-            RockUsbCommand::ResetDevice,
-            RockUsbCommand::ReadSectors {
-                begin_sector: 0,
-                sectors: 1,
-                out: PathBuf::from("/tmp/x"),
-            },
-        ] {
-            assert!(command.is_interruptible(), "{command:?}");
-        }
-        assert!(!RockUsbCommand::WriteByName {
-            partition: "system".into(),
-            image: PathBuf::from("/x"),
-        }
-        .is_interruptible());
-    }
-
-    /// Byte-for-byte the listing a DAYU200 in Loader mode printed on
-    /// 2026-08-15, CRLF and all (AD-018). The earlier fixture here was written
-    /// from documentation and had a size column the tool does not print; it
-    /// passed, and the real device did not.
-    const REAL_PPT: &str = concat!(
-        "**********Partition Info(GPT)**********\r\n",
-        "NO  LBA       Name                \r\n",
-        "00  00002000  uboot\r\n",
-        "01  00004000  misc\r\n",
-        "02  00006000  bootctrl\r\n",
-        "03  00007000  resource\r\n",
-        "04  0000A000  boot_linux\r\n",
-        "05  0003A000  ramdisk\r\n",
-        "06  0003C000  system\r\n",
-        "07  0043C000  vendor\r\n",
-        "08  0063C000  sys-prod\r\n",
-        "09  00655000  chip-prod\r\n",
-        "10  0066E000  updater\r\n",
-        "11  0067E000  eng_system\r\n",
-        "12  00686000  eng_chipset\r\n",
-        "13  0069E000  chip_ckm\r\n",
-        "14  01308000  userdata\r\n",
-    );
-
-    #[test]
-    fn the_devices_own_table_parses_into_the_same_units_the_archive_declares() {
-        let table = parse_ppt(REAL_PPT).unwrap();
+    fn native_partition_table_uses_profile_units() {
+        let table = device_table();
         assert_eq!(table.entries.len(), 15);
-        assert_eq!(table.entries[0].name, "uboot");
-        assert_eq!(table.entries[0].offset_sectors, 8192);
-        assert_eq!(table.entries[6].name, "system");
+        assert_eq!(table.entries[0].offset_sectors, 8_192);
         assert_eq!(table.entries[6].offset_sectors, 245_760);
-        // The tool prints no sizes. A span is derived from the next start,
-        // and the last entry has none.
         assert_eq!(table.entries[6].size_sectors, Some(4_194_304));
-        assert_eq!(table.entries[14].name, "userdata");
         assert_eq!(table.entries[14].offset_sectors, 19_955_712);
         assert_eq!(table.entries[14].size_sectors, None);
     }
 
-    #[test]
-    fn vendor_discovery_is_projected_into_the_typed_loader_identity() {
-        let devices = parse_ld(
-            "DevNo=1\tVid=0x2207,Pid=0x350a,LocationID=10100000\tLoader\r\n",
-        );
-        assert_eq!(devices.len(), 1);
-        assert_eq!(devices[0].vendor_id, 0x2207);
-        assert_eq!(devices[0].product_id, 0x350a);
-        assert_eq!(
-            devices[0].location,
-            RockUsbLocation::VendorBusPort(0x1010_0000)
-        );
-        assert_eq!(devices[0].mode, "loader");
-    }
-
-    /// The device's fifteen rows and the archive's fifteen rows are the same
     /// layout, which is the whole premise of a name-addressed write.
     #[test]
     fn the_device_and_the_archive_agree_on_every_partition_start() {
-        let device = parse_ppt(REAL_PPT).unwrap();
+        let device = device_table();
         let profile = profile();
         for target in &profile.allowed_targets {
             let entry = device
@@ -1673,7 +1231,7 @@ mod tests {
 
     #[test]
     fn a_device_partition_the_profile_never_named_is_refused() {
-        let mut device = parse_ppt(REAL_PPT).unwrap();
+        let mut device = device_table();
         device.entries.push(arkforge_artifact::manifest::PartitionEntryFact {
             index: 15,
             name: "somebody-elses-partition".into(),
@@ -1688,14 +1246,6 @@ mod tests {
                 "somebody-elses-partition".into()
             ]))
         );
-    }
-
-    #[test]
-    fn a_listing_with_no_rows_is_unreadable_rather_than_an_empty_table() {
-        assert!(matches!(
-            parse_ppt("rkdeveloptool: no device\n"),
-            Err(ExecutionError::PartitionTableUnreadable(_))
-        ));
     }
 
     fn range() -> ByteRange {
@@ -1794,29 +1344,15 @@ mod tests {
         );
     }
 
-    #[derive(Debug, Default)]
-    struct RecordingPort {
-        invocations: RefCell<Vec<Vec<String>>>,
-    }
-
-    impl FixedToolPort for RecordingPort {
-        fn run(&self, invocation: &ToolInvocation) -> Result<ToolReceipt, String> {
-            self.invocations
-                .borrow_mut()
-                .push(invocation.argv.clone());
-            Err("this port never runs anything".into())
-        }
-    }
-
     /// A write whose partition the Profile does not allow must never reach the
     /// port. The recording port proves "never reached", not "refused after".
     #[test]
-    fn a_write_to_a_partition_the_profile_protects_never_reaches_the_tool() {
+    fn a_write_to_a_partition_the_profile_protects_never_reaches_usb() {
         let profile = profile();
-        let port = RecordingPort::default();
+        let port = NativeRecordingPort::default();
         let mut session = ExecutionSession::new(BTreeMap::new());
         session.set_observed_table(PartitionTableFact {
-            device: DEVICE_STRING.into(),
+            device: "native-rockusb".into(),
             logical_block_size: 512,
             entries: Vec::new(),
         });
@@ -1833,15 +1369,15 @@ mod tests {
         .unwrap_err();
         assert_eq!(error, ExecutionError::TargetNotAllowed("misc".into()));
         assert!(
-            port.invocations.borrow().is_empty(),
-            "the tool was spawned for a protected partition"
+            port.writes.borrow().is_empty(),
+            "native USB was reached for a protected partition"
         );
     }
 
     #[test]
-    fn a_write_before_the_table_was_read_never_reaches_the_tool() {
+    fn a_write_before_the_table_was_read_never_reaches_usb() {
         let profile = profile();
-        let port = RecordingPort::default();
+        let port = NativeRecordingPort::default();
         let mut session = ExecutionSession::new(BTreeMap::new());
         let error = write_partition(
             &record_for_test(),
@@ -1854,7 +1390,7 @@ mod tests {
         )
         .unwrap_err();
         assert_eq!(error, ExecutionError::TableNotObservedYet);
-        assert!(port.invocations.borrow().is_empty());
+        assert!(port.writes.borrow().is_empty());
     }
 
     #[derive(Debug, Default)]
@@ -1899,14 +1435,11 @@ mod tests {
             Ok(RockUsbMutationReceipt {
                 semantic_success: true,
                 evidence_digest: sha256(b"typed native write receipt"),
-                // A native port has no child exit or stdout marker. These
-                // compatibility fields must not decide native success.
-                exited_zero: false,
                 duration_ms: 7,
-                detail: "no vendor stdout marker exists".into(),
+                detail: "native WRITE_LBA confirmed".into(),
                 progress: Some(RockUsbWriteProgress {
                     payload_bytes: bytes.len() as u64,
-                    wire_sectors: ceil_div(bytes.len() as u64, TOOL_SECTOR_BYTES),
+                    wire_sectors: ceil_div(bytes.len() as u64, ROCKUSB_SECTOR_BYTES),
                     chunks: 1,
                     payload_digest: sha256(&bytes),
                 }),
@@ -1928,7 +1461,7 @@ mod tests {
         std::fs::write(&image_path, &bytes).unwrap();
 
         let mut session = ExecutionSession::new(BTreeMap::new());
-        session.set_observed_table(parse_ppt(REAL_PPT).unwrap());
+        session.set_observed_table(device_table());
         session.stage(
             "uboot.img".into(),
             StagedImage {

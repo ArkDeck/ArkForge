@@ -11,8 +11,8 @@
 #     table declares that no archive member supplies, which are therefore
 #     write-forbidden (architecture.md 16.3);
 #   - `readDomain` is the AD-006 finding: the RockUSB write face reaches the
-#     whole medium while the `rl` read face does not, so read reach is measured
-#     at runtime and never assumed here.
+#     whole medium while the native READ_LBA face does not, so read reach is
+#     measured at runtime and never assumed here.
 #
 # Maturity note: this profile is the AF-V1 read-only shape. `recovery` declares
 # no complete-overwrite support because the durable engine that would execute it
@@ -37,10 +37,6 @@ identity:
     allow: [dayu200-gj4-2026-08]
 
 providers:
-  - id: arkforge.rockchip
-    backend: rkdeveloptool-fixed
-    minimumVersion: 1.32.0
-    maximumVersionExclusive: 2.0.0
   - id: arkforge.rockchip
     backend: arkforged-native-rockusb
     minimumVersion: 0.1.0
@@ -84,7 +80,8 @@ usbIdentities:
     productId: 0x5000
     evidenceRef: AD-008
   # Measured 2026-08-14 on the same board after `hdc target boot loader`:
-  # the loader personality answers 0x350a and reports Mode=Loader to `ld`.
+  # the loader personality answers 0x350a and reports Mode=Loader to the native
+  # DEVICE_INFO probe.
   - mode: rockusb-loader
     vendorId: 0x2207
     productId: 0x350a
@@ -98,7 +95,7 @@ modeTransitions:
     # BOTH its USB serial and its port path — the loader personality
     # enumerates behind a different hub (0x01200000 -> 0x01120000). A rebind
     # that required either to match would reject a healthy DAYU200, so
-    # identity here rests on uniqueness and the protocol's own `ld` answer.
+    # identity here rests on uniqueness and the native DEVICE_INFO answer.
     serialPolicy: may-change
     topologyPolicy: may-change
     rebind:
@@ -129,10 +126,10 @@ storage:
   logicalBlockSize: 512
 
 readDomain:
-  # AD-006: `wlx` reaches the whole medium. A short read window does NOT imply
-  # a short write window.
+  # Native WRITE_LBA reaches the whole medium. A short read window does NOT
+  # imply a short write window.
   write: full-disk
-  # AD-006: the `rl` read window is measured every execution. On 2026-08-04 it
+  # The native READ_LBA window is measured every execution. On 2026-08-04 it
   # ended at sector 65536 (32 MiB); that number is an observation of one
   # session, never a constant this file may pin.
   read: characterize-at-runtime

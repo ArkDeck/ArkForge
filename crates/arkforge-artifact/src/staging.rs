@@ -1,8 +1,9 @@
 //! Extracting the members a plan will write, out of a hashed archive.
 //!
-//! The vendor tool writes from a file path, and the archive is one compressed
-//! stream, so the images have to land on disk before a write can happen. This
-//! is the only place in ArkForge that turns archive content into a file.
+//! The native dispatcher consumes verified staged files, and the archive is one
+//! compressed stream, so the images have to land on disk before a write can
+//! happen. This is the only place in ArkForge that turns archive content into a
+//! file.
 //!
 //! Three rules the shape enforces:
 //!

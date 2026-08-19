@@ -286,8 +286,8 @@ fn the_daemon_never_mints_a_permit() {
 #[test]
 fn the_daemon_can_observe_a_real_device() {
     // AD-027. The daemon held only `TranscriptTransport` until 2026-08-17:
-    // `UsbTransport::with_ioreg` existed and was used by `arkforge-capture`
-    // and `arkforge-rehearse`, but nothing wired it into `arkforged`. So
+    // `UsbTransport::with_ioreg` existed in diagnostic binaries, but nothing
+    // wired it into `arkforged`. So
     // `discoverDevices` answered "no devices observed" on a host whose `ioreg`
     // was listing the board, and `materializePlan` — which matches an
     // observation before it probes — could never reach real hardware.
@@ -438,10 +438,10 @@ mod support {
             .unwrap();
 
         let toolchain = ToolchainIdentity {
-            id: OpaqueId::new("rkdeveloptool-fixed").unwrap(),
-            kind: ToolchainKind::FixedTool,
-            version: Version::new(1, 32, 0),
-            backend_digest: sha256(b"pinned tool"),
+            id: OpaqueId::new("arkforged-native-rockusb").unwrap(),
+            kind: ToolchainKind::NativeProtocol,
+            version: Version::new(0, 1, 0),
+            backend_digest: sha256(b"native arkforged build"),
             upstream_ref: None,
         };
         let host_platform = HostPlatform::new("macos", "aarch64").unwrap();

@@ -2299,3 +2299,13 @@ Artifact facts
 DAYU600 同期只进入严格 evidence lane。直到 PAC、FDL、USB identity、协议、数据影响、恢复和许可全部得到可复现证据，ArkForge 只能返回 PlanAssessment 和 UNAVAILABLE。
 
 当 DAYU200 与 DAYU600 最终都通过时，ArkDeck 看到的是同一套语义 API、安全计划和结果；设备差异、协议差异和工具差异全部由 ArkForge 内部 Profile、Parser、Provider 与 Transport 吸收。
+
+---
+
+## 27. 当前实现状态附录（2026-08-19，TASK-NRU-004）
+
+第 0.1 节第 8 项、第 16.1 节的 vendor-first 路线及第 18.2 节的旧 backend
+示例仅记录最初提案的实施顺序，不再描述当前实现。当前发布实现只存在
+`arkforged` 原生 RockUSB transport；vendor 二进制、端口选择、CLI 参数、命令
+lowering/parser 与迁移 fallback 均已删除。现行 backend 事实以
+`profiles/dayu200.yaml` 为准。

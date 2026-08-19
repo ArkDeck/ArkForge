@@ -122,7 +122,7 @@ fn start_execution_reports_every_standing_blocker_at_once() {
 /// a job walk to its first dispatch, spend a permit, and stop with nothing to
 /// run it — which has to be reconciled rather than simply not started.
 #[test]
-fn a_paired_daemon_with_no_tool_still_refuses_and_says_which_half_is_missing() {
+fn a_paired_daemon_with_no_dispatcher_still_refuses_and_says_which_half_is_missing() {
     let root = TempRoot::new("paired-no-tool");
     let mut service = service(&root);
     service.pair_authority(ControllerPairingSecret::new(
@@ -149,16 +149,16 @@ fn a_paired_daemon_with_no_tool_still_refuses_and_says_which_half_is_missing() {
 
 /// Both halves bound: readiness is a standing fact a client can read.
 #[test]
-fn a_paired_and_tool_bound_daemon_is_ready() {
+fn a_paired_and_native_bound_daemon_is_ready() {
     let root = TempRoot::new("ready");
     let mut service = service(&root);
     service.pair_authority(ControllerPairingSecret::new(
         PairingEpoch(1),
         b"a-pairing-secret-long-enough-to-be-a-key".to_vec(),
     ));
-    service.bind_dispatcher(BoundToolchain {
-        id: OpaqueId::new("example-tool-fixed").unwrap(),
-        backend_digest: sha256(b"the bound tool"),
+    service.bind_native_dispatcher(BoundToolchain {
+        id: OpaqueId::new("arkforged-native-rockusb").unwrap(),
+        backend_digest: sha256(b"native arkforged build"),
     });
     assert!(service.readiness().is_ready());
     assert!(service.readiness().standing_blockers().is_empty());

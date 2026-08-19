@@ -9,7 +9,7 @@
 
 use arkforge_artifact::cas::{CasQuota, ContentAddressedStore, VolumeSpaceProbe};
 use arkforge_artifact::{dayu200, fixture};
-use arkforge_core::digest::sha256;
+use arkforge_core::digest::{sha256, CborValue};
 use arkforge_core::effect::{DataImpactState, PersistentEffect, TransientEffect};
 use arkforge_core::identity::{HostPlatform, MaturityKey, MaturityState, ToolchainIdentity, ToolchainKind, Version};
 use arkforge_core::ids::{OpaqueId, PartitionId, PlanId};
@@ -28,11 +28,6 @@ use std::path::{Path, PathBuf};
 
 const PROFILE_SOURCE: &str = include_str!("../../../profiles/dayu200.yaml");
 const CAMPAIGN: &str = include_str!("../../../transcripts/dayu200-gj4-ecamp-96effff15.yaml");
-
-/// The pinned rkdeveloptool ArkDeck ships, by version and binary SHA-256
-/// (`RockchipFlashProfile.pinnedToolchainFingerprint`).
-const PINNED_RKDEVELOPTOOL_SHA256: &str =
-    "038a8a0ea26ef7eb77451789f310c0c9fbeaf43a78af1d6146e02311a9c23611";
 
 #[derive(Debug)]
 struct AmpleSpace;
@@ -65,12 +60,12 @@ impl Drop for TempRoot {
     }
 }
 
-fn fixed_tool() -> ToolchainIdentity {
+fn native_tool() -> ToolchainIdentity {
     ToolchainIdentity {
-        id: OpaqueId::new("rkdeveloptool-fixed").unwrap(),
-        kind: ToolchainKind::FixedTool,
-        version: Version::new(1, 32, 0),
-        backend_digest: arkforge_core::Sha256Digest::parse_hex(PINNED_RKDEVELOPTOOL_SHA256).unwrap(),
+        id: OpaqueId::new("arkforged-native-rockusb").unwrap(),
+        kind: ToolchainKind::NativeProtocol,
+        version: Version::new(0, 1, 0),
+        backend_digest: sha256(b"native arkforged build"),
         upstream_ref: None,
     }
 }
@@ -223,7 +218,7 @@ fn validation_is_clean_against_the_pinned_artifact_and_profile() {
 fn af_v1_materializes_a_complete_plan_that_is_not_executable() {
     let root = TempRoot::new("assessment");
     let vertical = run_vertical(&root);
-    let toolchain = fixed_tool();
+    let toolchain = native_tool();
     let registry = af_v1_registry(&vertical, &toolchain);
 
     let built = vertical
@@ -282,7 +277,7 @@ fn a_replay_toolchain_can_never_produce_an_executable_plan() {
 fn the_executable_branch_produces_a_fully_projected_sealed_plan() {
     let root = TempRoot::new("executable");
     let vertical = run_vertical(&root);
-    let toolchain = fixed_tool();
+    let toolchain = native_tool();
     let registry = hypothetical_production_registry(&vertical, &toolchain);
 
     let built = vertical
@@ -339,7 +334,7 @@ fn the_executable_branch_produces_a_fully_projected_sealed_plan() {
 fn the_effect_set_matches_the_profile_and_the_artifact() {
     let root = TempRoot::new("effects");
     let vertical = run_vertical(&root);
-    let toolchain = fixed_tool();
+    let toolchain = native_tool();
     let registry = hypothetical_production_registry(&vertical, &toolchain);
     let plan = vertical
         .provider
@@ -401,14 +396,36 @@ fn the_effect_set_matches_the_profile_and_the_artifact() {
     }
 }
 
+fn collect_text_tokens(value: &CborValue, tokens: &mut Vec<String>) {
+    match value {
+        CborValue::Text(text) => tokens.push(text.clone()),
+        CborValue::Array(values) => {
+            for value in values {
+                collect_text_tokens(value, tokens);
+            }
+        }
+        CborValue::Map(entries) => {
+            for (key, value) in entries {
+                collect_text_tokens(key, tokens);
+                collect_text_tokens(value, tokens);
+            }
+        }
+        CborValue::Unsigned(_)
+        | CborValue::Negative(_)
+        | CborValue::Bytes(_)
+        | CborValue::Bool(_)
+        | CborValue::Null => {}
+    }
+}
+
 #[test]
-fn no_vendor_command_appears_in_the_public_plan() {
+fn retired_vendor_vocabulary_never_appears_in_the_plan() {
     // architecture.md 25.3: the authority-facing surface carries no vendor
     // command, USB identity or partition address. Those live in private action
     // bodies only.
     let root = TempRoot::new("public-surface");
     let vertical = run_vertical(&root);
-    let toolchain = fixed_tool();
+    let toolchain = native_tool();
     let registry = hypothetical_production_registry(&vertical, &toolchain);
     let built = vertical
         .provider
@@ -433,23 +450,35 @@ fn no_vendor_command_appears_in_the_public_plan() {
         );
     }
 
-    // …and those same strings are present privately, which is where lowering
-    // belongs.
-    let private_bytes = built
+    // Private actions also remain semantic: no subprocess or argv vocabulary
+    // exists behind the public projection.
+    let mut private_tokens = Vec::new();
+    built
         .private_plan
         .as_ref()
         .unwrap()
         .actions
         .iter()
-        .map(|action| {
-            String::from_utf8_lossy(
-                &arkforge_core::digest::CanonicalCbor::to_canonical_bytes(action).unwrap(),
-            )
-            .into_owned()
-        })
-        .collect::<String>();
-    assert!(private_bytes.contains("rkdeveloptool"));
-    assert!(private_bytes.contains("wlx"));
+        .for_each(|action| collect_text_tokens(&action.body, &mut private_tokens));
+    for retired in [
+        "rkdeveloptool",
+        "wlx",
+        "rl",
+        "rd",
+        "ppt",
+        "ld",
+        "tool",
+        "command",
+    ] {
+        assert!(
+            !private_tokens.iter().any(|token| token == retired),
+            "private action leaked exact token {retired:?}"
+        );
+    }
+    assert!(private_tokens.iter().any(|token| token == "write-partition"));
+    assert!(private_tokens
+        .iter()
+        .any(|token| token == "readback-partition"));
 }
 
 #[test]
@@ -460,7 +489,7 @@ fn each_verify_step_carries_a_read_domain_characterization_sub_action() {
     // without inventing a public step nobody authorized.
     let root = TempRoot::new("verify-subaction");
     let vertical = run_vertical(&root);
-    let toolchain = fixed_tool();
+    let toolchain = native_tool();
     let registry = hypothetical_production_registry(&vertical, &toolchain);
     let built = vertical
         .provider
@@ -513,7 +542,7 @@ fn an_artifact_with_an_unaccounted_member_blocks_execution() {
             summary: "unclassified archive members: mystery.blob".into(),
         });
 
-    let toolchain = fixed_tool();
+    let toolchain = native_tool();
     let registry = hypothetical_production_registry(&vertical, &toolchain);
     let materialization = vertical
         .provider
@@ -551,7 +580,7 @@ fn a_profile_offset_that_disagrees_with_the_artifact_table_blocks_execution() {
         .iter()
         .any(|violation| violation.id.as_str() == "RK-V05"));
 
-    let toolchain = fixed_tool();
+    let toolchain = native_tool();
     let registry = hypothetical_production_registry(&vertical, &toolchain);
     assert!(vertical
         .provider
@@ -606,7 +635,7 @@ fn execution_side_spi_methods_refuse_in_this_build() {
 fn materialization_is_deterministic() {
     let root = TempRoot::new("deterministic");
     let vertical = run_vertical(&root);
-    let toolchain = fixed_tool();
+    let toolchain = native_tool();
     let registry = hypothetical_production_registry(&vertical, &toolchain);
     let first = vertical
         .provider
@@ -626,7 +655,7 @@ fn materialization_is_deterministic() {
 fn a_write_step_targets_only_partitions_the_profile_allows() {
     let root = TempRoot::new("allowlist");
     let vertical = run_vertical(&root);
-    let toolchain = fixed_tool();
+    let toolchain = native_tool();
     let registry = hypothetical_production_registry(&vertical, &toolchain);
     let plan = vertical
         .provider

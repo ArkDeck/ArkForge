@@ -22,37 +22,6 @@ use std::sync::{Arc, Mutex};
 
 const DAEMON_VERSION: &str = env!("CARGO_PKG_VERSION");
 
-/// How long the tool gets to answer a device-free probe.
-///
-/// The measured answer is 75 ms on this host. Five seconds is not a guess at
-/// how slow the tool might be — it is far past any plausible answer, because
-/// the failure this catches does not take longer, it takes forever (AD-015).
-const TOOL_SELF_TEST_SECONDS: u64 = 5;
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum RockUsbPortChoice {
-    Vendor,
-    Native,
-}
-
-impl Default for RockUsbPortChoice {
-    fn default() -> Self {
-        Self::Native
-    }
-}
-
-impl RockUsbPortChoice {
-    fn parse(value: &str) -> Result<Self, String> {
-        match value {
-            "vendor" => Ok(Self::Vendor),
-            "native" => Ok(Self::Native),
-            other => Err(format!(
-                "--rockusb-port accepts native or vendor, not {other:?}"
-            )),
-        }
-    }
-}
-
 fn main() {
     let arguments: Vec<String> = std::env::args().skip(1).collect();
     match run(&arguments) {
@@ -67,22 +36,13 @@ fn main() {
 fn usage() -> String {
     concat!(
         "usage: arkforged --runtime-dir <dir> [--profile <file>]... [--transcript <file>]...\n",
-        "                 [--pair-from-stdin <epoch>] [--rockusb-port native|vendor]\n",
-        "                 [--rkdeveloptool <path>]\n",
+        "                 [--pair-from-stdin <epoch>]\n",
         "\n",
         "  --runtime-dir      where the content store and sockets live\n",
         "  --profile          a DeviceProfile YAML document (repeatable)\n",
         "  --transcript       a golden transcript to serve as a replay transport (repeatable)\n",
         "  --pair-from-stdin  read the authority's pairing secret from stdin and close it\n",
-        "  --rockusb-port     RockUSB backend; default native (vendor is migration-only)\n",
-        "  --rkdeveloptool    absolute path to the pinned vendor tool. Without it,\n",
-        "                     startExecution refuses: a job that reached its first\n",
-        "                     dispatch would have spent a permit before finding out\n",
-        "  --rkdeveloptool-sha256  the digest those bytes must have. Required with\n",
-        "                     --rkdeveloptool: an unpinned tool is a tool nobody chose\n",
-        "  --require-release-signing  hold the bound tool to the shipped signing shape\n",
-        "                     (Developer ID, Hardened Runtime, a Team ID) as well as the\n",
-        "                     empty entitlement dictionary, which is required either way\n",
+        "  RockUSB dispatch is always the native implementation compiled into arkforged.\n",
         "  --hardware-campaign <id>  run as a named DAYU200 acceptance campaign\n",
         "                     Without it a DAYU200 combination is hardwareGated and only\n",
         "                     assessments materialize, because a combination becomes\n",
@@ -90,10 +50,6 @@ fn usage() -> String {
         "                     plan, which needs this. The campaign is sealed into every\n",
         "                     plan digest it produces, so its receipts stay campaign\n",
         "                     evidence and cannot be read back as a support claim.\n",
-        "\n",
-        "A bound tool must pass its digest check and then prove it runs, because\n",
-        "byte equality is not usability: quarantined bytes with the right digest\n",
-        "hang in dyld. If it cannot run, omit --rkdeveloptool for a read-only daemon.\n",
         "\n",
         "Without --pair-from-stdin no authority is paired, and startExecution is\n",
         "unavailable. The secret is read from stdin rather than an argv or an\n",
@@ -108,10 +64,6 @@ fn run(arguments: &[String]) -> Result<(), String> {
     let mut profile_paths: Vec<PathBuf> = Vec::new();
     let mut transcript_paths: Vec<PathBuf> = Vec::new();
     let mut pairing_epoch: Option<u64> = None;
-    let mut rockusb_port = RockUsbPortChoice::default();
-    let mut rkdeveloptool: Option<PathBuf> = None;
-    let mut rkdeveloptool_sha256: Option<String> = None;
-    let mut require_release_signing = false;
     let mut hardware_campaign: Option<String> = None;
 
     let mut index = 0usize;
@@ -131,19 +83,6 @@ fn run(arguments: &[String]) -> Result<(), String> {
                 index += 1;
                 transcript_paths.push(PathBuf::from(arguments.get(index).ok_or_else(|| usage())?));
             }
-            "--rkdeveloptool" => {
-                index += 1;
-                rkdeveloptool = Some(PathBuf::from(arguments.get(index).ok_or_else(usage)?));
-            }
-            "--rockusb-port" => {
-                index += 1;
-                rockusb_port = RockUsbPortChoice::parse(arguments.get(index).ok_or_else(usage)?)?;
-            }
-            "--rkdeveloptool-sha256" => {
-                index += 1;
-                rkdeveloptool_sha256 = Some(arguments.get(index).ok_or_else(usage)?.clone());
-            }
-            "--require-release-signing" => require_release_signing = true,
             "--hardware-campaign" => {
                 index += 1;
                 let raw = arguments.get(index).ok_or_else(usage)?;
@@ -202,7 +141,7 @@ fn run(arguments: &[String]) -> Result<(), String> {
     )
     .map_err(|error| error.to_string())?;
     if let Some(campaign) = &hardware_campaign {
-        // Said out loud at startup, next to the signing and self-test lines.
+        // Said out loud at startup, next to the native backend identity.
         // A daemon that can execute writes on an unverified combination is
         // not the ordinary case, and an operator reading this log should not
         // have to infer it from the absence of a refusal later.
@@ -226,137 +165,30 @@ fn run(arguments: &[String]) -> Result<(), String> {
     // The dispatcher runs on its own thread and takes the service lock only
     // for the hand-off at either end. A partition write takes minutes; holding
     // the lock across one would stop the event stream reporting on it.
-    let dispatch_handle = match rockusb_port {
-        RockUsbPortChoice::Vendor => match rkdeveloptool {
-            Some(path) => {
-                // The pin is required, not optional. A tool bound without one is a
-                // tool nobody chose: the digest is part of the maturity
-                // combination (architecture.md 12.3), so binding whatever happens
-                // to be at that path would execute a combination nobody published.
-                let pinned = rkdeveloptool_sha256.ok_or(
-                    "--rkdeveloptool requires --rkdeveloptool-sha256; binding a tool without \
-                 pinning its bytes would execute a combination nobody published",
-                )?;
-                let expected = arkforge_core::Sha256Digest::parse_hex(&pinned)
-                    .map_err(|error| format!("--rkdeveloptool-sha256: {error}"))?;
-                let port = arkforged::dispatch::HostFixedToolPort::open(&path)?;
-                if port.digest() != expected {
-                    // Refuse to start rather than start unable to execute. An
-                    // operator who swapped the binary should hear it now.
-                    return Err(format!(
-                        "{} hashes to {}, and --rkdeveloptool-sha256 pins {expected}",
-                        path.display(),
-                        port.digest()
-                    ));
-                }
-                // The digest settles which bytes these are; the signature settles
-                // whether macOS will let them start. Both are static facts about
-                // the file, so both are answered before anything depends on it —
-                // and the entitlement clause is answered here rather than by the
-                // self-test below, because "aborted in libsecinit" and "hung in
-                // dyld" look identical from the outside and have different fixes
-                // (AD-007 and AD-015 respectively).
-                let signing = arkforged::packaging::read_file(&path)
-                    .map_err(|error| format!("{}: {error}", path.display()))?;
-                let mode = if require_release_signing {
-                    arkforged::packaging::ContractMode::Release
-                } else {
-                    arkforged::packaging::ContractMode::Development
-                };
-                let violations = signing.violations(mode);
-                if !violations.is_empty() {
-                    let detail = violations
-                        .iter()
-                        .map(|violation| format!("  {}: {violation}", violation.code()))
-                        .collect::<Vec<_>>()
-                        .join("\n");
-                    return Err(format!(
-                        "{} does not meet the macOS packaging contract ({}):\n{detail}",
-                        path.display(),
-                        arkforged::packaging::CONTRACT_DOC
-                    ));
-                }
-                {
-                    let Ok(mut guard) = service.lock() else {
-                    return Err("the service lock is poisoned".into());
-                };
-                    guard.bind_dispatcher(arkforge_engine::BoundToolchain {
-                        id: arkforge_core::ids::OpaqueId::new("rkdeveloptool")
-                            .map_err(|error| error.to_string())?,
-                        backend_digest: port.digest(),
-                    });
-                }
-                // The digest settles which bytes these are. It does not settle
-                // whether they can run: quarantined bytes with the right digest
-                // hang in dyld (AD-015). `-v` is device-free, so proving it runs
-                // costs nothing but a fork.
-                let probe = port
-                    .self_test(
-                        &["-v"],
-                        "rkdeveloptool",
-                        std::time::Duration::from_secs(TOOL_SELF_TEST_SECONDS),
-                    )
-                    .map_err(|failure| {
-                        format!(
-                            "{} passed its digest check and then failed to run.\n  {failure}\n\
-                         Omit --rkdeveloptool to start a read-only daemon instead.",
-                            path.display()
-                        )
-                    })?;
-                println!("dispatch: {} ({})", path.display(), port.digest());
-                println!("  signing: {}", signing.summary());
-                println!(
-                    "  self-test: {} in {} ms",
-                    probe.first_line, probe.duration_ms
-                );
-                Some(spawn_dispatcher(
-                    port,
-                    runtime_dir.join("store"),
-                    runtime_dir.join("work"),
-                    Arc::clone(&service),
-                ))
-            }
-            None => {
-                println!(
-                    "dispatch: unavailable (no --rkdeveloptool; startExecution will refuse rather \
-                 than let a job park at its first dispatch)"
-                );
-                None
-            }
-        },
-        RockUsbPortChoice::Native => {
-            if rkdeveloptool.is_some() || rkdeveloptool_sha256.is_some() {
-                println!(
-                    "dispatch: native selected; rkdeveloptool flags are retained only for the \
-                     migration lane and are not opened or spawned"
-                );
-            }
-            let executable = std::env::current_exe()
-                .map_err(|error| format!("cannot identify the running arkforged build: {error}"))?;
-            let backend_digest = arkforged::dispatch::executable_digest(&executable)?;
-            {
-                let Ok(mut guard) = service.lock() else {
-                    return Err("the service lock is poisoned".into());
-                };
-                guard.bind_native_dispatcher(arkforge_engine::BoundToolchain {
-                    id: arkforge_core::ids::OpaqueId::new("arkforged-native-rockusb")
-                        .map_err(|error| error.to_string())?,
-                    backend_digest,
-                });
-            }
-            println!(
-                "dispatch: native RockUSB port \
-                 (TEST_UNIT_READY/READ_LBA/GPT/WRITE_LBA/DEVICE_RESET); \
-                 arkforged-build-sha256={backend_digest}"
-            );
-            Some(spawn_dispatcher(
-                arkforged::dispatch::NativeRockUsbPort::new(),
-                runtime_dir.join("store"),
-                runtime_dir.join("work"),
-                Arc::clone(&service),
-            ))
-        }
-    };
+    let executable = std::env::current_exe()
+        .map_err(|error| format!("cannot identify the running arkforged build: {error}"))?;
+    let backend_digest = arkforged::dispatch::executable_digest(&executable)?;
+    {
+        let Ok(mut guard) = service.lock() else {
+            return Err("the service lock is poisoned".into());
+        };
+        guard.bind_native_dispatcher(arkforge_engine::BoundToolchain {
+            id: arkforge_core::ids::OpaqueId::new("arkforged-native-rockusb")
+                .map_err(|error| error.to_string())?,
+            backend_digest,
+        });
+    }
+    println!(
+        "dispatch: native RockUSB port \
+         (TEST_UNIT_READY/READ_LBA/GPT/WRITE_LBA/DEVICE_RESET); \
+         arkforged-build-sha256={backend_digest}"
+    );
+    let dispatch_handle = Some(spawn_dispatcher(
+        arkforged::dispatch::NativeRockUsbPort::new(),
+        runtime_dir.join("store"),
+        runtime_dir.join("work"),
+        Arc::clone(&service),
+    ));
 
     {
         let Ok(guard) = service.lock() else {
@@ -618,12 +450,14 @@ fn flush<W: Write>(writer: &mut W) -> io::Result<()> {
 
 #[cfg(test)]
 mod tests {
-    use super::{usage, RockUsbPortChoice};
+    use super::usage;
 
     #[test]
-    fn native_rockusb_is_the_default_backend() {
-        assert_eq!(RockUsbPortChoice::default(), RockUsbPortChoice::Native);
-        assert!(usage().contains("default native"));
-        assert!(usage().contains("vendor is migration-only"));
+    fn only_native_rockusb_is_exposed() {
+        let text = usage();
+        assert!(text.contains("always the native implementation"));
+        for retired in ["--rockusb-port", "--rkdeveloptool", "vendor is migration-only"] {
+            assert!(!text.contains(retired), "retired surface returned: {retired}");
+        }
     }
 }

@@ -216,3 +216,11 @@ which is not a system library
   本契约第 1 节随之失效；
 - Apple 改变 nested code 的公证或 entitlement 语义；
 - 需要在 macOS 之外出厂。
+
+## NRU-004 后续状态（2026-08-19）
+
+原生 RockUSB 现为唯一执行端口，发布包只携带并签名 `arkforged`。vendor
+签名、自检、entitlement、显式端口选择与迁移 fallback 的 runtime lane 均已
+删除；本文此前记录的 vendor 条款只作为历史实测保留，不描述任何当前可调用或
+可恢复的实现。本附录取代文首 2026-08-18 修订中“仍保留 migration fallback”
+的状态描述。

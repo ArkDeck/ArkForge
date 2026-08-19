@@ -16,12 +16,9 @@
 //!   ArkDeck owns the HDC endpoint, the server lifecycle and the connect key
 //!   (architecture.md 9.1), and nothing in ArkForge should learn any of them.
 //! - **Rockchip-side actions** — `flashPartitions` and `verifyFlashReadback`.
-//!   These lower to `rkdeveloptool` commands and sector addresses inside
-//!   ArkDeck. AF-V2's acceptance says the production lowering must carry no
-//!   Rockchip command or address (architecture.md 22), so these two are the
-//!   ones ArkForge takes over — and this table records them as deliberately
-//!   *not* reachable through the control port, rather than leaving their
-//!   absence to be inferred.
+//!   ArkForge owns their native RockUSB semantics and exact sector facts.
+//!   This table records them as deliberately *not* reachable through the HDC
+//!   control port rather than leaving their absence to be inferred.
 //!
 //! The table is what makes that division reviewable: every ArkDeck action is
 //! accounted for as kept, delegated, or unreachable, and a reader can check the
@@ -76,11 +73,10 @@ pub fn control_binding(action: ManagedDeviceControlAction) -> ControlBinding {
             receipt_facts: &["mode", "stableIdentitySHA256", "usbTopology"],
         },
         ManagedDeviceControlAction::RebootToNormal => ControlBinding {
-            // ArkDeck's `rebootToNormal` is the one control action whose device
-            // half is a Rockchip command (`rd`) rather than an HDC one — in
-            // Loader mode the device has no HDC to talk to. ArkForge issues the
-            // reset through its own fixed-tool port; what ArkDeck contributes is
-            // the half only it can: watching the exact bound target come back.
+            // In Loader mode the device has no HDC to talk to. ArkForge issues
+            // DEVICE_RESET through its native RockUSB port; what ArkDeck
+            // contributes is the half only it can: watching the exact bound
+            // target come back.
             arkdeck_actions: &["waitForBoundHDCReconnect"],
             semantic_success: "the exact previously-bound target reconnected in normal mode, with \
                                the same stable identity",

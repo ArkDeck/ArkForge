@@ -576,7 +576,7 @@ mod tests {
             )),
             declared_range: Some(range),
             content_digest: Some(content),
-            body: CborValue::map(vec![("tool", CborValue::text("wlx"))]),
+            body: CborValue::map(vec![("action", CborValue::text("write-partition"))]),
         };
         let step = PublicFlashStep {
             step_id: StepId::new("STEP-001").unwrap(),

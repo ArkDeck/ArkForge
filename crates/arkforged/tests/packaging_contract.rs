@@ -87,12 +87,11 @@ fn an_app_sandbox_entitlement_is_refused_in_every_mode() {
 
 #[test]
 fn an_adhoc_local_build_passes_development_and_fails_release() {
-    // The tool the 2026-08-15 rehearsal ran is ad-hoc, linker-signed, no team,
-    // no Hardened Runtime, no entitlements. Development has to accept it —
-    // refusing it would refuse the only binary that has ever driven this board.
+    // Local arkforged builds may be ad-hoc and linker-signed. Development
+    // accepts that shape while release still requires the full contract.
     let binary = macho(Signed {
         cpu_type: 0x0100_000c,
-        identifier: "rkdeveloptool",
+        identifier: "arkforged.local",
         team: None,
         ad_hoc: true,
         linker_signed: true,
@@ -388,11 +387,11 @@ struct Signed {
     entitlements: Option<Entitlements>,
 }
 
-/// The shape measured on `/Applications/ArkDeck.app/Contents/MacOS/rkdeveloptool`.
+/// The shipped `arkforged` signing shape.
 fn developer_id() -> Signed {
     Signed {
         cpu_type: 0x0100_000c,
-        identifier: "com.arkdeck.agentd.rkdeveloptool",
+        identifier: "com.arkdeck.agentd.arkforged",
         team: Some("8AQTYW5FKR"),
         ad_hoc: false,
         linker_signed: false,

@@ -12,7 +12,7 @@
 //! - device names — dayu200, dayu600;
 //! - vendor names — Rockchip, Unisoc;
 //! - firmware formats — PAC, FDL, RockUSB;
-//! - vendor tools — rkdeveloptool, CmdDloader;
+//! - external flashing CLI implementations;
 //! - UI or platform frameworks.
 //!
 //! The rule is enforced by a dependency-and-symbol guard test rather than by a

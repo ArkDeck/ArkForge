@@ -30,19 +30,16 @@ use arkforge_provider::rockchip::{publish_dayu200_maturity, RockchipProvider};
 use arkforge_provider::{FlashProvider, MaturityRegistry};
 
 const PROFILE_SOURCE: &str = include_str!("../../../profiles/dayu200.yaml");
-const PINNED_RKDEVELOPTOOL_SHA256: &str =
-    "038a8a0ea26ef7eb77451789f310c0c9fbeaf43a78af1d6146e02311a9c23611";
-
 fn profile() -> DeviceProfile {
     profile::load(PROFILE_SOURCE).unwrap()
 }
 
-fn fixed_tool() -> ToolchainIdentity {
+fn native_tool() -> ToolchainIdentity {
     ToolchainIdentity {
-        id: OpaqueId::new("rkdeveloptool-fixed").unwrap(),
-        kind: ToolchainKind::FixedTool,
-        version: Version::new(1, 32, 0),
-        backend_digest: arkforge_core::Sha256Digest::parse_hex(PINNED_RKDEVELOPTOOL_SHA256).unwrap(),
+        id: OpaqueId::new("arkforged-native-rockusb").unwrap(),
+        kind: ToolchainKind::NativeProtocol,
+        version: Version::new(0, 1, 0),
+        backend_digest: sha256(b"native arkforged build"),
         upstream_ref: None,
     }
 }
@@ -88,14 +85,14 @@ fn without_a_campaign_the_combination_still_refuses() {
     // The default has to stay closed. If asking for nothing produced a
     // campaign, the gate would be gone for every operator who never read this
     // file.
-    let state = published(&fixed_tool(), None);
+    let state = published(&native_tool(), None);
     assert!(matches!(state, MaturityState::HardwareGated { .. }));
     assert!(!state.permits_executable_plan());
 }
 
 #[test]
 fn a_named_campaign_permits_an_executable_plan() {
-    let state = published(&fixed_tool(), Some("AFA-AC-6"));
+    let state = published(&native_tool(), Some("AFA-AC-6"));
     assert!(state.permits_executable_plan());
     assert_eq!(state.campaign(), Some("AFA-AC-6"));
 }
@@ -104,7 +101,7 @@ fn a_named_campaign_permits_an_executable_plan() {
 fn a_campaign_run_is_not_production_evidence() {
     // The whole point of naming the state rather than relaxing the gate. Its
     // writes are real; its support claim is not.
-    let state = published(&fixed_tool(), Some("AFA-AC-6"));
+    let state = published(&native_tool(), Some("AFA-AC-6"));
     assert!(!state.is_production_evidence());
     assert!(MaturityState::ProductionVerified.is_production_evidence());
 }
@@ -114,8 +111,8 @@ fn a_campaign_reports_no_blocker() {
     // A campaign is a qualification on what the run proves, not an obstacle to
     // running it. Reporting it as a blocker would send an operator looking for
     // something to fix while the daemon was working as asked.
-    assert_eq!(published(&fixed_tool(), Some("AFA-AC-6")).blocker(), None);
-    assert!(published(&fixed_tool(), None).blocker().is_some());
+    assert_eq!(published(&native_tool(), Some("AFA-AC-6")).blocker(), None);
+    assert!(published(&native_tool(), None).blocker().is_some());
 }
 
 #[test]

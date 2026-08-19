@@ -1,9 +1,9 @@
 //! Rockchip provider — DAYU200 probe, plan materialization and typed execution.
 //!
-//! architecture.md 16. This module is where `wlx`, `rl` and sector offsets are
-//! allowed to exist. They appear only inside private action bodies, which never
-//! cross the Agent/App API; what crosses is a public step naming a partition
-//! and a digest that binds it to exactly one private action (architecture.md 6).
+//! architecture.md 16. Private actions carry only typed native RockUSB
+//! semantics. They never cross the Agent/App API; what crosses is a public
+//! step naming a partition and a digest that binds it to exactly one private
+//! action (architecture.md 6).
 //!
 //! AF-V1 implements probe, validate and materialize. Execution is AF-V2 and the
 //! SPI's default refusal stands.
@@ -38,7 +38,6 @@ use arkforge_core::{EvidenceId, NegotiatedCapabilities, Sha256Digest};
 use arkforge_transport::TransportError;
 
 pub const PROVIDER_ID: &str = "arkforge.rockchip";
-pub const BACKEND_FIXED_TOOL: &str = "rkdeveloptool-fixed";
 pub const BACKEND_NATIVE_ROCKUSB: &str = "arkforged-native-rockusb";
 pub const BACKEND_REPLAY: &str = "transcript-replay";
 
@@ -72,7 +71,7 @@ impl RockchipProvider {
                         "arkforge.rockchip/lowering/v1;",
                         "steps=ensure-mode,probe,validate-layout,write*,verify*,reboot,postflight;",
                         "actions=enter-loader,probe-loader,validate-partition-table,",
-                        "write-partition(wlx),characterize-read-domain,readback-partition(rl),",
+                        "write-partition,characterize-read-domain,readback-partition,",
                         "reset-device,verify-hdc-postflight"
                     )
                     .as_bytes(),
@@ -300,11 +299,7 @@ impl RockchipProvider {
                 None,
                 None,
                 None,
-                CborValue::map(vec![
-                    ("action", CborValue::text("probe-loader")),
-                    ("tool", CborValue::text("rkdeveloptool")),
-                    ("command", CborValue::text("ld")),
-                ]),
+                CborValue::map(vec![("action", CborValue::text("probe-loader"))]),
             );
             public_steps.push(PublicFlashStep {
                 step_id,
@@ -335,8 +330,6 @@ impl RockchipProvider {
                 None,
                 CborValue::map(vec![
                     ("action", CborValue::text("validate-partition-table")),
-                    ("tool", CborValue::text("rkdeveloptool")),
-                    ("command", CborValue::text("ppt")),
                     ("expectedLayoutDigest", CborValue::Bytes(layout_digest.as_bytes().to_vec())),
                 ]),
             );
@@ -395,16 +388,9 @@ impl RockchipProvider {
                 Some(member.sha256),
                 CborValue::map(vec![
                     ("action", CborValue::text("write-partition")),
-                    ("tool", CborValue::text("rkdeveloptool")),
-                    // `wlx` addresses by partition name, resolved from the
-                    // device's own table — which the preceding step has just
-                    // proved equal to this plan's. There is deliberately no
-                    // sector-addressed fallback: the executor's closed command
-                    // surface cannot spell one, so naming one here would be a
-                    // capability the plan claims and the executor does not have.
-                    // `beginSector` is carried as a refusal check, not as an
-                    // address (crate::rockchip_execute).
-                    ("command", CborValue::text("wlx")),
+                    // The observed partition table is authoritative for the
+                    // native WRITE_LBA address. `beginSector` is carried as an
+                    // exact refusal check against the plan and Profile.
                     ("partition", CborValue::text(target.partition.as_str())),
                     ("beginSector", CborValue::Unsigned(target.offset_sectors)),
                     ("member", CborValue::text(member_name)),
@@ -455,8 +441,6 @@ impl RockchipProvider {
                 Some(member.sha256),
                 CborValue::map(vec![
                     ("action", CborValue::text("readback-partition")),
-                    ("tool", CborValue::text("rkdeveloptool")),
-                    ("command", CborValue::text("rl")),
                     ("partition", CborValue::text(target.partition.as_str())),
                     ("beginSector", CborValue::Unsigned(target.offset_sectors)),
                     (
@@ -482,8 +466,6 @@ impl RockchipProvider {
                 None,
                 CborValue::map(vec![
                     ("action", CborValue::text("characterize-read-domain")),
-                    ("tool", CborValue::text("rkdeveloptool")),
-                    ("command", CborValue::text("rl")),
                     ("probe", CborValue::text("primary-and-backup-gpt")),
                     (
                         "policy",
@@ -523,11 +505,7 @@ impl RockchipProvider {
                 None,
                 None,
                 None,
-                CborValue::map(vec![
-                    ("action", CborValue::text("reset-device")),
-                    ("tool", CborValue::text("rkdeveloptool")),
-                    ("command", CborValue::text("rd")),
-                ]),
+                CborValue::map(vec![("action", CborValue::text("reset-device"))]),
             );
             public_steps.push(PublicFlashStep {
                 step_id,
@@ -539,7 +517,7 @@ impl RockchipProvider {
                 binding: BindingRequirement::ExactBoundTargetWithModeLineage,
                 semantic_target: Some(SemanticTarget::Device),
                 content_digest: None,
-                expected_mode_before: Some(loader.clone()),
+                expected_mode_before: Some(loader),
                 expected_mode_after: Some(normal.clone()),
                 private_action_digest: digest_of(&action)?,
             });
@@ -774,7 +752,6 @@ impl FlashProvider for RockchipProvider {
             identity: self.identity.clone(),
             artifact_formats: vec![self.artifact_format()],
             backends: vec![
-                OpaqueId::new(BACKEND_FIXED_TOOL).expect("literal identifier"),
                 OpaqueId::new(BACKEND_NATIVE_ROCKUSB).expect("literal identifier"),
                 OpaqueId::new(BACKEND_REPLAY).expect("literal identifier"),
             ],
@@ -964,8 +941,8 @@ impl FlashProvider for RockchipProvider {
 /// Both are non-executable, for different reasons, and both say so in their own
 /// words rather than through a missing entry:
 ///
-/// - the fixed-tool combination is `HardwareGated`: the lowering exists, the
-///   real-hardware campaign that AF-V2 requires has not run against ArkForge;
+/// - the native combination is `HardwareGated` until its exact build completes
+///   the real-hardware campaign required by AF-V2;
 /// - the replay combination is `PlanOnly`: a transcript is not a device, and
 ///   no amount of replay makes it one.
 pub fn publish_af_v1_maturity(

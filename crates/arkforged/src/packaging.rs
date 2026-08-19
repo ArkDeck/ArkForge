@@ -1,47 +1,28 @@
 //! The macOS signing / entitlement / packaging contract (AD-007).
 //!
-//! architecture.md 21.2 Stage B lists this as an explicit design item rather
-//! than packaging chores, and the reason is a measured deadlock. ArkDeck's
-//! runtime validator once required its bundled Rockchip component to carry
-//! `com.apple.security.app-sandbox` plus `com.apple.security.inherit`, while
-//! the packaging contract required an empty entitlement dictionary. The two
-//! were not merely inconsistent: the shape the validator asked for **cannot
-//! execute** under a non-sandboxed parent, because `_libsecinit_appsandbox`
-//! aborts the child before `main`. It was closed by changing the validator.
-//! `arkforged` walked into the same place while the vendor fallback was a
-//! bundled release component. NRU-004 removed that component from packaging;
-//! the reader remains because an explicitly selected migration fallback must
-//! still be refused when its entitlement shape cannot run.
+//! architecture.md 21.2 Stage B treats signing as an explicit design item.
+//! The reader validates the `arkforged` artifact used by packaging and release
+//! tooling; the Runtime itself has no child executable to validate.
 //!
 //! # What this module enforces
 //!
 //! Two lessons, each already paid for once, each a different layer of "the
 //! bytes will not run":
 //!
-//! - **AD-007** — a non-empty entitlement dictionary on the bound tool. Refused
-//!   in every mode, because there is no configuration in which the App Sandbox
-//!   keys work here and no reason for any of the others to be present.
+//! - **AD-007** — a non-empty entitlement dictionary on `arkforged`. Refused in
+//!   every mode because the shipped daemon contract is an empty dictionary.
 //! - **AD-015 / AD-011** — Developer ID signature, Hardened Runtime, secure
-//!   timestamp. Refused only in [`ContractMode::Release`], because the tool in
-//!   hand today is an ad-hoc linker-signed local build and refusing it would
-//!   refuse the binary the 2026-08-15 rehearsal actually ran.
+//!   timestamp. Refused only in [`ContractMode::Release`] so local development
+//!   builds can still be inspected.
 //!
 //! # What this module deliberately does not do
 //!
-//! **It does not check identity.** `--rkdeveloptool-sha256` already pins the
-//! bytes exactly, which is strictly stronger than any signing identifier or
-//! Team ID comparison could be. What a signature adds on top of a byte pin is
-//! not *which* binary this is — it is whether Gatekeeper will let it start:
-//! AD-011 was 25 minutes spent on a binary whose digest was perfect and which
-//! hung in dyld because it carried `com.apple.quarantine`. So the release
-//! clause asks for the properties that make quarantine not happen, and asks
-//! nothing about whose name is on it.
+//! **It does not check artifact identity.** The caller supplies the exact file;
+//! the package manifest and ArkDeck installer pin its digest separately. This
+//! module answers only whether its Mach-O signing shape satisfies release.
 //!
-//! **It does not attest this process to itself.** A daemon reading its own
-//! signature proves nothing to anyone. The line is: the parent verifies the
-//! child. `arkdeck-agentd` verifies `arkforged` at install time and re-verifies
-//! its file identity before every spawn (ArkDeck #1299); `arkforged` verifies
-//! the vendor tool here.
+//! **It does not attest this process to itself.** `arkdeck-agentd` verifies
+//! `arkforged` at install time and re-verifies its file identity before spawn.
 //!
 //! **It does not assess Gatekeeper.** Notarization and stapling are verified
 //! once by the packager (`spctl --assess`), not on every daemon start: an
@@ -390,8 +371,8 @@ impl SignedCode {
     }
 }
 
-/// A fixed tool larger than this is its own red flag; refusing to buffer it is
-/// cheaper than discovering the memory ceiling in production.
+/// A signed code artifact larger than this is its own red flag; refusing to
+/// buffer it is cheaper than discovering the memory ceiling in production.
 const MAX_READ_BYTES: u64 = 64 << 20;
 
 /// Reads a file's signing facts.

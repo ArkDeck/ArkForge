@@ -596,7 +596,7 @@ mod tests {
             )),
             declared_range: Some(range),
             content_digest: Some(content),
-            body: CborValue::map(vec![("tool", CborValue::text("wlx"))]),
+            body: CborValue::map(vec![("action", CborValue::text("write-partition"))]),
         };
         let step = PublicFlashStep {
             step_id: StepId::new("STEP-001").unwrap(),
@@ -717,7 +717,10 @@ mod tests {
             declared_target: None,
             declared_range: None,
             content_digest: None,
-            body: CborValue::map(vec![("tool", CborValue::text("rl"))]),
+            body: CborValue::map(vec![(
+                "action",
+                CborValue::text("characterize-read-domain"),
+            )]),
         });
         assert!(matches!(
             validate_projection(&f.steps, &f.plan, &f.effects),
@@ -737,7 +740,10 @@ mod tests {
             declared_target: None,
             declared_range: None,
             content_digest: None,
-            body: CborValue::map(vec![("tool", CborValue::text("rl"))]),
+            body: CborValue::map(vec![(
+                "action",
+                CborValue::text("characterize-read-domain"),
+            )]),
         });
         let with_sub_action = validate_projection(&f.steps, &f.plan, &f.effects).unwrap();
         assert_eq!(with_sub_action.per_action.len(), 2);
