@@ -3,6 +3,14 @@
 单任务垂直交付。`status: approved` 与本 Task 的 `ready` 只有在 proposal PR 经维护者
 review/merge 进入 protected `main` 后生效；合入前不得开始实现 PR。
 
+> **NRU-004 超越声明（2026-08-19，ArkForge main `c049a11`）**：下文
+> Production reachability 链中的 `Rockchip fixed-tool Provider → rkdeveloptool wlx`
+> 一段为历史；现行链是 `arkforged → NativeRockUsbPort → RockUsbProtocol`
+> （`write-partition` 语义动作）。Trusted fact sources 中「设备自身分区表：
+> `rkdeveloptool ppt`」现为原生 `validate-partition-table`，「读域：`rl` 近端/远端
+> 探测」现为原生 `characterize-read-domain`——事实语义与三方一致性要求不变，
+> 变的只是降解方式。
+
 ## TASK-AFA-001 — ArkDeck 做 authority，ArkForge 做 Rockchip 执行
 
 - Status:blocked（等 proposal merge）

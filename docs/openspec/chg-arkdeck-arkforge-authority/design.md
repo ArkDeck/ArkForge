@@ -8,6 +8,36 @@
 > 第 8 节列了逐项状态。还没有的是**在真机上跑一次**——现有端到端测试用的是
 > 脚本化 tool port，不是设备（AF-V2.4）。
 
+> **NRU-004 超越声明（2026-08-19，ArkForge main `c049a11`）**：本稿描述的
+> vendor fixed-tool 执行面已整体退役，正文保持 2026-08-15 原样仅作依据记录。
+> 照抄以下契约今天会失败：
+>
+> - **§8.2/§8.6 的启动契约已删除。** `--rkdeveloptool <路径>` 与
+>   `--rkdeveloptool-sha256` 不再是合法旗标（`unknown argument`，daemon 拒绝启动）；
+>   今天只接受 `--runtime-dir`/`--profile`/`--transcript`/`--hardware-campaign`/
+>   `--pair-from-stdin`。原生 RockUSB port 内建
+>   （`crates/arkforged/src/dispatch.rs` 的 `NativeRockUsbPort`），不存在
+>   「不给工具就没有 dispatcher」的形态；§8.6 的 `-v` 自检与 quarantine 关卡
+>   随外部工具一起消失（AD-015 保留为历史教训）。
+> - **§8.5 的 `HelloAck` 示例值已变**：`toolchain_id = "arkforged-native-rockusb"`，
+>   `toolchain_sha256` = daemon 启动时自量的自身构建摘要
+>   （`crates/arkforged/src/main.rs`）。ArkDeck 侧的比对义务不变。
+> - **§0/§8 的 `wlx`/`ppt`/`rl`/`rd` 词汇仅存于历史。** 封闭面现为七个语义动作
+>   （enter-loader / probe-loader / validate-partition-table / write-partition /
+>   readback-partition / characterize-read-domain / reset-device，
+>   `crates/arkforge-provider/src/rockchip_execute.rs`）；
+>   `Write LBA from file (100%)` 一类 stdout 标记不再是可观测事实，写回执改为
+>   `writePayloadBytes`/`writeWireSectors`/`writeChunks`/`writePayloadSha256`。
+> - **§8.2 的失败二分**「tool 被 spawn 之前/之后」现读作
+>   「第一条 WRITE_LBA CBW 发出之前/之后」（`dispatch.rs` 的 `classify`）。
+> - **顶注「还没有真机跑一次」已过时**：2026-08-18 `flash.dayu200` 全绿
+>   （`job-a4b7d539571082b1958ebaaf2c14bd2c`，见
+>   `../../evidence/runs/2026-08-18-dayu200-native-green-flash.md`）。
+>
+> 治理版在 ArkDeck 仓 `openspec/changes/chg-2026-059-arkdeck-arkforge-authority/`，
+> 已同步加同等声明。authority 分界本身（permit 签发、managed control、
+> connectKey 永不过界）不受 NRU-004 影响，仍是现行事实。
+
 ---
 
 ## 0. 一句话架构

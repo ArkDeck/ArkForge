@@ -9,7 +9,7 @@
 
 | 目录 | 内容 | 状态 |
 |---|---|---|
-| `chg-arkdeck-arkforge-authority/` | ArkDeck 保留 authority，把 Rockchip lowering 交给 ArkForge | **已复制进 ArkDeck**（2026-08-15），落在 `openspec/changes/chg-2026-059-arkdeck-arkforge-authority/`，未提交 |
+| `chg-arkdeck-arkforge-authority/` | ArkDeck 保留 authority，把 Rockchip lowering 交给 ArkForge | **已复制进 ArkDeck**（2026-08-15），落在 `openspec/changes/chg-2026-059-arkdeck-arkforge-authority/`；四份稿件 2026-08-19 起带 **NRU-004 超越声明**——fixed-tool 执行面已退役，照抄启动契约会失败 |
 
 > 本目录留的是**草稿正本**；ArkDeck 里那份是按它的约定改过的落地版。
 > 两处若要再改，改 ArkDeck 那份——它已经进了那个仓的治理流程，
@@ -42,9 +42,10 @@
 ## 若还要再贴别的
 
 - `core_baseline` 按当时的 protected-main 值填（当前 `CORE-3.0.0`）；
-- `verification.md` 的 `Environment` 按实际硬件与工具 digest 复核——
-  尤其是 rkdeveloptool：本仓自建的那份与 homebrew 的那份字节相同，
-  但后者带 quarantine 时会挂死在 dyld（AD-015）。
+- `verification.md` 的 `Environment` 按实际硬件与 toolchain digest 复核。
+  NRU-004 之后不再有外部工具可绑：`arkforged` 原生执行，握手里的
+  `toolchain_sha256` 是 daemon 自身构建摘要（AD-015 的 quarantine 教训
+  只对历史 vendor 工具成立，留档即可，勿再写进新 Environment）。
 
 ## 与本仓的接口
 
