@@ -37,29 +37,29 @@ cargo run -p arkforged --bin arkforged -- --runtime-dir /tmp/arkforge --profile 
 ```
 
 ```bash
-cargo run -p arkforged --bin arkforge -- --runtime-dir /tmp/arkforge device list
+cargo run -p arkforge-cli --bin arkforge -- --runtime-dir /tmp/arkforge device list
 ```
 
 固件先进入内容寻址存储，再按返回的 artifact ID 离线检查：
 
 ```bash
-cargo run -p arkforged --bin arkforge -- --runtime-dir /tmp/arkforge artifact import --file ./firmware.tar.gz
-cargo run -p arkforged --bin arkforge -- --runtime-dir /tmp/arkforge artifact inspect --artifact <artifact-id> --profile profiles/dayu200.yaml
+cargo run -p arkforge-cli --bin arkforge -- --runtime-dir /tmp/arkforge artifact import --file ./firmware.tar.gz
+cargo run -p arkforge-cli --bin arkforge -- --runtime-dir /tmp/arkforge artifact inspect --artifact <artifact-id> --profile profiles/dayu200.yaml
 ```
 
 守护进程状态在重启后仍可查询：
 
 ```bash
-cargo run -p arkforged --bin arkforge -- --runtime-dir /tmp/arkforge job list
-cargo run -p arkforged --bin arkforge -- --runtime-dir /tmp/arkforge job show --job <job-id>
-cargo run -p arkforged --bin arkforge -- --runtime-dir /tmp/arkforge job recovery guide --job <job-id>
+cargo run -p arkforge-cli --bin arkforge -- --runtime-dir /tmp/arkforge job list
+cargo run -p arkforge-cli --bin arkforge -- --runtime-dir /tmp/arkforge job show --job <job-id>
+cargo run -p arkforge-cli --bin arkforge -- --runtime-dir /tmp/arkforge job recovery guide --job <job-id>
 ```
 
 Agent 可直接读取机器帮助，不需要推断 socket 或历史命令名：
 
 ```bash
-cargo run -p arkforged --bin arkforge -- help --format json
-cargo run -p arkforged --bin arkforge -- help flash assess --format json
+cargo run -p arkforge-cli --bin arkforge -- help --format json
+cargo run -p arkforge-cli --bin arkforge -- help flash assess --format json
 ```
 
 ## 文档

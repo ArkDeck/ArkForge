@@ -1,28 +1,21 @@
 [package]
-name = "arkforged"
+name = "arkforge-cli"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
 repository.workspace = true
 
-[lib]
-name = "arkforged"
-path = "src/lib.rs"
-
 [[bin]]
-name = "arkforged"
+name = "arkforge"
 path = "src/main.rs"
 
 [dependencies]
 arkforge-core = { path = "../arkforge-core" }
-arkforge-usb = { path = "../arkforge-usb" }
 arkforge-authority-api = { path = "../arkforge-authority-api" }
 arkforge-artifact = { path = "../arkforge-artifact" }
-arkforge-transport = { path = "../arkforge-transport" }
-arkforge-provider = { path = "../arkforge-provider" }
-arkforge-engine = { path = "../arkforge-engine" }
 arkforge-ipc = { path = "../arkforge-ipc" }
+arkforged = { path = "../arkforged" }
 
 [dev-dependencies]
-arkforge-arkdeck-adapter = { path = "../../adapters/arkforge-arkdeck-adapter" }
+arkforge-artifact = { path = "../arkforge-artifact" }

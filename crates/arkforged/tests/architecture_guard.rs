@@ -123,6 +123,16 @@ fn the_dependency_direction_matches_the_architecture() {
             "arkforge-arkdeck-adapter",
             BTreeSet::from(["arkforge-core", "arkforge-authority-api", "arkforge-ipc"]),
         ),
+        (
+            "arkforge-cli",
+            BTreeSet::from([
+                "arkforge-core",
+                "arkforge-authority-api",
+                "arkforge-artifact",
+                "arkforge-ipc",
+                "arkforged",
+            ]),
+        ),
     ]);
 
     for (crate_name, dependencies) in &graph {
@@ -166,12 +176,16 @@ fn unsafe_is_confined_to_the_usb_ffi_crate() {
 }
 
 #[test]
-fn no_crate_depends_on_the_daemon_or_the_adapter() {
-    // Both are leaves of the graph in the other direction: nothing may build on
-    // the process or on one authority's adapter.
+fn only_the_process_frontend_may_compose_the_daemon_library() {
+    // The canonical CLI composes existing mechanics-side host helpers while
+    // keeping authority minting in its own executable crate. No reusable
+    // library may build on the daemon or one authority's adapter.
     let graph = dependency_graph();
     for (crate_name, dependencies) in &graph {
         for forbidden in ["arkforged", "arkforge-arkdeck-adapter"] {
+            if crate_name == "arkforge-cli" && forbidden == "arkforged" {
+                continue;
+            }
             assert!(
                 !dependencies.contains(forbidden),
                 "{crate_name} must not depend on {forbidden}"

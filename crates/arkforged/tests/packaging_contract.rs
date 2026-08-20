@@ -47,7 +47,7 @@ fn the_release_packager_contains_only_the_native_daemon() {
 
     assert!(SCRIPT.contains("cp \"$release_bin/arkforged\" \"$stage/arkforged\""));
     assert!(SCRIPT.contains("\\\"arkforged\\\": {"));
-    assert!(SCRIPT.contains("--bin arkforged --bin arkforge"));
+    assert!(SCRIPT.contains("-p arkforged --bin arkforged -p arkforge-cli --bin arkforge"));
     assert!(SCRIPT.contains("\"$release_bin/arkforge\" signing verify"));
     assert!(!SCRIPT.contains("arkforge-signing"));
     for retired in ["rkdeveloptool", "RKDEVELOPTOOL"] {

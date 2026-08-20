@@ -1,4 +1,4 @@
-//! Process-level contract for the canonical signing command.
+//! Process-level contract for the canonical signing command and packaged daemon.
 
 #![cfg(target_os = "macos")]
 
@@ -35,7 +35,7 @@ fn development_verification_returns_stable_json() {
             "signing",
             "verify",
             "--file",
-            env!("CARGO_BIN_EXE_arkforged"),
+            env!("CARGO_BIN_EXE_arkforge"),
             "--mode",
             "development",
         ])
@@ -59,7 +59,7 @@ fn removed_release_flag_is_not_a_compatibility_alias() {
             "signing",
             "verify",
             "--file",
-            env!("CARGO_BIN_EXE_arkforged"),
+            env!("CARGO_BIN_EXE_arkforge"),
             "--release",
             "true",
         ])

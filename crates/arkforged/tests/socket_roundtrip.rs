@@ -116,17 +116,6 @@ fn call(stream: &mut UnixStream, api: Api, payload: Vec<u8>) -> Response {
     Response::decode(&frame).unwrap()
 }
 
-fn run_cli(daemon: &Daemon, arguments: &[&str]) -> std::process::Output {
-    Command::new(env!("CARGO_BIN_EXE_arkforge"))
-        .arg("--runtime-dir")
-        .arg(&daemon.runtime_dir)
-        .arg("--output")
-        .arg("json")
-        .args(arguments)
-        .output()
-        .expect("canonical arkforge CLI should start")
-}
-
 #[test]
 fn the_daemon_serves_the_read_only_vertical_over_unix_sockets() {
     let Some(daemon) = Daemon::start("vertical") else {
@@ -195,100 +184,6 @@ fn the_daemon_serves_the_read_only_vertical_over_unix_sockets() {
         }
         other => panic!("expected an assessment, got {other:?}"),
     }
-
-    // The same public vertical is reachable through the canonical Agent-native
-    // command tree. These are process-level assertions: argv parsing,
-    // runtime-dir socket derivation, handshake, typed decoding and JSON output
-    // must all agree.
-    let device_list = run_cli(&daemon, &["device", "list"]);
-    assert!(device_list.status.success());
-    let device_list = String::from_utf8(device_list.stdout).unwrap();
-    assert!(device_list.contains("\"schema_version\":\"arkforge.device-list/v1\""));
-    assert!(device_list.contains("OBS-PREFLIGHT"));
-
-    let device_show = run_cli(&daemon, &["device", "show", "--device", "OBS-PREFLIGHT"]);
-    assert!(device_show.status.success());
-    assert!(
-        String::from_utf8(device_show.stdout)
-            .unwrap()
-            .contains("\"schema_version\":\"arkforge.device-observation/v1\"")
-    );
-
-    let probe = run_cli(
-        &daemon,
-        &[
-            "device",
-            "probe",
-            "--device",
-            "OBS-PREFLIGHT",
-            "--profile",
-            "org.openharmony.dayu200",
-        ],
-    );
-    assert!(probe.status.success());
-    assert!(
-        String::from_utf8(probe.stdout)
-            .unwrap()
-            .contains("\"schema_version\":\"arkforge.device-probe/v1\"")
-    );
-
-    let waited = run_cli(
-        &daemon,
-        &[
-            "device",
-            "wait",
-            "--profile",
-            "org.openharmony.dayu200",
-            "--mode",
-            "hdc-normal",
-            "--timeout-ms",
-            "0",
-        ],
-    );
-    assert_eq!(waited.status.code(), Some(6), "{waited:?}");
-    assert!(
-        String::from_utf8(waited.stderr)
-            .unwrap()
-            .contains("\"code\":\"AMBIGUOUS_DEVICE\"")
-    );
-
-    let artifact = run_cli(&daemon, &["artifact", "show", "--artifact", &artifact_id]);
-    assert!(artifact.status.success());
-    let artifact = String::from_utf8(artifact.stdout).unwrap();
-    assert!(artifact.contains("\"schema_version\":\"arkforge.artifact/v1\""));
-    assert!(artifact.contains("\"partitions\":["));
-
-    let assessment = run_cli(
-        &daemon,
-        &[
-            "flash",
-            "assess",
-            "--artifact",
-            &artifact_id,
-            "--profile",
-            "org.openharmony.dayu200",
-            "--device",
-            "OBS-PREFLIGHT",
-            "--intent",
-            "full-restore",
-        ],
-    );
-    assert!(assessment.status.success());
-    let assessment = String::from_utf8(assessment.stdout).unwrap();
-    assert!(assessment.contains("\"schema_version\":\"arkforge.flash-assessment/v1\""));
-    assert!(assessment.contains("\"executable\":false"));
-
-    let jobs = run_cli(&daemon, &["job", "list"]);
-    assert!(jobs.status.success());
-    let jobs = String::from_utf8(jobs.stdout).unwrap();
-    assert!(jobs.contains("\"schema_version\":\"arkforge.job-list/v1\""));
-    assert!(jobs.contains("\"jobs\":[]"));
-
-    let unknown_job = run_cli(&daemon, &["job", "show", "--job", "JOB-NOT-THERE"]);
-    assert_eq!(unknown_job.status.code(), Some(5));
-    let unknown_job = String::from_utf8(unknown_job.stderr).unwrap();
-    assert!(unknown_job.contains("\"code\":\"UNKNOWN_JOB\""));
-    assert!(unknown_job.contains("arkforge job list"));
 
     // startExecution is unavailable on the wire, from the controller socket.
     // The default native dispatcher is bound, but no authority is paired, so

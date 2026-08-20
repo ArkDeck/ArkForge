@@ -1,4 +1,4 @@
-//! Canonical ArkForge command frontend.
+//! Canonical ArkForge command frontend and local authority process.
 //!
 //! Explicit native rescue and read-only host diagnostics land here before the
 //! normal-flash authority surface. No canonical command is a compatibility

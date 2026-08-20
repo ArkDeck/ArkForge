@@ -46,7 +46,7 @@ trap cleanup EXIT
 
 # 1. build --------------------------------------------------------------------
 cargo build --manifest-path "$repo_root/Cargo.toml" --release --offline \
-  -p arkforged --bin arkforged --bin arkforge
+  -p arkforged --bin arkforged -p arkforge-cli --bin arkforge
 release_bin="$repo_root/target/release"
 
 staging_root="$(mktemp -d "${TMPDIR:-/tmp}/arkforge-package.XXXXXX")"
