@@ -170,8 +170,8 @@ ArkForge 尚未发布，不保留兼容 wrapper、旧参数或弃用周期。已
 再在同一提交删除对应旧二进制。第一批为 `signing verify`，之后依次迁移 public
 socket 查询与 artifact import/inspect；不会同时保留新旧命令名。
 
-当前 `signing verify` 与 public-socket 查询纵向已落地，`arkforge-signing`、
-`arkforge-cli` 已删除；artifact import/offline inspect 纵向仍待实施。
+当前 `signing verify`、public-socket 查询与 artifact import/offline inspect 纵向已
+落地，`arkforge-signing`、`arkforge-cli`、`arkforge-inspect` 均已删除。
 
 ## Out of scope
 

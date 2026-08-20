@@ -15,10 +15,6 @@ name = "arkforged"
 path = "src/main.rs"
 
 [[bin]]
-name = "arkforge-inspect"
-path = "src/bin/arkforge-inspect.rs"
-
-[[bin]]
 name = "arkforge"
 path = "src/bin/arkforge.rs"
 

@@ -4,8 +4,13 @@
 //! normal-flash authority surface. No canonical command is a compatibility
 //! wrapper around an older binary.
 
+use arkforge_artifact::cas::{CasError, CasQuota, ContentAddressedStore, ImportedObject};
 use arkforge_core::Sha256Digest;
+use arkforge_core::profile;
 use arkforge_ipc::messages::{Assessment, Effect, InspectArtifactResponse, JobSummary, KeyValue};
+use arkforged::artifact_ops::{
+    ProfileCoverage, inspect_container, manifest_response, profile_coverage,
+};
 use arkforged::dispatch::executable_digest;
 use arkforged::packaging::{self, ContractMode, SignedCode};
 use arkforged::public_client::{
@@ -16,6 +21,7 @@ use arkforged::rescue::{
     RescueManager, RescuePlanSummary, RescueReadReceipt, now_epoch_ms,
 };
 use std::collections::{BTreeMap, BTreeSet};
+use std::fs::File;
 use std::path::{Path, PathBuf};
 
 const HELP_SCHEMA: &str = "arkforge.command-help/v1";
@@ -315,6 +321,64 @@ fn run_artifact(arguments: &[String], globals: Globals) -> Result<i32, CliError>
     };
     let options = Options::parse(&arguments[1..])?;
     match subcommand.as_str() {
+        "import" => {
+            options.ensure_only(&["file", "expect-sha256"])?;
+            let file = Path::new(options.one("file")?);
+            let expected = options
+                .optional_one("expect-sha256")?
+                .map(|value| parse_digest("--expect-sha256", value))
+                .transpose()?;
+            let metadata = std::fs::metadata(file).map_err(|error| {
+                CliError::new(
+                    "ARTIFACT_FILE_NOT_FOUND",
+                    format!("Cannot read artifact input {}: {error}", file.display()),
+                    5,
+                    false,
+                )
+            })?;
+            if !metadata.is_file() {
+                return Err(CliError::invalid(format!(
+                    "--file must name one regular file, not {}.",
+                    file.display()
+                )));
+            }
+            let store = open_artifact_store(&globals)?;
+            let input = File::open(file).map_err(|error| {
+                CliError::new(
+                    "ARTIFACT_FILE_NOT_FOUND",
+                    format!("Cannot open artifact input {}: {error}", file.display()),
+                    5,
+                    false,
+                )
+            })?;
+            let imported = store
+                .import(input, metadata.len(), expected)
+                .map_err(artifact_store_error)?;
+            print_artifact_import(globals.output, &imported);
+            Ok(0)
+        }
+        "inspect" => {
+            options.ensure_only(&["artifact", "profile"])?;
+            let artifact_id = options.one("artifact")?;
+            let digest = parse_digest("--artifact", artifact_id)?;
+            let store = open_existing_artifact_store(&globals)?;
+            let object = store.open_object(&digest).map_err(artifact_store_error)?;
+            let manifest = inspect_container(object)
+                .map_err(|message| CliError::new("ARTIFACT_REJECTED", message, 3, false))?;
+            let response = manifest_response(&manifest);
+            let coverage = options
+                .optional_one("profile")?
+                .map(|path| load_profile_coverage(Path::new(path), &manifest))
+                .transpose()?;
+            print_artifact_inspection(globals.output, artifact_id, &response, coverage.as_ref());
+            Ok(0)
+        }
+        "list" => {
+            options.ensure_only(&[])?;
+            let objects = list_artifacts(&globals)?;
+            print_artifact_list(globals.output, &objects);
+            Ok(0)
+        }
         "show" => {
             options.ensure_only(&["artifact"])?;
             let artifact = options.one("artifact")?;
@@ -425,6 +489,90 @@ fn public_client(globals: &Globals) -> Result<PublicClient, CliError> {
         None => default_runtime_dir()?,
     };
     PublicClient::connect(&runtime_dir).map_err(Into::into)
+}
+
+fn artifact_store_root(globals: &Globals) -> Result<PathBuf, CliError> {
+    let runtime_dir = match &globals.runtime_dir {
+        Some(path) => path.clone(),
+        None => default_runtime_dir()?,
+    };
+    Ok(runtime_dir.join("store"))
+}
+
+fn open_artifact_store(globals: &Globals) -> Result<ContentAddressedStore, CliError> {
+    ContentAddressedStore::open(artifact_store_root(globals)?, CasQuota::dayu200_default())
+        .map_err(artifact_store_error)
+}
+
+fn open_existing_artifact_store(globals: &Globals) -> Result<ContentAddressedStore, CliError> {
+    let root = artifact_store_root(globals)?;
+    if !root.exists() {
+        return Err(CliError::new(
+            "ARTIFACT_NOT_FOUND",
+            "The selected runtime has no artifact store.",
+            5,
+            false,
+        ));
+    }
+    ContentAddressedStore::open(root, CasQuota::dayu200_default()).map_err(artifact_store_error)
+}
+
+fn list_artifacts(globals: &Globals) -> Result<Vec<(Sha256Digest, u64)>, CliError> {
+    let root = artifact_store_root(globals)?;
+    if !root.exists() {
+        return Ok(Vec::new());
+    }
+    let store = ContentAddressedStore::open(root, CasQuota::dayu200_default())
+        .map_err(artifact_store_error)?;
+    let mut objects = Vec::new();
+    for digest in store.list_objects().map_err(artifact_store_error)? {
+        let size = store
+            .open_object(&digest)
+            .and_then(|file| file.metadata().map_err(CasError::from))
+            .map_err(artifact_store_error)?
+            .len();
+        objects.push((digest, size));
+    }
+    Ok(objects)
+}
+
+fn load_profile_coverage(
+    path: &Path,
+    manifest: &arkforge_artifact::manifest::ArtifactManifest,
+) -> Result<ProfileCoverage, CliError> {
+    let source = std::fs::read_to_string(path).map_err(|error| {
+        CliError::new(
+            "PROFILE_FILE_NOT_FOUND",
+            format!("Cannot read profile {}: {error}", path.display()),
+            5,
+            false,
+        )
+    })?;
+    let profile = profile::load(&source).map_err(|error| {
+        CliError::new(
+            "PROFILE_REJECTED",
+            format!("Profile {} is invalid: {error}", path.display()),
+            3,
+            false,
+        )
+    })?;
+    profile_coverage(manifest, &profile)
+        .map_err(|message| CliError::new("PROFILE_REJECTED", message, 3, false))
+}
+
+fn artifact_store_error(error: CasError) -> CliError {
+    match error {
+        CasError::NotFound(_) => CliError::new("ARTIFACT_NOT_FOUND", error.to_string(), 5, false),
+        CasError::QuotaExceeded(_)
+        | CasError::DigestMismatch { .. }
+        | CasError::ArtifactTooLarge { .. } => {
+            CliError::new("ARTIFACT_IMPORT_REFUSED", error.to_string(), 3, false)
+        }
+        CasError::LeaseHeld { .. } | CasError::InvalidHolder(_) => {
+            CliError::new("ARTIFACT_STATE_CONFLICT", error.to_string(), 6, false)
+        }
+        CasError::Io(_) => CliError::new("ARTIFACT_STORE_FAILED", error.to_string(), 10, true),
+    }
 }
 
 fn run_rescue(arguments: &[String], globals: Globals) -> Result<i32, CliError> {
@@ -652,102 +800,250 @@ fn print_device_probe(output: Output, probe: &DeviceProbeView) {
     }
 }
 
+fn print_artifact_import(output: Output, imported: &ImportedObject) {
+    let artifact_id = imported.digest.to_hex();
+    let next = format!("arkforge artifact inspect --artifact {artifact_id}");
+    match output {
+        Output::Human => {
+            println!("Artifact imported into the content-addressed store.");
+            println!("artifact_id   {artifact_id}");
+            println!("sha256       {artifact_id}");
+            println!("size_bytes   {}", imported.size_bytes);
+            println!("deduplicated {}", imported.deduplicated);
+            println!("No device was accessed or mutated.");
+            println!("Next: {next}");
+        }
+        Output::Json => println!(
+            "{{\"schema_version\":\"arkforge.artifact-import/v1\",\"artifact_id\":{},\"sha256\":{},\"size_bytes\":{},\"deduplicated\":{},\"host_store_mutated\":{},\"device_accessed\":false,\"next_commands\":[{}]}}",
+            json(&artifact_id),
+            json(&artifact_id),
+            imported.size_bytes,
+            imported.deduplicated,
+            !imported.deduplicated,
+            json(&next)
+        ),
+    }
+}
+
+fn print_artifact_list(output: Output, objects: &[(Sha256Digest, u64)]) {
+    let next = if objects.is_empty() {
+        vec!["arkforge artifact import --file <firmware-file>".to_string()]
+    } else {
+        vec!["arkforge artifact inspect --artifact <artifact-id>".to_string()]
+    };
+    match output {
+        Output::Human => {
+            if objects.is_empty() {
+                println!("No artifacts are stored in this runtime.");
+                println!("Next: {}", next[0]);
+                return;
+            }
+            println!("Stored artifacts ({})", objects.len());
+            for (digest, size) in objects {
+                println!("{}  size_bytes={size}", digest.to_hex());
+            }
+            println!("Next: {}", next[0]);
+        }
+        Output::Json => {
+            let artifacts = objects
+                .iter()
+                .map(|(digest, size)| {
+                    format!(
+                        "{{\"artifact_id\":{},\"sha256\":{},\"size_bytes\":{size}}}",
+                        json(&digest.to_hex()),
+                        json(&digest.to_hex())
+                    )
+                })
+                .collect::<Vec<_>>()
+                .join(",");
+            println!(
+                "{{\"schema_version\":\"arkforge.artifact-list/v1\",\"artifacts\":[{artifacts}],\"next_commands\":{}}}",
+                json_array(&next)
+            );
+        }
+    }
+}
+
+fn print_artifact_inspection(
+    output: Output,
+    artifact_id: &str,
+    manifest: &InspectArtifactResponse,
+    coverage: Option<&ProfileCoverage>,
+) {
+    let next = format!(
+        "arkforge flash assess --artifact {artifact_id} --profile <profile-id> --device <observation-id> --intent full-restore"
+    );
+    match output {
+        Output::Human => {
+            print_artifact_human(artifact_id, manifest);
+            if let Some(coverage) = coverage {
+                print_profile_coverage_human(coverage);
+            }
+            println!("No device was accessed or mutated.");
+            println!("Next: {next}");
+        }
+        Output::Json => println!(
+            "{{\"schema_version\":\"arkforge.artifact-inspection/v1\",{},\"profile_coverage\":{},\"device_accessed\":false,\"next_commands\":[{}]}}",
+            artifact_fields_json(artifact_id, manifest),
+            coverage
+                .map(profile_coverage_json)
+                .unwrap_or_else(|| "null".into()),
+            json(&next)
+        ),
+    }
+}
+
 fn print_artifact(output: Output, artifact_id: &str, manifest: &InspectArtifactResponse) {
     let next = format!(
         "arkforge flash assess --artifact {artifact_id} --profile <profile-id> --device <observation-id> --intent full-restore"
     );
     match output {
         Output::Human => {
-            println!("artifact_id      {artifact_id}");
-            println!("format           {}", manifest.format_id);
-            println!("content_sha256   {}", manifest.content_sha256);
-            println!("manifest_sha256  {}", manifest.manifest_sha256);
-            println!("size_bytes       {}", manifest.size_bytes);
-            println!("confidence       {}", manifest.confidence);
-            println!("members ({})", manifest.members.len());
-            for member in &manifest.members {
-                println!(
-                    "  {}  size={}  role={}  sha256={}",
-                    member.path, member.size_bytes, member.role, member.sha256
-                );
-            }
-            println!("partitions ({})", manifest.partitions.len());
-            for partition in &manifest.partitions {
-                let sectors = partition
-                    .size_sectors
-                    .map(|value| value.to_string())
-                    .unwrap_or_else(|| "remainder".into());
-                println!(
-                    "  {}  index={}  start={}  sectors={}  attribute={}  grammar={}",
-                    partition.name,
-                    partition.index,
-                    partition.offset_sectors,
-                    sectors,
-                    partition.attribute,
-                    partition.grammar_branch
-                );
-            }
-            print_key_values_human("build facts", &manifest.build_facts);
-            if !manifest.unclassified_members.is_empty() {
-                println!("unclassified members");
-                for member in &manifest.unclassified_members {
-                    println!("  {member}");
-                }
-            }
-            print_key_values_human(
-                "execution-relevant unknowns",
-                &manifest.execution_relevant_unknowns,
-            );
+            print_artifact_human(artifact_id, manifest);
             println!("Next: {next}");
         }
-        Output::Json => {
-            let members = manifest
-                .members
-                .iter()
-                .map(|member| {
-                    format!(
-                        "{{\"path\":{},\"size_bytes\":{},\"sha256\":{},\"role\":{}}}",
-                        json(&member.path),
-                        member.size_bytes,
-                        json(&member.sha256),
-                        json(&member.role)
-                    )
-                })
-                .collect::<Vec<_>>()
-                .join(",");
-            let partitions = manifest
-                .partitions
-                .iter()
-                .map(|partition| {
-                    format!(
-                        "{{\"index\":{},\"name\":{},\"offset_sectors\":{},\"size_sectors\":{},\"attribute\":{},\"grammar_branch\":{}}}",
-                        partition.index,
-                        json(&partition.name),
-                        partition.offset_sectors,
-                        optional_u64(partition.size_sectors),
-                        json(&partition.attribute),
-                        json(&partition.grammar_branch)
-                    )
-                })
-                .collect::<Vec<_>>()
-                .join(",");
-            println!(
-                "{{\"schema_version\":\"arkforge.artifact/v1\",\"artifact_id\":{},\"format_id\":{},\"content_sha256\":{},\"manifest_sha256\":{},\"size_bytes\":{},\"confidence\":{},\"members\":[{}],\"partitions\":[{}],\"build_facts\":{},\"unclassified_members\":{},\"execution_relevant_unknowns\":{},\"next_commands\":[{}]}}",
-                json(artifact_id),
-                json(&manifest.format_id),
-                json(&manifest.content_sha256),
-                json(&manifest.manifest_sha256),
-                manifest.size_bytes,
-                json(&manifest.confidence),
-                members,
-                partitions,
-                key_values_json(&manifest.build_facts),
-                json_array(&manifest.unclassified_members),
-                key_values_json(&manifest.execution_relevant_unknowns),
-                json(&next)
-            );
+        Output::Json => println!(
+            "{{\"schema_version\":\"arkforge.artifact/v1\",{},\"next_commands\":[{}]}}",
+            artifact_fields_json(artifact_id, manifest),
+            json(&next)
+        ),
+    }
+}
+
+fn print_artifact_human(artifact_id: &str, manifest: &InspectArtifactResponse) {
+    println!("artifact_id      {artifact_id}");
+    println!("format           {}", manifest.format_id);
+    println!("content_sha256   {}", manifest.content_sha256);
+    println!("manifest_sha256  {}", manifest.manifest_sha256);
+    println!("size_bytes       {}", manifest.size_bytes);
+    println!("confidence       {}", manifest.confidence);
+    println!("members ({})", manifest.members.len());
+    for member in &manifest.members {
+        println!(
+            "  {}  size={}  role={}  sha256={}",
+            member.path, member.size_bytes, member.role, member.sha256
+        );
+    }
+    println!("partitions ({})", manifest.partitions.len());
+    for partition in &manifest.partitions {
+        let sectors = partition
+            .size_sectors
+            .map(|value| value.to_string())
+            .unwrap_or_else(|| "remainder".into());
+        println!(
+            "  {}  index={}  start={}  sectors={}  attribute={}  grammar={}",
+            partition.name,
+            partition.index,
+            partition.offset_sectors,
+            sectors,
+            partition.attribute,
+            partition.grammar_branch
+        );
+    }
+    print_key_values_human("build facts", &manifest.build_facts);
+    if !manifest.unclassified_members.is_empty() {
+        println!("unclassified members");
+        for member in &manifest.unclassified_members {
+            println!("  {member}");
         }
     }
+    print_key_values_human(
+        "execution-relevant unknowns",
+        &manifest.execution_relevant_unknowns,
+    );
+}
+
+fn print_profile_coverage_human(coverage: &ProfileCoverage) {
+    println!(
+        "profile coverage  {} {} sha256={} complete={}",
+        coverage.profile_id, coverage.profile_version, coverage.profile_sha256, coverage.complete
+    );
+    for target in &coverage.targets {
+        println!(
+            "  order={} partition={} source={} size_bytes={} present={}",
+            target.write_order,
+            target.partition,
+            target.source_member.as_deref().unwrap_or("none"),
+            target
+                .source_size_bytes
+                .map(|value| value.to_string())
+                .unwrap_or_else(|| "null".into()),
+            target.present
+        );
+    }
+}
+
+fn artifact_fields_json(artifact_id: &str, manifest: &InspectArtifactResponse) -> String {
+    let members = manifest
+        .members
+        .iter()
+        .map(|member| {
+            format!(
+                "{{\"path\":{},\"size_bytes\":{},\"sha256\":{},\"role\":{}}}",
+                json(&member.path),
+                member.size_bytes,
+                json(&member.sha256),
+                json(&member.role)
+            )
+        })
+        .collect::<Vec<_>>()
+        .join(",");
+    let partitions = manifest
+        .partitions
+        .iter()
+        .map(|partition| {
+            format!(
+                "{{\"index\":{},\"name\":{},\"offset_sectors\":{},\"size_sectors\":{},\"attribute\":{},\"grammar_branch\":{}}}",
+                partition.index,
+                json(&partition.name),
+                partition.offset_sectors,
+                optional_u64(partition.size_sectors),
+                json(&partition.attribute),
+                json(&partition.grammar_branch)
+            )
+        })
+        .collect::<Vec<_>>()
+        .join(",");
+    format!(
+        "\"artifact_id\":{},\"format_id\":{},\"content_sha256\":{},\"manifest_sha256\":{},\"size_bytes\":{},\"confidence\":{},\"members\":[{}],\"partitions\":[{}],\"build_facts\":{},\"unclassified_members\":{},\"execution_relevant_unknowns\":{}",
+        json(artifact_id),
+        json(&manifest.format_id),
+        json(&manifest.content_sha256),
+        json(&manifest.manifest_sha256),
+        manifest.size_bytes,
+        json(&manifest.confidence),
+        members,
+        partitions,
+        key_values_json(&manifest.build_facts),
+        json_array(&manifest.unclassified_members),
+        key_values_json(&manifest.execution_relevant_unknowns)
+    )
+}
+
+fn profile_coverage_json(coverage: &ProfileCoverage) -> String {
+    let targets = coverage
+        .targets
+        .iter()
+        .map(|target| {
+            format!(
+                "{{\"write_order\":{},\"partition\":{},\"source_member\":{},\"source_size_bytes\":{},\"present\":{}}}",
+                target.write_order,
+                json(&target.partition),
+                optional_json(target.source_member.as_deref()),
+                optional_u64(target.source_size_bytes),
+                target.present
+            )
+        })
+        .collect::<Vec<_>>()
+        .join(",");
+    format!(
+        "{{\"profile_id\":{},\"profile_version\":{},\"profile_sha256\":{},\"complete\":{},\"targets\":[{}]}}",
+        json(&coverage.profile_id),
+        json(&coverage.profile_version),
+        json(&coverage.profile_sha256),
+        coverage.complete,
+        targets
+    )
 }
 
 fn print_flash_assessment(
@@ -1128,6 +1424,16 @@ impl Options {
         }
     }
 
+    fn optional_one(&self, name: &str) -> Result<Option<&str>, CliError> {
+        match self.values.get(name).map(Vec::as_slice) {
+            Some([value]) => Ok(Some(value)),
+            Some(_) => Err(CliError::invalid(format!(
+                "--{name} may be supplied only once."
+            ))),
+            None => Ok(None),
+        }
+    }
+
     fn many_required(&self, name: &str) -> Result<&[String], CliError> {
         self.values
             .get(name)
@@ -1423,6 +1729,12 @@ fn remediation(code: &str) -> Option<&'static str> {
         "ARTIFACT_NOT_FOUND" | "ARTIFACT_NOT_INSPECTED" => {
             Some("arkforge help artifact --format json")
         }
+        "ARTIFACT_FILE_NOT_FOUND" => Some("arkforge help artifact import --format json"),
+        "ARTIFACT_IMPORT_REFUSED" | "ARTIFACT_STORE_FAILED" => Some("arkforge artifact list"),
+        "ARTIFACT_REJECTED" => Some("arkforge help artifact inspect --format json"),
+        "PROFILE_FILE_NOT_FOUND" | "PROFILE_REJECTED" => {
+            Some("arkforge help artifact inspect --format json")
+        }
         "OBSERVATION_NOT_FOUND" => Some("arkforge device list"),
         "PROFILE_NOT_FOUND" | "NO_PROVIDER_FOR_PROFILE" => {
             Some("arkforge help device probe --format json")
@@ -1716,20 +2028,109 @@ static HELP: &[HelpSpec] = &[
     },
     HelpSpec {
         command: "artifact",
-        summary: "Read inspected firmware artifact facts from the public runtime.",
-        usage: "arkforge artifact show --artifact <artifact-id>",
-        effect: "Read-only. This implemented slice does not import or modify artifact bytes.",
-        requires: &["A content-addressed artifact already present in the selected runtime."],
-        produces: &["A complete inspected artifact manifest."],
+        summary: "Import, inspect, list, and show content-addressed firmware artifacts.",
+        usage: "arkforge artifact <import|inspect|list|show> [options]",
+        effect: "Import writes only the local content-addressed store. Inspect/list are offline; show queries the public runtime. No artifact command mutates a device.",
+        requires: &["An explicit runtime directory or the per-user default."],
+        produces: &["Artifact IDs, stored-object lists, or complete inspected manifests."],
         options: &[],
-        examples: &["arkforge help artifact show --format json"],
-        next: &["arkforge artifact show --artifact <artifact-id>"],
+        examples: &[
+            "arkforge artifact import --file <firmware-file>",
+            "arkforge help artifact inspect --format json",
+        ],
+        next: &["arkforge artifact import --file <firmware-file>"],
         exits: &[
             (0, "Artifact query completed."),
             (2, "Command or option is invalid."),
             (3, "Artifact inspection was refused."),
             (5, "The runtime or artifact was not found."),
             (10, "Inspection or IPC failed."),
+        ],
+    },
+    HelpSpec {
+        command: "artifact import",
+        summary: "Hash and atomically import one firmware file into the runtime store.",
+        usage: "arkforge artifact import --file <firmware-file> [--expect-sha256 <sha256>]",
+        effect: "Host write only. It creates or deduplicates one content-addressed object after quota, size, and optional digest checks; no daemon or device is accessed.",
+        requires: &[
+            "One regular input file.",
+            "Enough store quota and volume reserve for the complete input.",
+        ],
+        produces: &[
+            "arkforge.artifact-import/v1 with artifact_id, SHA-256, size, deduplication status, and the exact inspect command.",
+        ],
+        options: &[
+            (
+                "--file <firmware-file>",
+                "Regular firmware container file; required.",
+            ),
+            (
+                "--expect-sha256 <sha256>",
+                "Independent expected lowercase SHA-256; optional.",
+            ),
+        ],
+        examples: &["arkforge --output json artifact import --file ./firmware.tar.gz"],
+        next: &["arkforge artifact inspect --artifact <returned-artifact-id>"],
+        exits: &[
+            (0, "Artifact imported or deduplicated and synced."),
+            (2, "Input options or digest syntax are invalid."),
+            (
+                3,
+                "Digest, size, quota, or volume precondition refused import.",
+            ),
+            (5, "The input file was not found."),
+            (10, "The durable content store failed."),
+        ],
+    },
+    HelpSpec {
+        command: "artifact inspect",
+        summary: "Inspect one stored artifact offline and optionally compare profile target coverage.",
+        usage: "arkforge artifact inspect --artifact <artifact-id> [--profile <profile-file>]",
+        effect: "Read-only artifact parsing after opening bytes by content digest. It never reparses a caller path and never accesses a device.",
+        requires: &["One exact artifact id already present in this runtime store."],
+        produces: &[
+            "arkforge.artifact-inspection/v1 with the complete manifest and optional ordered profile target coverage.",
+        ],
+        options: &[
+            (
+                "--artifact <artifact-id>",
+                "Exact stored content SHA-256; required.",
+            ),
+            (
+                "--profile <profile-file>",
+                "Optional DeviceProfile used only for coverage comparison.",
+            ),
+        ],
+        examples: &[
+            "arkforge --output json artifact inspect --artifact <64-lowercase-hex> --profile profiles/dayu200.yaml",
+        ],
+        next: &[
+            "arkforge flash assess --artifact <artifact-id> --profile <profile-id> --device <observation-id> --intent full-restore",
+        ],
+        exits: &[
+            (0, "Manifest and optional coverage produced."),
+            (2, "The artifact id or options are invalid."),
+            (3, "Artifact or profile parsing was refused."),
+            (
+                5,
+                "The artifact store, object, or profile file was not found.",
+            ),
+            (10, "The content store failed."),
+        ],
+    },
+    HelpSpec {
+        command: "artifact list",
+        summary: "List every content-addressed object stored in this runtime.",
+        usage: "arkforge artifact list",
+        effect: "Read-only when a store exists. An absent store is reported as an empty list and is not created.",
+        requires: &[],
+        produces: &["arkforge.artifact-list/v1 with artifact ids and byte sizes."],
+        options: &[],
+        examples: &["arkforge --output json artifact list"],
+        next: &["arkforge artifact inspect --artifact <artifact-id>"],
+        exits: &[
+            (0, "Artifact list produced, including an empty list."),
+            (10, "The content store could not be read."),
         ],
     },
     HelpSpec {
@@ -2219,6 +2620,9 @@ mod tests {
         for topic in [
             "device list",
             "device probe",
+            "artifact import",
+            "artifact inspect",
+            "artifact list",
             "artifact show",
             "flash assess",
             "job list",

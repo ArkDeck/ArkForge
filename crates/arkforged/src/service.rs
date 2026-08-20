@@ -5,6 +5,7 @@
 //! "startExecution is unavailable" without opening a socket — the properties
 //! belong to the service, not to the plumbing.
 
+use crate::artifact_ops::{inspect_container, manifest_response};
 use crate::jobs::{AdmissionFacts, JobRegistry};
 use arkforge_artifact::cas::{CasQuota, ContentAddressedStore};
 use arkforge_artifact::manifest::ArtifactManifest;
@@ -29,10 +30,9 @@ use arkforge_engine::superseding::{
 };
 use arkforge_engine::{BoundToolchain, Engine, ExecutionReadiness, StoredPlan};
 use arkforge_ipc::messages::{
-    ArchiveMember, Assessment, Effect, ErrorBody, ExecutablePlan, InspectArtifactResponse,
-    JobSummary, KeyValue, MaterializePlanResponse, PartitionEntry, PublicStep, Request, Response,
-    SubmissionOutcome, SubmitManagedControlReceiptRequest, SubmitStepPermitRequest,
-    WatchJobRequest,
+    Assessment, Effect, ErrorBody, ExecutablePlan, JobSummary, KeyValue, MaterializePlanResponse,
+    PublicStep, Request, Response, SubmissionOutcome, SubmitManagedControlReceiptRequest,
+    SubmitStepPermitRequest, WatchJobRequest,
 };
 use arkforge_ipc::{Api, SessionKind, Status};
 use arkforge_provider::rockchip::{RockchipProvider, publish_dayu200_maturity};
@@ -736,7 +736,7 @@ impl Service {
             }
         };
 
-        self.ok(request, encode_manifest(&manifest).encode())
+        self.ok(request, manifest_response(&manifest).encode())
     }
 
     fn discover_devices(&mut self, request: &Request) -> Response {
@@ -1839,33 +1839,6 @@ fn provider_for<'a>(
     None
 }
 
-/// Reads a container with the parser its framing indicates.
-///
-/// gzip's magic is a fact of the container, not a guess about the device, so
-/// sniffing it is legitimate. Anything else falls to the research observer,
-/// which claims nothing about what it read.
-fn inspect_container<R: Read>(mut source: R) -> Result<ArtifactManifest, String> {
-    let mut magic = [0u8; 2];
-    let mut filled = 0usize;
-    while filled < magic.len() {
-        match source.read(&mut magic[filled..]) {
-            Ok(0) => break,
-            Ok(count) => filled += count,
-            Err(error) => return Err(error.to_string()),
-        }
-    }
-    let head = magic[..filled].to_vec();
-    let rejoined = std::io::Read::chain(std::io::Cursor::new(head), source);
-
-    if filled == 2 && magic[0] == 0x1f && magic[1] == 0x8b {
-        dayu200::inspect(rejoined).map_err(|error| error.to_string())
-    } else {
-        pac::inspect(rejoined)
-            .map(|(manifest, _)| manifest)
-            .map_err(|error| error.to_string())
-    }
-}
-
 fn driver_facts_digest() -> Sha256Digest {
     arkforge_core::digest::sha256(b"arkforge/driver-facts/none-measured")
 }
@@ -1981,57 +1954,6 @@ fn digest_from_bytes(bytes: &[u8]) -> Option<Sha256Digest> {
     let mut digest = [0u8; 32];
     digest.copy_from_slice(bytes);
     Some(Sha256Digest::from_bytes(digest))
-}
-
-fn encode_manifest(manifest: &ArtifactManifest) -> InspectArtifactResponse {
-    let mut response = InspectArtifactResponse {
-        format_id: manifest.format.id.to_string(),
-        content_sha256: manifest.content_digest.to_hex(),
-        size_bytes: manifest.size_bytes,
-        confidence: manifest.confidence.as_str().to_string(),
-        manifest_sha256: manifest
-            .digest()
-            .map(|digest| digest.to_hex())
-            .unwrap_or_default(),
-        unclassified_members: manifest.unclassified_members.clone(),
-        ..InspectArtifactResponse::default()
-    };
-    for member in &manifest.members {
-        response.members.push(ArchiveMember {
-            path: member.path.clone(),
-            size_bytes: member.size_bytes,
-            sha256: member.sha256.to_hex(),
-            role: member.role.as_str().to_string(),
-        });
-    }
-    if let Some(table) = &manifest.partition_table {
-        for entry in &table.entries {
-            response.partitions.push(PartitionEntry {
-                index: entry.index,
-                name: entry.name.clone(),
-                offset_sectors: entry.offset_sectors,
-                size_sectors: entry.size_sectors,
-                attribute: entry
-                    .attribute
-                    .map(|attribute| attribute.as_str().to_string())
-                    .unwrap_or_default(),
-                grammar_branch: entry.grammar_branch.as_str().to_string(),
-            });
-        }
-    }
-    for (key, value) in &manifest.build_facts {
-        response.build_facts.push(KeyValue {
-            key: key.to_string(),
-            value: value.clone(),
-        });
-    }
-    for unknown in &manifest.execution_relevant_unknowns {
-        response.execution_relevant_unknowns.push(KeyValue {
-            key: unknown.id.to_string(),
-            value: unknown.summary.clone(),
-        });
-    }
-    response
 }
 
 fn encode_observation(observation: &DeviceObservation) -> Vec<u8> {

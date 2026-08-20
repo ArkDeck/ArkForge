@@ -1,7 +1,7 @@
 # Verification — CHG-2026-CLI
 
-> Status: native-rescue software checks passing; read-only command consolidation is
-> implementing; hardware checks planned. Software tests do not authorize real writes.
+> Status: native-rescue software checks and legacy read-only command consolidation are
+> passing; remaining command/authority work and hardware checks are planned. Software tests do not authorize real writes.
 > DAYU200 normal CLI authority and native rescue require separate real-device evidence.
 
 ## Acceptance matrix

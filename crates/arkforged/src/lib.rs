@@ -8,6 +8,7 @@
 
 #![forbid(unsafe_code)]
 
+pub mod artifact_ops;
 pub mod dispatch;
 pub mod jobs;
 pub mod packaging;

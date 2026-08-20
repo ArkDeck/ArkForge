@@ -33,7 +33,8 @@ Progress:
   legacy binary removal;
 - [x] public-socket device/artifact/flash-assessment/job queries，含 probe 与
   recovery guide；legacy `arkforge-cli` 已移除；
-- [ ] artifact import/inspect and legacy inspector removal;
+- [x] offline artifact import/inspect/list，profile coverage 对照与 legacy
+  `arkforge-inspect` removal；
 - [ ] missing watch/reconcile handlers（reconcile 仍属于 controller authority 面）.
 
 ## TASK-CLI-003 — Direct CLI authority

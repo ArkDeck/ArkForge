@@ -40,6 +40,13 @@ cargo run -p arkforged --bin arkforged -- --runtime-dir /tmp/arkforge --profile 
 cargo run -p arkforged --bin arkforge -- --runtime-dir /tmp/arkforge device list
 ```
 
+固件先进入内容寻址存储，再按返回的 artifact ID 离线检查：
+
+```bash
+cargo run -p arkforged --bin arkforge -- --runtime-dir /tmp/arkforge artifact import --file ./firmware.tar.gz
+cargo run -p arkforged --bin arkforge -- --runtime-dir /tmp/arkforge artifact inspect --artifact <artifact-id> --profile profiles/dayu200.yaml
+```
+
 守护进程状态在重启后仍可查询：
 
 ```bash
