@@ -114,6 +114,20 @@ fn run(arguments: &[String]) -> Result<(), String> {
     std::fs::create_dir_all(&runtime_dir).map_err(|error| error.to_string())?;
 
     let mut profiles = Vec::new();
+    for (name, source) in [
+        (
+            "shipped dayu200",
+            include_str!("../../../profiles/dayu200.yaml"),
+        ),
+        (
+            "shipped dayu600",
+            include_str!("../../../profiles/dayu600.yaml"),
+        ),
+    ] {
+        profiles.push(
+            arkforge_core::profile::load(source).map_err(|error| format!("{name}: {error}"))?,
+        );
+    }
     for path in &profile_paths {
         let source = std::fs::read_to_string(path)
             .map_err(|error| format!("{}: {error}", path.display()))?;

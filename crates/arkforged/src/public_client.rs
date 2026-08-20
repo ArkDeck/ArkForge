@@ -83,10 +83,22 @@ pub struct RecoveryGuideView {
     pub contract_sha256: String,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PublicRuntimeInfo {
+    pub protocol_major: u32,
+    pub protocol_minor: u32,
+    pub daemon_version: String,
+    pub execution_ready: bool,
+    pub execution_blockers: Vec<String>,
+    pub toolchain_id: String,
+    pub toolchain_sha256: String,
+}
+
 #[derive(Debug)]
 pub struct PublicClient {
     stream: UnixStream,
     next_request: u64,
+    runtime_info: PublicRuntimeInfo,
 }
 
 impl PublicClient {
@@ -148,7 +160,20 @@ impl PublicClient {
         Ok(Self {
             stream,
             next_request: 1,
+            runtime_info: PublicRuntimeInfo {
+                protocol_major: ack.protocol_major,
+                protocol_minor: ack.protocol_minor,
+                daemon_version: ack.daemon_version,
+                execution_ready: ack.execution_ready,
+                execution_blockers: ack.execution_blockers,
+                toolchain_id: ack.toolchain_id,
+                toolchain_sha256: ack.toolchain_sha256,
+            },
         })
+    }
+
+    pub fn runtime_info(&self) -> &PublicRuntimeInfo {
+        &self.runtime_info
     }
 
     pub fn device_list(&mut self) -> Result<Vec<DeviceObservationView>, PublicClientError> {

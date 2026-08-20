@@ -4,6 +4,8 @@
 //! normal-flash authority surface. No canonical command is a compatibility
 //! wrapper around an older binary.
 
+mod supervisor;
+
 use arkforge_artifact::cas::{CasError, CasQuota, ContentAddressedStore, ImportedObject};
 use arkforge_core::Sha256Digest;
 use arkforge_core::profile;
@@ -165,10 +167,86 @@ fn run(arguments: &[String]) -> Result<i32, CliError> {
         "flash" => run_flash(&command[1..], globals),
         "job" => run_job(&command[1..], globals),
         "rescue" => run_rescue(&command[1..], globals),
+        "daemon" => run_daemon(&command[1..], globals),
         "signing" => run_signing(&command[1..], globals.output),
         other => Err(CliError::invalid(format!(
             "Unknown command {other:?}. Run 'arkforge help' for the command tree."
         ))),
+    }
+}
+
+fn run_daemon(arguments: &[String], globals: Globals) -> Result<i32, CliError> {
+    let Some(subcommand) = arguments.first() else {
+        print_help(help_spec(&["daemon".into()])?, globals.output);
+        return Ok(0);
+    };
+    let runtime_dir = command_runtime_dir(&globals)?;
+    match subcommand.as_str() {
+        "run" => {
+            let options = supervisor::DaemonOptions::parse(&arguments[1..])?;
+            supervisor::run(runtime_dir, options, globals.output == Output::Human)?;
+            Ok(0)
+        }
+        "start" => {
+            let options = supervisor::DaemonOptions::parse(&arguments[1..])?;
+            let status = supervisor::start(runtime_dir, options)?;
+            print_daemon_status(&status, globals.output);
+            Ok(0)
+        }
+        "status" => {
+            reject_extra(&arguments[1..], "daemon status")?;
+            let status = supervisor::status(&runtime_dir)?;
+            print_daemon_status(&status, globals.output);
+            Ok(0)
+        }
+        "stop" => {
+            reject_extra(&arguments[1..], "daemon stop")?;
+            let status = supervisor::stop(&runtime_dir)?;
+            match globals.output {
+                Output::Human => println!("ArkForge runtime stopped (epoch {}).", status.epoch),
+                Output::Json => println!(
+                    "{{\"schema_version\":\"arkforge.daemon-stop/v1\",\"stopped\":true,\"pairing_epoch\":{}}}",
+                    status.epoch
+                ),
+            }
+            Ok(0)
+        }
+        other => Err(CliError::invalid(format!(
+            "Unknown daemon command {other:?}. Run 'arkforge help daemon'."
+        ))),
+    }
+}
+
+fn print_daemon_status(status: &supervisor::DaemonStatus, output: Output) {
+    match output {
+        Output::Human => {
+            println!("ArkForge runtime: running");
+            println!("  supervisor pid: {}", status.supervisor_pid);
+            println!("  mechanics pid: {}", status.daemon_pid);
+            println!(
+                "  protocol: {}.{}",
+                status.protocol_major, status.protocol_minor
+            );
+            println!("  daemon: {}", status.daemon_version);
+            println!("  authority: arkforge.cli (epoch {})", status.epoch);
+            println!("  mechanics ready: {}", status.mechanics_ready);
+            println!("  active jobs: {}", status.active_jobs);
+            if !status.blockers.is_empty() {
+                println!("  blockers: {}", status.blockers.join(", "));
+            }
+        }
+        Output::Json => println!(
+            "{{\"schema_version\":\"arkforge.daemon-status/v1\",\"running\":true,\"supervisor_pid\":{},\"daemon_pid\":{},\"protocol\":{{\"major\":{},\"minor\":{}}},\"daemon_version\":{},\"authority\":{{\"namespace\":\"arkforge.cli\",\"pairing_epoch\":{}}},\"mechanics_ready\":{},\"active_jobs\":{},\"blockers\":{}}}",
+            status.supervisor_pid,
+            status.daemon_pid,
+            status.protocol_major,
+            status.protocol_minor,
+            json(&status.daemon_version),
+            status.epoch,
+            status.mechanics_ready,
+            status.active_jobs,
+            json_strings(&status.blockers),
+        ),
     }
 }
 
@@ -1854,6 +1932,25 @@ fn default_runtime_dir() -> Result<PathBuf, CliError> {
     ))
 }
 
+fn command_runtime_dir(globals: &Globals) -> Result<PathBuf, CliError> {
+    globals
+        .runtime_dir
+        .clone()
+        .map(Ok)
+        .unwrap_or_else(default_runtime_dir)
+}
+
+fn reject_extra(arguments: &[String], command: &str) -> Result<(), CliError> {
+    if arguments.is_empty() {
+        Ok(())
+    } else {
+        Err(CliError::invalid(format!(
+            "{command} accepts no command options; unexpected {:?}.",
+            arguments[0]
+        )))
+    }
+}
+
 fn print_devices(output: Output, devices: &[RescueDevice]) {
     match output {
         Output::Human => {
@@ -2288,6 +2385,10 @@ fn json_array<T: AsRef<str>>(values: &[T]) -> String {
     )
 }
 
+fn json_strings(values: &[String]) -> String {
+    json_array(values)
+}
+
 fn optional_json(value: Option<&str>) -> String {
     value.map(json).unwrap_or_else(|| "null".into())
 }
@@ -2411,7 +2512,7 @@ static HELP: &[HelpSpec] = &[
             ),
         ],
         examples: &[
-            "arkforge --output json device probe --device OBS-PREFLIGHT --profile org.openharmony.dayu200",
+            "arkforge --output json device probe --device OBS-PREFLIGHT --profile org.openharmony.dayu200@1.0.0",
         ],
         next: &[
             "arkforge flash assess --artifact <artifact-id> --profile <profile-id> --device <observation-id> --intent full-restore",
@@ -2446,7 +2547,7 @@ static HELP: &[HelpSpec] = &[
             ),
         ],
         examples: &[
-            "arkforge --output json device wait --profile org.openharmony.dayu200 --mode loader --timeout-ms 30000",
+            "arkforge --output json device wait --profile org.openharmony.dayu200@1.0.0 --mode loader --timeout-ms 30000",
         ],
         next: &[
             "arkforge flash assess --artifact <artifact-id> --profile <profile-id> --device <observation-id> --intent full-restore",
@@ -2651,7 +2752,7 @@ static HELP: &[HelpSpec] = &[
             ),
         ],
         examples: &[
-            "arkforge --output json flash assess --artifact <artifact-id> --profile org.openharmony.dayu200 --device OBS-PREFLIGHT --intent full-restore",
+            "arkforge --output json flash assess --artifact <artifact-id> --profile org.openharmony.dayu200@1.0.0 --device OBS-PREFLIGHT --intent full-restore",
         ],
         next: &[
             "Resolve every unknowns[] and evidence_requirements[] item, then repeat the exact assessment.",
@@ -2993,6 +3094,135 @@ static HELP: &[HelpSpec] = &[
         ],
     },
     HelpSpec {
+        command: "daemon",
+        summary: "Run and manage one paired local ArkForge runtime.",
+        usage: "arkforge daemon <run|start|stop|status> [options]",
+        effect: "Service lifecycle. The supervisor owns pairing authority; lifecycle commands do not flash a device.",
+        requires: &["arkforged installed beside the canonical arkforge executable."],
+        produces: &[
+            "Typed two-process runtime status with protocol, authority epoch, readiness, active jobs, and blockers.",
+        ],
+        options: &[],
+        examples: &["arkforge daemon start", "arkforge daemon status"],
+        next: &["arkforge device list"],
+        exits: &[
+            (0, "Requested lifecycle operation completed."),
+            (3, "An exact executable or signing binding was refused."),
+            (5, "The runtime or mechanics daemon is unavailable."),
+            (6, "The runtime is already running or has active jobs."),
+            (10, "Supervisor or local IPC failed."),
+        ],
+    },
+    HelpSpec {
+        command: "daemon run",
+        summary: "Run the CLI authority supervisor and mechanics daemon in the foreground.",
+        usage: "arkforge daemon run [--profile-file <file>]... [--hdc <absolute-path> --expect-hdc-sha256 <sha256>] [--require-release-signing]",
+        effect: "Service lifecycle. Creates owner-only local sockets and keeps both processes supervised until daemon stop is requested.",
+        requires: &[
+            "A runtime directory not owned by another live supervisor.",
+            "HDC path and digest together when managed normal-mode control is required.",
+        ],
+        produces: &[
+            "A paired foreground runtime; the pairing secret exists only in supervisor/daemon memory and crosses an inherited stdin pipe.",
+        ],
+        options: &[
+            (
+                "--profile-file <file>",
+                "Additional explicit profile; repeatable.",
+            ),
+            (
+                "--hdc <absolute-path>",
+                "Exact managed-control executable; requires its expected digest.",
+            ),
+            (
+                "--expect-hdc-sha256 <sha256>",
+                "Caller expectation for HDC bytes; requires --hdc.",
+            ),
+            (
+                "--require-release-signing",
+                "Refuse unless arkforged satisfies the release signing contract.",
+            ),
+        ],
+        examples: &["arkforge --runtime-dir /tmp/arkforge daemon run"],
+        next: &["arkforge daemon status"],
+        exits: &[
+            (0, "Runtime stopped cleanly."),
+            (2, "Options are invalid."),
+            (3, "A tool or signing binding was refused."),
+            (6, "The runtime is already running."),
+            (10, "A supervised process or local IPC failed."),
+        ],
+    },
+    HelpSpec {
+        command: "daemon start",
+        summary: "Start the same paired runtime under a background supervisor.",
+        usage: "arkforge daemon start [--profile-file <file>]... [--hdc <absolute-path> --expect-hdc-sha256 <sha256>] [--require-release-signing]",
+        effect: "Service lifecycle. Starts a background supervisor and mechanics daemon; it does not access or mutate a device.",
+        requires: &["The same exact bindings as daemon run."],
+        produces: &["arkforge.daemon-status/v1 after the public protocol handshake succeeds."],
+        options: &[
+            (
+                "--profile-file <file>",
+                "Additional explicit profile; repeatable.",
+            ),
+            (
+                "--hdc <absolute-path>",
+                "Exact managed-control executable; requires its expected digest.",
+            ),
+            (
+                "--expect-hdc-sha256 <sha256>",
+                "Caller expectation for HDC bytes; requires --hdc.",
+            ),
+            (
+                "--require-release-signing",
+                "Require the daemon release signing contract.",
+            ),
+        ],
+        examples: &["arkforge --output json daemon start"],
+        next: &["arkforge device list"],
+        exits: &[
+            (0, "Runtime is ready for commands."),
+            (2, "Options are invalid."),
+            (3, "A tool or signing binding was refused."),
+            (5, "The mechanics daemon could not start."),
+            (6, "The runtime is already running."),
+            (10, "Supervisor startup failed."),
+        ],
+    },
+    HelpSpec {
+        command: "daemon status",
+        summary: "Show protocol, process, authority, readiness, job, and blocker state.",
+        usage: "arkforge daemon status",
+        effect: "Read-only local runtime observation.",
+        requires: &["A live CLI authority supervisor."],
+        produces: &["arkforge.daemon-status/v1."],
+        options: &[],
+        examples: &["arkforge --output json daemon status"],
+        next: &["arkforge device list"],
+        exits: &[
+            (0, "Runtime status produced."),
+            (5, "No runtime is listening."),
+            (10, "Status IPC failed."),
+        ],
+    },
+    HelpSpec {
+        command: "daemon stop",
+        summary: "Stop an idle paired runtime without a force path.",
+        usage: "arkforge daemon stop",
+        effect: "Service lifecycle. Stops both processes only when no durable job is active; it never cancels a job implicitly.",
+        requires: &["A live runtime with zero active jobs."],
+        produces: &["arkforge.daemon-stop/v1."],
+        options: &[],
+        examples: &["arkforge --output json daemon stop"],
+        next: &["arkforge daemon start"],
+        exits: &[
+            (0, "Idle runtime stopped."),
+            (5, "No runtime is listening."),
+            (6, "Active jobs prevent stopping."),
+            (10, "Stop IPC failed."),
+        ],
+    },
+    HelpSpec {
         command: "signing",
         summary: "Inspect a Mach-O file against the ArkForge signing contract.",
         usage: "arkforge signing verify --file <mach-o> --mode <development|release>",
@@ -3112,6 +3342,10 @@ mod tests {
             "rescue read",
             "rescue plan",
             "rescue apply",
+            "daemon run",
+            "daemon start",
+            "daemon status",
+            "daemon stop",
             "signing verify",
         ] {
             let topic = strings(&topic.split_whitespace().collect::<Vec<_>>());
@@ -3128,7 +3362,9 @@ mod tests {
             .collect::<Vec<_>>();
         assert_eq!(
             root_children,
-            vec!["device", "artifact", "flash", "job", "rescue", "signing"]
+            vec![
+                "device", "artifact", "flash", "job", "rescue", "daemon", "signing"
+            ]
         );
         assert_eq!(
             child_specs("job")

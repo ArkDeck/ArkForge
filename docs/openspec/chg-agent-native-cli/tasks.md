@@ -41,7 +41,8 @@ Progress:
 
 ## TASK-CLI-003 — Direct CLI authority
 
-- Status: blocked
+- Status: implementing（独立 CLI crate、持久 supervisor、内存 pairing 与 runtime
+  生命周期已完成；permit loop、managed HDC 与独立 support gate 继续实施）
 - Add an authority-side crate/boundary that can mint exact StepPermit bytes;
   keep all minting symbols unreachable from `arkforged`.
 - Implement a persistent local authority supervisor, dedicated runtime pairing,
@@ -55,6 +56,17 @@ Progress:
   authority. Define command disconnect, explicit cancel, same-epoch retransmit and
   supervisor/daemon epoch-rotation behavior.
 - Acceptance: CLI-AC-08..14.
+
+Progress:
+
+- [x] canonical `arkforge` 迁入独立 `arkforge-cli` crate，daemon 源码继续由
+  architecture guard 禁止引用 authority-side minting；
+- [x] `daemon run/start/status/stop` 共用持久 supervisor；pairing secret 仅经匿名
+  stdin pipe 进入 daemon，owner-only socket 不暴露 secret，active job 禁止 stop；
+- [x] shipped profiles 默认加载，`--profile-file` 只能附加且同一 `id@version`
+  不可覆盖；CLI/IPC profile vocabulary 统一为 `id@version`；
+- [ ] durable target binding、permit loop、managed HDC、AuthoritySupportKey 与
+  restart/epoch/no-replay matrix。
 
 ## TASK-CLI-004 — Normal `flash plan/apply`
 

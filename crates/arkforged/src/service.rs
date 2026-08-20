@@ -219,7 +219,16 @@ impl Service {
                 )
                 .map_err(|error| error.to_string())?;
             }
-            profile_map.insert(profile.id.as_str().to_string(), profile);
+            let key = profile_key(&profile.id, profile.version);
+            if let Some(existing) = profile_map.get(&key) {
+                if existing != &profile {
+                    return Err(format!(
+                        "profile {key} conflicts with already loaded bytes; shipped profiles cannot be overridden"
+                    ));
+                }
+                continue;
+            }
+            profile_map.insert(key, profile);
         }
 
         let mut loaded: Vec<Box<dyn DeviceTransport>> = Vec::new();
@@ -1210,7 +1219,10 @@ impl Service {
 
     fn recovery_surface_context(&self, job_id: &str) -> Option<RecoverySurfaceContext> {
         let stored = self.stored_plan_for_job(job_id)?;
-        let profile = self.profiles.get(stored.envelope.profile.id.as_str())?;
+        let profile = self.profiles.get(&profile_key(
+            &stored.envelope.profile.id,
+            stored.envelope.profile.version,
+        ))?;
         let job = self.jobs.job(job_id)?;
         Some(RecoverySurfaceContext {
             possible: assess_possible_effects(
@@ -1301,7 +1313,10 @@ impl Service {
 
         let Some(profile) = self
             .profiles
-            .get(stored.envelope.profile.id.as_str())
+            .get(&profile_key(
+                &stored.envelope.profile.id,
+                stored.envelope.profile.version,
+            ))
             .cloned()
         else {
             return self.refuse(
@@ -1740,6 +1755,13 @@ impl Service {
             ),
         }
     }
+}
+
+fn profile_key(
+    id: &arkforge_core::ids::OpaqueId,
+    version: arkforge_core::identity::Version,
+) -> String {
+    format!("{id}@{version}")
 }
 
 /// Every blocker, in one message.

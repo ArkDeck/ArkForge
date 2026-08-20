@@ -172,7 +172,7 @@ fn the_daemon_serves_the_read_only_vertical_over_unix_sockets() {
 
     let mut payload = Vec::new();
     wire::write_string(&mut payload, 1, &artifact_id);
-    wire::write_string(&mut payload, 2, "org.openharmony.dayu200");
+    wire::write_string(&mut payload, 2, "org.openharmony.dayu200@1.0.0");
     wire::write_string(&mut payload, 3, "OBS-PREFLIGHT");
     wire::write_string(&mut payload, 4, "fullRestore");
     let response = call(&mut public, Api::MaterializePlan, payload);

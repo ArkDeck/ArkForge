@@ -382,7 +382,7 @@ fn the_read_only_vertical_runs_over_the_api() {
 
     // probe
     let mut payload = string_payload(1, &observation_id);
-    wire::write_string(&mut payload, 2, "org.openharmony.dayu200");
+    wire::write_string(&mut payload, 2, "org.openharmony.dayu200@1.0.0");
     let response = service.handle(
         SessionKind::Public,
         &request(Api::ProbeDevice, payload),
@@ -392,7 +392,7 @@ fn the_read_only_vertical_runs_over_the_api() {
 
     // materialize — assessment, because AF-V1 is hardware-gated
     let mut payload = string_payload(1, &artifact_id);
-    wire::write_string(&mut payload, 2, "org.openharmony.dayu200");
+    wire::write_string(&mut payload, 2, "org.openharmony.dayu200@1.0.0");
     wire::write_string(&mut payload, 3, &observation_id);
     complete_public_assessment_payload(&mut payload);
     let response = service.handle(
@@ -475,7 +475,7 @@ fn materialize_requires_an_inspected_artifact() {
     let mut service = service(&root);
     let artifact_id = import(&mut service);
     let mut payload = string_payload(1, &artifact_id);
-    wire::write_string(&mut payload, 2, "org.openharmony.dayu200");
+    wire::write_string(&mut payload, 2, "org.openharmony.dayu200@1.0.0");
     wire::write_string(&mut payload, 3, "OBS-PREFLIGHT");
     complete_public_assessment_payload(&mut payload);
     let response = service.handle(

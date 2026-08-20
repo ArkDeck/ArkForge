@@ -159,7 +159,7 @@ fn the_dayu600_research_vertical_runs_over_the_same_api() {
 
     let mut payload = Vec::new();
     wire::write_string(&mut payload, 1, "OBS-DAYU600-NORMAL");
-    wire::write_string(&mut payload, 2, "org.openharmony.dayu600");
+    wire::write_string(&mut payload, 2, "org.openharmony.dayu600@0.1.0");
     let response = service.handle(
         SessionKind::Public,
         &request(Api::ProbeDevice, payload),
@@ -170,7 +170,7 @@ fn the_dayu600_research_vertical_runs_over_the_same_api() {
     // materialize — an assessment, with the evidence requirements attached
     let mut payload = Vec::new();
     wire::write_string(&mut payload, 1, &artifact_id);
-    wire::write_string(&mut payload, 2, "org.openharmony.dayu600");
+    wire::write_string(&mut payload, 2, "org.openharmony.dayu600@0.1.0");
     wire::write_string(&mut payload, 3, "OBS-DAYU600-NORMAL");
     complete_public_assessment_payload(&mut payload);
     let response = service.handle(
@@ -270,7 +270,7 @@ fn a_pac_container_offered_against_the_dayu200_profile_is_refused() {
 
     let mut payload = Vec::new();
     wire::write_string(&mut payload, 1, &artifact_id);
-    wire::write_string(&mut payload, 2, "org.openharmony.dayu200");
+    wire::write_string(&mut payload, 2, "org.openharmony.dayu200@1.0.0");
     wire::write_string(&mut payload, 3, "OBS-DAYU600-NORMAL");
     complete_public_assessment_payload(&mut payload);
     let response = service.handle(
