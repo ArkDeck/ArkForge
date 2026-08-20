@@ -35,7 +35,9 @@ Progress:
   recovery guide；legacy `arkforge-cli` 已移除；
 - [x] offline artifact import/inspect/list，profile coverage 对照与 legacy
   `arkforge-inspect` removal；
-- [ ] missing watch/reconcile handlers（reconcile 仍属于 controller authority 面）.
+- [x] `device show/wait` 与 public `job watch`，包含 exact identity、resume
+  sequence、timeout 和 ambiguity refusal；
+- [ ] missing reconcile handler（仍属于 controller authority 面）.
 
 ## TASK-CLI-003 — Direct CLI authority
 

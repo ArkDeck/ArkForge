@@ -6,8 +6,8 @@
 
 use arkforge_ipc::framing::{read_frame, write_frame};
 use arkforge_ipc::messages::{
-    Assessment, ErrorBody, Hello, HelloAck, InspectArtifactResponse, JobSummary, KeyValue,
-    MaterializePlanResponse, Request, Response,
+    Assessment, ErrorBody, Hello, HelloAck, InspectArtifactResponse, JobEvent, JobSummary,
+    KeyValue, MaterializePlanResponse, Request, Response, WatchJobRequest,
 };
 use arkforge_ipc::{Api, PROTOCOL_MAJOR, PROTOCOL_MINOR, SessionKind, Status, wire};
 use std::os::unix::net::UnixStream;
@@ -226,6 +226,47 @@ impl PublicClient {
             ));
         }
         Ok(summaries.remove(0))
+    }
+
+    pub fn job_events(
+        &mut self,
+        job_id: &str,
+        after_sequence: u64,
+    ) -> Result<Vec<JobEvent>, PublicClientError> {
+        let request = WatchJobRequest {
+            job_id: job_id.to_string(),
+            from_sequence: after_sequence,
+        };
+        let payload = self.call(Api::WatchJob, request.encode())?;
+        let mut events = Vec::new();
+        let mut reader = wire::Reader::new(&payload);
+        while let Some((field, value)) = reader
+            .next_field()
+            .map_err(|error| PublicClientError::decode("Invalid job event list", error))?
+        {
+            if field == 1 {
+                events.push(
+                    JobEvent::decode(
+                        value.as_bytes().map_err(|error| {
+                            PublicClientError::decode("Invalid job event", error)
+                        })?,
+                    )
+                    .map_err(|error| PublicClientError::decode("Invalid job event", error))?,
+                );
+            }
+        }
+        if events
+            .windows(2)
+            .any(|pair| pair[0].sequence >= pair[1].sequence)
+        {
+            return Err(PublicClientError::new(
+                "IPC_RESPONSE_INVALID",
+                "watchJob returned events outside strict sequence order.",
+                10,
+                false,
+            ));
+        }
+        Ok(events)
     }
 
     pub fn recovery_guide(&mut self, job_id: &str) -> Result<RecoveryGuideView, PublicClientError> {

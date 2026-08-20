@@ -7,7 +7,9 @@
 use arkforge_artifact::cas::{CasError, CasQuota, ContentAddressedStore, ImportedObject};
 use arkforge_core::Sha256Digest;
 use arkforge_core::profile;
-use arkforge_ipc::messages::{Assessment, Effect, InspectArtifactResponse, JobSummary, KeyValue};
+use arkforge_ipc::messages::{
+    Assessment, Effect, InspectArtifactResponse, JobEvent, JobSummary, KeyValue,
+};
 use arkforged::artifact_ops::{
     ProfileCoverage, inspect_container, manifest_response, profile_coverage,
 };
@@ -299,6 +301,25 @@ fn run_device(arguments: &[String], globals: Globals) -> Result<i32, CliError> {
             print_device_observations(globals.output, &observations);
             Ok(0)
         }
+        "show" => {
+            options.ensure_only(&["device"])?;
+            let device = options.one("device")?;
+            let mut client = public_client(&globals)?;
+            let observations = client.device_list()?;
+            let observation = observations
+                .iter()
+                .find(|observation| observation.observation_id == device)
+                .ok_or_else(|| {
+                    CliError::new(
+                        "OBSERVATION_NOT_FOUND",
+                        format!("No current observation has id {device}."),
+                        5,
+                        false,
+                    )
+                })?;
+            print_device_observation(globals.output, observation);
+            Ok(0)
+        }
         "probe" => {
             options.ensure_only(&["device", "profile"])?;
             let device = options.one("device")?;
@@ -308,9 +329,78 @@ fn run_device(arguments: &[String], globals: Globals) -> Result<i32, CliError> {
             print_device_probe(globals.output, &probe);
             Ok(0)
         }
+        "wait" => {
+            options.ensure_only(&["profile", "mode", "timeout-ms"])?;
+            let profile = options.one("profile")?;
+            let mode = options.one("mode")?;
+            if mode.trim().is_empty() {
+                return Err(CliError::invalid("--mode cannot be empty."));
+            }
+            let timeout_ms = options
+                .optional_one("timeout-ms")?
+                .map(|value| parse_u64("--timeout-ms", value))
+                .transpose()?
+                .unwrap_or(30_000);
+            let probe = wait_for_device(&globals, profile, mode, timeout_ms)?;
+            print_device_wait(globals.output, profile, mode, timeout_ms, &probe);
+            Ok(0)
+        }
         other => Err(CliError::invalid(format!(
             "Unknown device command {other:?}. Run 'arkforge help device'."
         ))),
+    }
+}
+
+fn wait_for_device(
+    globals: &Globals,
+    profile: &str,
+    mode: &str,
+    timeout_ms: u64,
+) -> Result<DeviceProbeView, CliError> {
+    let started = std::time::Instant::now();
+    let mut client = public_client(globals)?;
+    loop {
+        let observations = client.device_list()?;
+        let mut matches = Vec::new();
+        for observation in observations
+            .iter()
+            .filter(|observation| observation.mode == mode)
+        {
+            match client.device_probe(&observation.observation_id, profile) {
+                Ok(probe) => matches.push(probe),
+                Err(error)
+                    if matches!(
+                        error.code.as_str(),
+                        "PROBE_REFUSED" | "OBSERVATION_NOT_FOUND"
+                    ) => {}
+                Err(error) => return Err(error.into()),
+            }
+        }
+        match matches.len() {
+            1 => return Ok(matches.remove(0)),
+            count if count > 1 => {
+                return Err(CliError::new(
+                    "AMBIGUOUS_DEVICE",
+                    format!(
+                        "{count} observations match profile {profile} in mode {mode}; an exact target cannot be selected."
+                    ),
+                    6,
+                    true,
+                ));
+            }
+            _ => {}
+        }
+        if started.elapsed().as_millis() as u64 >= timeout_ms {
+            return Err(CliError::new(
+                "DEVICE_WAIT_TIMEOUT",
+                format!(
+                    "No unique observation matched profile {profile} in mode {mode} within {timeout_ms} ms."
+                ),
+                5,
+                true,
+            ));
+        }
+        std::thread::sleep(std::time::Duration::from_millis(100));
     }
 }
 
@@ -452,10 +542,75 @@ fn run_job(arguments: &[String], globals: Globals) -> Result<i32, CliError> {
             print_job(globals.output, &job);
             Ok(0)
         }
+        "watch" => {
+            let options = Options::parse(&arguments[1..])?;
+            options.ensure_only(&["job", "after-sequence", "timeout-ms"])?;
+            let job_id = options.one("job")?;
+            let after_sequence = options
+                .optional_one("after-sequence")?
+                .map(|value| parse_u64("--after-sequence", value))
+                .transpose()?
+                .unwrap_or(0);
+            let timeout_ms = options
+                .optional_one("timeout-ms")?
+                .map(|value| parse_u64("--timeout-ms", value))
+                .transpose()?
+                .unwrap_or(30_000);
+            let (events, summary, timed_out) =
+                watch_job(&globals, job_id, after_sequence, timeout_ms)?;
+            print_job_watch(
+                globals.output,
+                after_sequence,
+                timeout_ms,
+                &events,
+                &summary,
+                timed_out,
+            );
+            Ok(0)
+        }
         "recovery" => run_job_recovery(&arguments[1..], globals),
         other => Err(CliError::invalid(format!(
             "Unknown job command {other:?}. Run 'arkforge help job'."
         ))),
+    }
+}
+
+fn watch_job(
+    globals: &Globals,
+    job_id: &str,
+    after_sequence: u64,
+    timeout_ms: u64,
+) -> Result<(Vec<JobEvent>, JobSummary, bool), CliError> {
+    let started = std::time::Instant::now();
+    let mut client = public_client(globals)?;
+    let mut summary = client.job_show(job_id)?;
+    if after_sequence > summary.last_sequence {
+        return Err(CliError::new(
+            "STALE_JOB_SEQUENCE",
+            format!(
+                "--after-sequence {after_sequence} is ahead of job {job_id} sequence {}.",
+                summary.last_sequence
+            ),
+            6,
+            true,
+        ));
+    }
+    let mut cursor = after_sequence;
+    let mut events = Vec::new();
+    loop {
+        let next = client.job_events(job_id, cursor)?;
+        if let Some(last) = next.last() {
+            cursor = last.sequence;
+        }
+        events.extend(next);
+        summary = client.job_show(job_id)?;
+        if summary.terminal && cursor >= summary.last_sequence {
+            return Ok((events, summary, false));
+        }
+        if started.elapsed().as_millis() as u64 >= timeout_ms {
+            return Ok((events, summary, true));
+        }
+        std::thread::sleep(std::time::Duration::from_millis(100));
     }
 }
 
@@ -774,6 +929,31 @@ fn print_device_observations(output: Output, observations: &[DeviceObservationVi
     }
 }
 
+fn print_device_observation(output: Output, observation: &DeviceObservationView) {
+    let next = format!(
+        "arkforge device probe --device {} --profile <profile-id>",
+        observation.observation_id
+    );
+    match output {
+        Output::Human => {
+            println!("device              {}", observation.observation_id);
+            println!("observed_at_epoch_ms {}", observation.observed_at_epoch_ms);
+            println!("mode                {}", observation.mode);
+            println!("identity_strength   {}", observation.identity_strength);
+            println!("topology_sha256     {}", observation.topology_sha256);
+            println!("descriptor_sha256   {}", observation.descriptor_sha256);
+            println!("malformed_descriptor {}", observation.malformed_descriptor);
+            print_key_values_human("protocol identity", &observation.protocol_identity);
+            println!("Next: {next}");
+        }
+        Output::Json => println!(
+            "{{\"schema_version\":\"arkforge.device-observation/v1\",\"observation\":{},\"next_commands\":[{}]}}",
+            observation_json(observation),
+            json(&next)
+        ),
+    }
+}
+
 fn print_device_probe(output: Output, probe: &DeviceProbeView) {
     let next = format!(
         "arkforge flash assess --artifact <artifact-id> --profile {} --device {} --intent full-restore",
@@ -791,6 +971,41 @@ fn print_device_probe(output: Output, probe: &DeviceProbeView) {
         }
         Output::Json => println!(
             "{{\"schema_version\":\"arkforge.device-probe/v1\",\"observation\":{},\"profile_id\":{},\"facts_sha256\":{},\"protocol_facts\":{},\"next_commands\":[{}]}}",
+            observation_json(&probe.observation),
+            json(&probe.profile_id),
+            json(&probe.facts_sha256),
+            key_values_json(&probe.protocol_facts),
+            json(&next)
+        ),
+    }
+}
+
+fn print_device_wait(
+    output: Output,
+    requested_profile: &str,
+    requested_mode: &str,
+    timeout_ms: u64,
+    probe: &DeviceProbeView,
+) {
+    let next = format!(
+        "arkforge flash assess --artifact <artifact-id> --profile {} --device {} --intent full-restore",
+        probe.profile_id, probe.observation.observation_id
+    );
+    match output {
+        Output::Human => {
+            println!("Unique matching device observed.");
+            println!("requested_profile {}", requested_profile);
+            println!("requested_mode    {}", requested_mode);
+            println!("timeout_ms        {timeout_ms}");
+            println!("device            {}", probe.observation.observation_id);
+            println!("facts_sha256      {}", probe.facts_sha256);
+            println!("Next: {next}");
+        }
+        Output::Json => println!(
+            "{{\"schema_version\":\"arkforge.device-wait/v1\",\"requested_profile\":{},\"requested_mode\":{},\"timeout_ms\":{},\"match\":{{\"observation\":{},\"profile_id\":{},\"facts_sha256\":{},\"protocol_facts\":{}}},\"next_commands\":[{}]}}",
+            json(requested_profile),
+            json(requested_mode),
+            timeout_ms,
             observation_json(&probe.observation),
             json(&probe.profile_id),
             json(&probe.facts_sha256),
@@ -1157,6 +1372,82 @@ fn print_job(output: Output, job: &JobSummary) {
     }
 }
 
+fn print_job_watch(
+    output: Output,
+    after_sequence: u64,
+    timeout_ms: u64,
+    events: &[JobEvent],
+    summary: &JobSummary,
+    timed_out: bool,
+) {
+    let cursor = events
+        .last()
+        .map(|event| event.sequence)
+        .unwrap_or(after_sequence);
+    let next = if summary.terminal {
+        Vec::new()
+    } else {
+        vec![format!(
+            "arkforge job watch --job {} --after-sequence {cursor}",
+            summary.job_id
+        )]
+    };
+    match output {
+        Output::Human => {
+            println!(
+                "Job events after sequence {after_sequence} ({} returned)",
+                events.len()
+            );
+            for event in events {
+                println!(
+                    "{}  kind={}  state={}  at_epoch_ms={}  journal_sha256={}",
+                    event.sequence,
+                    event.kind.as_str(),
+                    event.job_state,
+                    event.at_epoch_ms,
+                    hex_bytes(&event.journal_record_sha256)
+                );
+                if let Some(request) = &event.control_request {
+                    println!(
+                        "  control={} step={} request={}",
+                        request.action.as_str(),
+                        request.step_id,
+                        request.request_id
+                    );
+                }
+                if let Some(receipt) = &event.receipt {
+                    println!(
+                        "  receipt action={} disposition={} verification={}",
+                        receipt.action_id, receipt.disposition, receipt.verification_outcome
+                    );
+                }
+            }
+            println!("terminal    {}", summary.terminal);
+            println!("timed_out  {timed_out}");
+            println!("last_sequence {}", summary.last_sequence);
+            if let Some(command) = next.first() {
+                println!("Next: {command}");
+            }
+        }
+        Output::Json => {
+            let events = events
+                .iter()
+                .map(job_event_json)
+                .collect::<Vec<_>>()
+                .join(",");
+            println!(
+                "{{\"schema_version\":\"arkforge.job-watch/v1\",\"after_sequence\":{},\"timeout_ms\":{},\"timed_out\":{},\"events\":[{}],\"job\":{},\"next_commands\":{}}}",
+                after_sequence,
+                timeout_ms,
+                timed_out,
+                events,
+                job_json(summary),
+                json_array(&next)
+            );
+        }
+    }
+}
+
 fn print_recovery_guide(output: Output, guide: &RecoveryGuideView) {
     match output {
         Output::Human => {
@@ -1340,6 +1631,92 @@ fn job_json(job: &JobSummary) -> String {
         job.total_steps,
         job.last_sequence,
         optional_json((!job.stopped_reason.is_empty()).then_some(job.stopped_reason.as_str()))
+    )
+}
+
+fn job_event_json(event: &JobEvent) -> String {
+    let admission = event
+        .admission
+        .as_ref()
+        .map(|admission| {
+            format!(
+                "{{\"job_id\":{},\"plan_id\":{},\"plan_sha256\":{},\"step_id\":{},\"attempt_id\":{},\"public_step_sha256\":{},\"private_action_sha256\":{},\"effect_set_sha256\":{},\"admitted_device_facts_sha256\":{},\"observed_mode\":{},\"observed_at_epoch_ms\":{},\"snapshot_lifetime_ms\":{},\"request_id\":{},\"topology_sha256\":{},\"descriptor_sha256\":{},\"serial_sha256\":{},\"serial_evidence_kind\":{},\"protocol_identity\":{},\"identity_strength\":{},\"malformed_descriptor\":{},\"transport_session_sha256\":{}}}",
+                json(&admission.job_id),
+                json(&admission.plan_id),
+                json(&hex_bytes(&admission.plan_sha256)),
+                json(&admission.step_id),
+                json(&admission.attempt_id),
+                json(&hex_bytes(&admission.public_step_sha256)),
+                json(&hex_bytes(&admission.private_action_sha256)),
+                json(&hex_bytes(&admission.effect_set_sha256)),
+                json(&hex_bytes(&admission.admitted_device_facts_sha256)),
+                json(&admission.observed_mode),
+                admission.observed_at_epoch_ms,
+                admission.snapshot_lifetime_ms,
+                json(&admission.request_id),
+                json(&hex_bytes(&admission.topology_sha256)),
+                json(&hex_bytes(&admission.descriptor_sha256)),
+                json(&hex_bytes(&admission.serial_sha256)),
+                json(&admission.serial_evidence_kind),
+                key_values_json(&admission.protocol_identity),
+                json(&admission.identity_strength),
+                admission.malformed_descriptor,
+                json(&hex_bytes(&admission.transport_session_sha256))
+            )
+        })
+        .unwrap_or_else(|| "null".into());
+    let control = event
+        .control_request
+        .as_ref()
+        .map(|request| {
+            format!(
+                "{{\"job_id\":{},\"step_id\":{},\"request_id\":{},\"action\":{},\"permit_id\":{},\"expected_facts\":{},\"deadline_epoch_ms\":{}}}",
+                json(&request.job_id),
+                json(&request.step_id),
+                json(&request.request_id),
+                json(request.action.as_str()),
+                json(&request.permit_id),
+                key_values_json(&request.expected_facts),
+                request.deadline_epoch_ms
+            )
+        })
+        .unwrap_or_else(|| "null".into());
+    let receipt = event
+        .receipt
+        .as_ref()
+        .map(|receipt| {
+            format!(
+                "{{\"job_id\":{},\"plan_id\":{},\"step_id\":{},\"action_id\":{},\"attempt_id\":{},\"permit_id\":{},\"disposition\":{},\"evidence_sha256\":{},\"verification_outcome\":{},\"verification_strength\":{},\"verified_range_start\":{},\"verified_range_length\":{},\"typed_skip_reason\":{},\"failure_classification\":{},\"facts\":{}}}",
+                json(&receipt.job_id),
+                json(&receipt.plan_id),
+                json(&receipt.step_id),
+                json(&receipt.action_id),
+                json(&receipt.attempt_id),
+                json(&receipt.permit_id),
+                json(&receipt.disposition),
+                json(&hex_bytes(&receipt.evidence_sha256)),
+                json(&receipt.verification_outcome),
+                json(&receipt.verification_strength),
+                receipt.verified_range_start,
+                receipt.verified_range_length,
+                optional_json((!receipt.typed_skip_reason.is_empty()).then_some(receipt.typed_skip_reason.as_str())),
+                optional_json((!receipt.failure_classification.is_empty()).then_some(receipt.failure_classification.as_str())),
+                key_values_json(&receipt.facts)
+            )
+        })
+        .unwrap_or_else(|| "null".into());
+    format!(
+        "{{\"job_id\":{},\"sequence\":{},\"kind\":{},\"at_epoch_ms\":{},\"journal_record_sha256\":{},\"job_state\":{},\"admission\":{},\"control_request\":{},\"receipt\":{},\"facts\":{}}}",
+        json(&event.job_id),
+        event.sequence,
+        json(event.kind.as_str()),
+        event.at_epoch_ms,
+        json(&hex_bytes(&event.journal_record_sha256)),
+        json(&event.job_state),
+        admission,
+        control,
+        receipt,
+        key_values_json(&event.facts)
     )
 }
 
@@ -1736,10 +2113,12 @@ fn remediation(code: &str) -> Option<&'static str> {
             Some("arkforge help artifact inspect --format json")
         }
         "OBSERVATION_NOT_FOUND" => Some("arkforge device list"),
+        "DEVICE_WAIT_TIMEOUT" | "AMBIGUOUS_DEVICE" => Some("arkforge device list"),
         "PROFILE_NOT_FOUND" | "NO_PROVIDER_FOR_PROFILE" => {
             Some("arkforge help device probe --format json")
         }
         "UNKNOWN_JOB" => Some("arkforge job list"),
+        "STALE_JOB_SEQUENCE" => Some("arkforge job show --job <job-id>"),
         "DEVICE_NOT_FOUND" | "NATIVE_USB_REFUSED" => Some("arkforge rescue list"),
         "PLAN_EXPIRED" | "DEVICE_CHANGED" | "NATIVE_BUILD_CHANGED" | "PROFILE_CHANGED" => {
             Some("arkforge rescue inspect --device <device-id>")
@@ -1951,8 +2330,8 @@ static HELP: &[HelpSpec] = &[
     },
     HelpSpec {
         command: "device",
-        summary: "Discover and probe exact device observations through the public runtime.",
-        usage: "arkforge device <list|probe> [options]",
+        summary: "Discover, show, probe, and wait for exact device observations.",
+        usage: "arkforge device <list|show|probe|wait> [options]",
         effect: "Read-only. Device commands cannot select a target, materialize authority, or mutate a device.",
         requires: &["A running ArkForge runtime for the selected --runtime-dir."],
         produces: &["Current observations or provider-specific probe evidence."],
@@ -1986,6 +2365,28 @@ static HELP: &[HelpSpec] = &[
             (0, "Observation list produced, including an empty list."),
             (3, "Discovery was refused."),
             (5, "The runtime is not available."),
+            (10, "Discovery or IPC failed."),
+        ],
+    },
+    HelpSpec {
+        command: "device show",
+        summary: "Show complete identity evidence for one exact current observation.",
+        usage: "arkforge device show --device <observation-id>",
+        effect: "Read-only discovery followed by exact-id selection. It does not persist a target binding or mutate a device.",
+        requires: &["One exact observation id returned by the current runtime."],
+        produces: &[
+            "arkforge.device-observation/v1 with mode, time, topology/descriptor digests, identity strength, and protocol identity.",
+        ],
+        options: &[(
+            "--device <observation-id>",
+            "Exact current observation; required.",
+        )],
+        examples: &["arkforge --output json device show --device OBS-PREFLIGHT"],
+        next: &["arkforge device probe --device <observation-id> --profile <profile-id>"],
+        exits: &[
+            (0, "Exact observation produced."),
+            (2, "The observation id is missing."),
+            (5, "The runtime or observation was not found."),
             (10, "Discovery or IPC failed."),
         ],
     },
@@ -2024,6 +2425,45 @@ static HELP: &[HelpSpec] = &[
                 "The runtime, observation, profile, or provider was not found.",
             ),
             (10, "Probe or IPC failed."),
+        ],
+    },
+    HelpSpec {
+        command: "device wait",
+        summary: "Wait for exactly one observation matching an explicit profile and mode.",
+        usage: "arkforge device wait --profile <profile-id> --mode <mode> [--timeout-ms <u64>]",
+        effect: "Repeated read-only discovery and probing. It never chooses the first match; multiple matches are a typed ambiguity refusal.",
+        requires: &["A loaded profile id and an explicit expected mode."],
+        produces: &["arkforge.device-wait/v1 with the unique probed observation and facts digest."],
+        options: &[
+            (
+                "--profile <profile-id>",
+                "Explicit loaded profile; required.",
+            ),
+            ("--mode <mode>", "Exact declared device mode; required."),
+            (
+                "--timeout-ms <u64>",
+                "Bounded wait; optional, default 30000.",
+            ),
+        ],
+        examples: &[
+            "arkforge --output json device wait --profile org.openharmony.dayu200 --mode loader --timeout-ms 30000",
+        ],
+        next: &[
+            "arkforge flash assess --artifact <artifact-id> --profile <profile-id> --device <observation-id> --intent full-restore",
+        ],
+        exits: &[
+            (0, "Exactly one matching probed observation was produced."),
+            (2, "Profile, mode, or timeout is invalid."),
+            (3, "A matching provider probe was refused."),
+            (
+                5,
+                "The runtime was unavailable or the bounded wait expired.",
+            ),
+            (
+                6,
+                "More than one observation matched; no target was selected.",
+            ),
+            (10, "Discovery, probe, or IPC failed."),
         ],
     },
     HelpSpec {
@@ -2236,7 +2676,7 @@ static HELP: &[HelpSpec] = &[
     HelpSpec {
         command: "job",
         summary: "Read durable job state and no-replay recovery guidance.",
-        usage: "arkforge job <list|show|recovery> [options]",
+        usage: "arkforge job <list|show|watch|recovery> [options]",
         effect: "Read-only public-socket queries. These commands cannot cancel, reconcile, replay, or authorize a job.",
         requires: &["A running ArkForge runtime."],
         produces: &["Durable point-in-time job status or typed recovery guidance."],
@@ -2287,6 +2727,42 @@ static HELP: &[HelpSpec] = &[
             (2, "The job id is missing."),
             (5, "The runtime or job was not found."),
             (10, "Job query or IPC failed."),
+        ],
+    },
+    HelpSpec {
+        command: "job watch",
+        summary: "Read ordered job events after a resume sequence until terminal state or timeout.",
+        usage: "arkforge job watch --job <job-id> [--after-sequence <u64>] [--timeout-ms <u64>]",
+        effect: "Read-only polling of durable events and point-in-time status. Timeout ends only this observation; it never cancels or changes the job.",
+        requires: &[
+            "One exact job id and a resume sequence no greater than the durable last_sequence.",
+        ],
+        produces: &[
+            "arkforge.job-watch/v1 with strictly ordered typed events, terminal/timed-out status, and an exact resume command.",
+        ],
+        options: &[
+            ("--job <job-id>", "Exact durable job id; required."),
+            (
+                "--after-sequence <u64>",
+                "Return events strictly after this cursor; optional, default 0.",
+            ),
+            (
+                "--timeout-ms <u64>",
+                "Bounded observation; optional, default 30000.",
+            ),
+        ],
+        examples: &[
+            "arkforge --output json job watch --job <job-id> --after-sequence 0 --timeout-ms 30000",
+        ],
+        next: &[
+            "If non-terminal, repeat next_commands[0]; stopping the watch never cancels the job.",
+        ],
+        exits: &[
+            (0, "Terminal state or bounded observation result produced."),
+            (2, "Job id, sequence, or timeout is invalid."),
+            (5, "The runtime or job was not found."),
+            (6, "The supplied resume sequence is ahead of durable state."),
+            (10, "Event decoding or IPC failed."),
         ],
     },
     HelpSpec {
@@ -2619,7 +3095,9 @@ mod tests {
     fn help_tree_has_every_implemented_leaf_and_agent_fields() {
         for topic in [
             "device list",
+            "device show",
             "device probe",
+            "device wait",
             "artifact import",
             "artifact inspect",
             "artifact list",
@@ -2627,6 +3105,7 @@ mod tests {
             "flash assess",
             "job list",
             "job show",
+            "job watch",
             "job recovery guide",
             "rescue list",
             "rescue inspect",
@@ -2656,7 +3135,7 @@ mod tests {
                 .iter()
                 .map(|spec| spec.command)
                 .collect::<Vec<_>>(),
-            vec!["job list", "job show", "job recovery"]
+            vec!["job list", "job show", "job watch", "job recovery"]
         );
         assert_eq!(child_specs("job recovery")[0].command, "job recovery guide");
         assert_eq!(child_specs("signing")[0].command, "signing verify");
@@ -2678,6 +3157,23 @@ mod tests {
     #[test]
     fn json_escaping_covers_agent_visible_control_characters() {
         assert_eq!(json("a\n\"b\\c\t"), "\"a\\n\\\"b\\\\c\\t\"");
+    }
+
+    #[test]
+    fn job_event_json_keeps_sequence_kind_and_typed_children() {
+        let event = JobEvent {
+            job_id: "JOB-1".into(),
+            sequence: 7,
+            job_state: "running".into(),
+            ..JobEvent::default()
+        };
+        let rendered = job_event_json(&event);
+        assert!(rendered.contains("\"job_id\":\"JOB-1\""));
+        assert!(rendered.contains("\"sequence\":7"));
+        assert!(rendered.contains("\"kind\":\"stateChanged\""));
+        assert!(rendered.contains("\"admission\":null"));
+        assert!(rendered.contains("\"control_request\":null"));
+        assert!(rendered.contains("\"receipt\":null"));
     }
 
     fn strings(values: &[&str]) -> Vec<String> {

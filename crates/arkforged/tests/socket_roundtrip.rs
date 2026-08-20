@@ -206,6 +206,14 @@ fn the_daemon_serves_the_read_only_vertical_over_unix_sockets() {
     assert!(device_list.contains("\"schema_version\":\"arkforge.device-list/v1\""));
     assert!(device_list.contains("OBS-PREFLIGHT"));
 
+    let device_show = run_cli(&daemon, &["device", "show", "--device", "OBS-PREFLIGHT"]);
+    assert!(device_show.status.success());
+    assert!(
+        String::from_utf8(device_show.stdout)
+            .unwrap()
+            .contains("\"schema_version\":\"arkforge.device-observation/v1\"")
+    );
+
     let probe = run_cli(
         &daemon,
         &[
@@ -222,6 +230,26 @@ fn the_daemon_serves_the_read_only_vertical_over_unix_sockets() {
         String::from_utf8(probe.stdout)
             .unwrap()
             .contains("\"schema_version\":\"arkforge.device-probe/v1\"")
+    );
+
+    let waited = run_cli(
+        &daemon,
+        &[
+            "device",
+            "wait",
+            "--profile",
+            "org.openharmony.dayu200",
+            "--mode",
+            "hdc-normal",
+            "--timeout-ms",
+            "0",
+        ],
+    );
+    assert_eq!(waited.status.code(), Some(6), "{waited:?}");
+    assert!(
+        String::from_utf8(waited.stderr)
+            .unwrap()
+            .contains("\"code\":\"AMBIGUOUS_DEVICE\"")
     );
 
     let artifact = run_cli(&daemon, &["artifact", "show", "--artifact", &artifact_id]);
