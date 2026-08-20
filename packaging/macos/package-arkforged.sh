@@ -46,7 +46,7 @@ trap cleanup EXIT
 
 # 1. build --------------------------------------------------------------------
 cargo build --manifest-path "$repo_root/Cargo.toml" --release --offline \
-  -p arkforged --bin arkforged --bin arkforge-signing
+  -p arkforged --bin arkforged --bin arkforge
 release_bin="$repo_root/target/release"
 
 staging_root="$(mktemp -d "${TMPDIR:-/tmp}/arkforge-package.XXXXXX")"
@@ -93,7 +93,8 @@ for component in arkforged; do
     echo "the contract is an empty dictionary (AD-007)" >&2
     exit 65
   fi
-  "$release_bin/arkforge-signing" "$stage/$component" --release
+  "$release_bin/arkforge" signing verify \
+    --file "$stage/$component" --mode release
 done
 
 # 5. receipt ------------------------------------------------------------------

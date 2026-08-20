@@ -151,7 +151,7 @@ daemon 启动不是做这件事的地方。公证与 staple 由 packager 验一�
   -> 由内向外逐个签名，各带自己的空 entitlements
   -> codesign --verify --strict 独立回读
   -> codesign -d --entitlements 独立回读
-  -> 仓内 reader 二次判定(arkforge-signing --release)
+  -> 仓内 reader 二次判定(arkforge signing verify --file <file> --mode release)
   -> 已签名字节的摘要写入 receipt
 ~~~
 

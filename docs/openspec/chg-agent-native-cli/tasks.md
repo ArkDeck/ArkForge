@@ -16,13 +16,24 @@
 
 ## TASK-CLI-002 — Consolidate current read-only commands
 
-- Status: blocked
+- Status: implementing
 - Move public-socket discover/inspect/assess/job queries behind the new handlers.
 - Move offline import/inspect and signing verification behind the new handlers.
 - Add missing read APIs: probe, watch, reconcile and recovery guide.
-- Delete old binary entry points after their behavior is available under `arkforge`;
-  ArkForge is unreleased, so no wrappers or deprecated syntax are retained.
+- Migrate in closed verticals: canonical handler, human/JSON help, tests, packaging
+  callers, then delete that old binary in the same commit. The first vertical is
+  `signing verify`, followed by public-socket queries, then artifact import/inspect.
+- ArkForge is unreleased, so no wrappers, deprecated syntax or dual command names
+  are retained.
 - Acceptance: CLI-AC-05..07.
+
+Progress:
+
+- [x] `signing verify`: canonical human/JSON handler, package-script caller,
+  legacy binary removal;
+- [ ] public-socket device/artifact/job queries;
+- [ ] artifact import/inspect and legacy inspector removal;
+- [ ] missing probe/watch/reconcile/recovery query handlers.
 
 ## TASK-CLI-003 — Direct CLI authority
 
@@ -91,6 +102,7 @@ negative-path acceptance is recorded.
 
 ## Old binary removal
 
-Delete `arkforge-cli`, `arkforge-inspect` and `arkforge-signing` in the same change
-that lands their canonical `arkforge` handlers. There is no release compatibility
-gate because ArkForge has not shipped.
+Delete each of `arkforge-cli`, `arkforge-inspect` and `arkforge-signing` in the
+same vertical that lands all of that binary's canonical `arkforge` handlers and
+updates its in-repository callers. There is no release compatibility gate because
+ArkForge has not shipped.

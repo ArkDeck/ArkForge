@@ -1,10 +1,12 @@
 //! Canonical ArkForge command frontend.
 //!
-//! The first implemented command family is explicit native RockUSB rescue.
-//! It deliberately does not connect to the normal-flash authority runtime.
+//! Explicit native rescue and read-only host diagnostics land here before the
+//! normal-flash authority surface. No canonical command is a compatibility
+//! wrapper around an older binary.
 
 use arkforge_core::Sha256Digest;
 use arkforged::dispatch::executable_digest;
+use arkforged::packaging::{self, ContractMode, SignedCode};
 use arkforged::rescue::{
     NativeRescueBackend, RescueApplyResult, RescueDevice, RescueError, RescueInspection,
     RescueManager, RescuePlanSummary, RescueReadReceipt, now_epoch_ms,
@@ -47,13 +49,22 @@ struct CliError {
 }
 
 impl CliError {
-    fn invalid(message: impl Into<String>) -> Self {
+    fn new(
+        code: &'static str,
+        message: impl Into<String>,
+        exit_code: i32,
+        retryable: bool,
+    ) -> Self {
         Self {
-            code: "INVALID_ARGUMENT",
+            code,
             message: message.into(),
-            exit_code: 2,
-            retryable: false,
+            exit_code,
+            retryable,
         }
+    }
+
+    fn invalid(message: impl Into<String>) -> Self {
+        Self::new("INVALID_ARGUMENT", message, 2, false)
     }
 }
 
@@ -125,13 +136,13 @@ fn run(arguments: &[String]) -> Result<i32, CliError> {
         print_help(help_spec(&topic)?, globals.output);
         return Ok(0);
     }
-    if command[0] != "rescue" {
-        return Err(CliError::invalid(format!(
-            "Unknown command {:?}. Run 'arkforge help' for the command tree.",
-            command[0]
-        )));
+    match command[0].as_str() {
+        "rescue" => run_rescue(&command[1..], globals),
+        "signing" => run_signing(&command[1..], globals.output),
+        other => Err(CliError::invalid(format!(
+            "Unknown command {other:?}. Run 'arkforge help' for the command tree."
+        ))),
     }
-    run_rescue(&command[1..], globals)
 }
 
 fn parse_globals(arguments: &[String]) -> Result<(Globals, Vec<String>), CliError> {
@@ -211,6 +222,42 @@ fn run_help(arguments: &[String], global_output: Output) -> Result<i32, CliError
     }
     print_help(help_spec(&topic)?, output);
     Ok(0)
+}
+
+fn run_signing(arguments: &[String], output: Output) -> Result<i32, CliError> {
+    let Some(subcommand) = arguments.first() else {
+        print_help(help_spec(&["signing".into()])?, output);
+        return Ok(0);
+    };
+    if subcommand != "verify" {
+        return Err(CliError::invalid(format!(
+            "Unknown signing command {subcommand:?}. Run 'arkforge help signing'."
+        )));
+    }
+
+    let options = Options::parse(&arguments[1..])?;
+    options.ensure_only(&["file", "mode"])?;
+    let file = Path::new(options.one("file")?);
+    let (mode, mode_name) = match options.one("mode")? {
+        "development" => (ContractMode::Development, "development"),
+        "release" => (ContractMode::Release, "release"),
+        value => {
+            return Err(CliError::invalid(format!(
+                "--mode accepts 'development' or 'release', not {value:?}."
+            )));
+        }
+    };
+    let code = packaging::read_file(file).map_err(|error| {
+        CliError::new(
+            "SIGNING_INPUT_REFUSED",
+            format!("Unable to inspect {}: {error}", file.display()),
+            3,
+            false,
+        )
+    })?;
+    let violations = code.violations(mode);
+    print_signing(output, file, mode_name, &code, &violations);
+    Ok(if violations.is_empty() { 0 } else { 3 })
 }
 
 fn run_rescue(arguments: &[String], globals: Globals) -> Result<i32, CliError> {
@@ -301,6 +348,69 @@ fn run_rescue(arguments: &[String], globals: Globals) -> Result<i32, CliError> {
         other => Err(CliError::invalid(format!(
             "Unknown rescue command {other:?}. Run 'arkforge help rescue'."
         ))),
+    }
+}
+
+fn print_signing(
+    output: Output,
+    file: &Path,
+    mode: &str,
+    code: &SignedCode,
+    violations: &[packaging::ContractViolation],
+) {
+    let compliant = violations.is_empty();
+    match output {
+        Output::Human => {
+            println!(
+                "Signing contract: {}",
+                if compliant { "compliant" } else { "refused" }
+            );
+            println!("file     {}", file.display());
+            println!("mode     {mode}");
+            println!("facts    {}", code.summary());
+            if compliant {
+                println!("No further signing action is required.");
+            } else {
+                println!("violations");
+                for violation in violations {
+                    println!("  {}: {violation}", violation.code());
+                }
+                println!(
+                    "Next: Correct every listed signing fact, then run this exact verification again."
+                );
+            }
+        }
+        Output::Json => {
+            let violations_json = violations
+                .iter()
+                .map(|violation| {
+                    format!(
+                        "{{\"code\":{},\"message\":{}}}",
+                        json(violation.code()),
+                        json(&violation.to_string())
+                    )
+                })
+                .collect::<Vec<_>>()
+                .join(",");
+            let next = if compliant {
+                Vec::new()
+            } else {
+                vec![format!(
+                    "arkforge signing verify --file {} --mode {mode}",
+                    file.display()
+                )]
+            };
+            println!(
+                "{{\"schema_version\":\"arkforge.signing-verification/v1\",\"file\":{},\"mode\":{},\"compliant\":{},\"facts\":{},\"violations\":[{}],\"contract\":{},\"next_commands\":{}}}",
+                json(&file.display().to_string()),
+                json(mode),
+                compliant,
+                json(&code.summary()),
+                violations_json,
+                json(packaging::CONTRACT_DOC),
+                json_array(&next)
+            );
+        }
     }
 }
 
@@ -662,7 +772,8 @@ fn print_error(output: Output, error: &CliError) {
 
 fn remediation(code: &str) -> Option<&'static str> {
     match code {
-        "INVALID_ARGUMENT" => Some("arkforge help rescue --format json"),
+        "INVALID_ARGUMENT" => Some("arkforge help --format json"),
+        "SIGNING_INPUT_REFUSED" => Some("arkforge help signing verify --format json"),
         "DEVICE_NOT_FOUND" | "NATIVE_USB_REFUSED" => Some("arkforge rescue list"),
         "PLAN_EXPIRED" | "DEVICE_CHANGED" | "NATIVE_BUILD_CHANGED" | "PROFILE_CHANGED" => {
             Some("arkforge rescue inspect --device <device-id>")
@@ -687,6 +798,7 @@ fn help_spec(topic: &[String]) -> Result<&'static HelpSpec, CliError> {
 }
 
 fn print_help(spec: &HelpSpec, output: Output) {
+    let children = child_specs(spec.command);
     match output {
         Output::Human => {
             println!("{}", spec.summary);
@@ -694,6 +806,17 @@ fn print_help(spec: &HelpSpec, output: Output) {
             println!("Usage:\n  {}", spec.usage);
             println!();
             println!("Effect:\n  {}", spec.effect);
+            if !children.is_empty() {
+                println!();
+                println!("Commands:");
+                for child in &children {
+                    let name = child
+                        .command
+                        .rsplit_once(' ')
+                        .map_or(child.command, |(_, name)| name);
+                    println!("  {name:<16} {}", child.summary);
+                }
+            }
             section("Requires", spec.requires);
             section("Produces", spec.produces);
             if !spec.options.is_empty() {
@@ -730,13 +853,25 @@ fn print_help(spec: &HelpSpec, output: Output) {
                 .map(|(code, meaning)| format!("{{\"code\":{code},\"meaning\":{}}}", json(meaning)))
                 .collect::<Vec<_>>()
                 .join(",");
+            let subcommands = children
+                .iter()
+                .map(|child| {
+                    format!(
+                        "{{\"command\":{},\"summary\":{}}}",
+                        json(child.command),
+                        json(child.summary)
+                    )
+                })
+                .collect::<Vec<_>>()
+                .join(",");
             println!(
-                "{{\"schema_version\":{},\"command\":{},\"summary\":{},\"usage\":{},\"effect\":{},\"requires\":{},\"produces\":{},\"options\":[{}],\"examples\":{},\"next_commands\":{},\"exits\":[{}]}}",
+                "{{\"schema_version\":{},\"command\":{},\"summary\":{},\"usage\":{},\"effect\":{},\"subcommands\":[{}],\"requires\":{},\"produces\":{},\"options\":[{}],\"examples\":{},\"next_commands\":{},\"exits\":[{}]}}",
                 json(HELP_SCHEMA),
                 json(spec.command),
                 json(spec.summary),
                 json(spec.usage),
                 json(spec.effect),
+                subcommands,
                 json_array(spec.requires),
                 json_array(spec.produces),
                 options,
@@ -746,6 +881,24 @@ fn print_help(spec: &HelpSpec, output: Output) {
             );
         }
     }
+}
+
+fn child_specs(parent: &str) -> Vec<&'static HelpSpec> {
+    HELP.iter()
+        .filter(|candidate| {
+            if candidate.command.is_empty() {
+                return false;
+            }
+            if parent.is_empty() {
+                return !candidate.command.contains(' ');
+            }
+            candidate
+                .command
+                .strip_prefix(parent)
+                .and_then(|rest| rest.strip_prefix(' '))
+                .is_some_and(|rest| !rest.is_empty() && !rest.contains(' '))
+        })
+        .collect()
 }
 
 fn section(title: &str, values: &[&str]) {
@@ -1017,6 +1170,71 @@ static HELP: &[HelpSpec] = &[
             (10, "Local durable state failed."),
         ],
     },
+    HelpSpec {
+        command: "signing",
+        summary: "Inspect a Mach-O file against the ArkForge signing contract.",
+        usage: "arkforge signing verify --file <mach-o> --mode <development|release>",
+        effect: "Read-only and offline. It reads one local Mach-O file and does not modify the file, host configuration, or a device.",
+        requires: &["A thin or universal Mach-O file no larger than 64 MiB."],
+        produces: &[
+            "Observed signing facts and a typed contract verdict for every architecture slice.",
+        ],
+        options: &[],
+        examples: &[
+            "arkforge signing verify --file ./arkforged --mode development",
+            "arkforge help signing verify --format json",
+        ],
+        next: &["arkforge signing verify --file <mach-o> --mode <development|release>"],
+        exits: &[
+            (
+                0,
+                "Signing verification completed and the file is compliant.",
+            ),
+            (2, "Command or option is invalid."),
+            (
+                3,
+                "The file cannot be inspected or violates the selected contract.",
+            ),
+        ],
+    },
+    HelpSpec {
+        command: "signing verify",
+        summary: "Verify every Mach-O slice against one explicit signing mode.",
+        usage: "arkforge signing verify --file <mach-o> --mode <development|release>",
+        effect: "Read-only and offline. Development mode permits clean local ad-hoc signatures; release mode requires the complete shipping contract. Both modes require an empty entitlement dictionary.",
+        requires: &[
+            "An explicit file path.",
+            "An explicit development or release mode; no mode is inferred.",
+        ],
+        produces: &[
+            "arkforge.signing-verification/v1 with compliant, signing facts, stable violation codes, remediation, and the contract reference.",
+        ],
+        options: &[
+            (
+                "--file <mach-o>",
+                "Thin or universal Mach-O file; required.",
+            ),
+            (
+                "--mode <development|release>",
+                "Signing contract strength; required.",
+            ),
+        ],
+        examples: &[
+            "arkforge --output json signing verify --file ./target/debug/arkforged --mode development",
+            "arkforge signing verify --file ./target/release/arkforged --mode release",
+        ],
+        next: &[
+            "If compliant is false, correct every violations[] item and repeat the exact command.",
+        ],
+        exits: &[
+            (0, "The file meets the selected contract."),
+            (2, "Required inputs are missing or invalid."),
+            (
+                3,
+                "The file is unreadable as Mach-O or violates the selected contract.",
+            ),
+        ],
+    },
 ];
 
 #[cfg(test)]
@@ -1052,13 +1270,14 @@ mod tests {
     }
 
     #[test]
-    fn help_tree_has_every_rescue_leaf_and_agent_fields() {
+    fn help_tree_has_every_implemented_leaf_and_agent_fields() {
         for topic in [
             "rescue list",
             "rescue inspect",
             "rescue read",
             "rescue plan",
             "rescue apply",
+            "signing verify",
         ] {
             let topic = strings(&topic.split_whitespace().collect::<Vec<_>>());
             let help = help_spec(&topic).unwrap();
@@ -1068,7 +1287,25 @@ mod tests {
             assert!(!help.next.is_empty());
             assert!(!help.exits.is_empty());
         }
+        let root_children = child_specs("")
+            .iter()
+            .map(|spec| spec.command)
+            .collect::<Vec<_>>();
+        assert_eq!(root_children, vec!["rescue", "signing"]);
+        assert_eq!(child_specs("signing")[0].command, "signing verify");
         assert_eq!(HELP_SCHEMA, "arkforge.command-help/v1");
+    }
+
+    #[test]
+    fn signing_requires_explicit_file_and_mode_options() {
+        let valid =
+            Options::parse(&strings(&["--file", "./arkforged", "--mode", "release"])).unwrap();
+        valid.ensure_only(&["file", "mode"]).unwrap();
+        assert_eq!(valid.one("file").unwrap(), "./arkforged");
+        assert_eq!(valid.one("mode").unwrap(), "release");
+
+        let implicit_release = Options::parse(&strings(&["--release", "true"])).unwrap();
+        assert!(implicit_release.ensure_only(&["file", "mode"]).is_err());
     }
 
     #[test]

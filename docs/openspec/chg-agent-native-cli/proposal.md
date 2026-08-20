@@ -166,13 +166,16 @@ ArkForge 尚未发布，不保留兼容 wrapper、旧参数或弃用周期。已
 | `arkforge-signing <file> [--release]` | `arkforge signing verify --file <file> --mode <mode>` |
 | `arkforged ...` | 保留内部 mechanics daemon；用户入口为 `arkforge daemon ...` |
 
+迁移按完整纵向进行：先落 canonical handler、human/JSON help、测试和仓内调用方，
+再在同一提交删除对应旧二进制。第一批为 `signing verify`，之后依次迁移 public
+socket 查询与 artifact import/inspect；不会同时保留新旧命令名。
+
 ## Out of scope
 
 - 不开放 DAYU600 execute；其 18 条证据门仍然全部适用。
 - 不把 rescue 收据标记成 normal flash、full restore 或 ProductionVerified。
 - 不提供远程 daemon、TCP listener 或多租户 controller。
 - 不提供任意 USB control transfer、任意扇区写入或任意子进程 argv。
-- 不在本 change 中删除旧二进制；只建立迁移和删除门。
 
 ## Safety and rollback
 

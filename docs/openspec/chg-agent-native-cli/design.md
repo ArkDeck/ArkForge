@@ -598,23 +598,33 @@ The stable error `code` is authoritative; exit status is the coarse shell class.
 ## 10. Unreleased command replacement
 
 There are no compatibility wrappers. Current in-repository entry points are replaced
-directly by the canonical command handlers:
+directly by canonical command handlers, one complete behavior vertical at a time:
 
 | Old form | Canonical form | Notes |
 |---|---|---|
-| `arkforge-cli --socket S discover` | `arkforge --runtime-dir D device list` | Wrapper derives `D` only when `S` is exactly `D/public.sock` |
+| `arkforge-cli --socket S discover` | `arkforge --runtime-dir D device list` | The canonical client derives `D/public.sock`; it never accepts an arbitrary socket capability |
 | `... inspect A` | `artifact show --artifact A` | Same imported artifact semantics |
 | `... assess A P O` | `flash assess --artifact A --profile P --device O --intent full-restore` | Old implicit intent becomes explicit in canonical help |
 | `... jobs` | `job list` | No semantic change |
 | `... job J` | `job show --job J` | No semantic change |
 | `... recovery-guide J` | `job recovery guide --job J` | No semantic change |
-| `arkforge-inspect --archive F --store D --profile P` | `artifact import --file F`, then `artifact inspect --artifact A --profile P` | Wrapper may compose both and returns both IDs |
+| `arkforge-inspect --archive F --store D --profile P` | `artifact import --file F`, then `artifact inspect --artifact A --profile P` | Two explicit resource operations replace the old composed path |
 | `arkforge-signing F` | `signing verify --file F --mode development` | Mode is explicit in canonical help |
 | `arkforge-signing F --release` | `signing verify --file F --mode release` | No semantic change |
 
 The new CLI also exposes currently unwrapped IPC capabilities: device probe,
 watch/cancel/reconcile, superseding recovery planning, controller materialization
 and start execution.
+
+Replacement order is intentionally dependency-shaped:
+
+1. `signing verify` proves the shared command/help/error contract without a daemon;
+2. public-socket device/artifact/job queries establish the runtime client;
+3. artifact import/inspect establishes host-write resource creation;
+4. only then may CLI authority and normal `flash plan/apply` build on those surfaces.
+
+Each vertical removes its old binary and updates every repository caller in the same
+commit. A canonical command is never shipped beside a compatibility alias.
 
 ## 11. Help and parser verification
 
