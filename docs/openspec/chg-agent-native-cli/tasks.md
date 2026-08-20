@@ -5,8 +5,8 @@
 
 ## TASK-CLI-001 — One typed command tree
 
-- Status: implementing (`rescue` subtree and its human/JSON help are implemented;
-  the normal-flash/read-only tree remains pending)
+- Status: implementing (`rescue`、`signing` 和 public read-only 查询子树及其
+  human/JSON help 已实现；其余 normal-flash 树仍待实施)
 - Build a new `arkforge` binary from one typed command definition.
 - Generate parser metadata, human help, JSON help and shell completions from the
   same tree.
@@ -31,9 +31,10 @@ Progress:
 
 - [x] `signing verify`: canonical human/JSON handler, package-script caller,
   legacy binary removal;
-- [ ] public-socket device/artifact/job queries;
+- [x] public-socket device/artifact/flash-assessment/job queries，含 probe 与
+  recovery guide；legacy `arkforge-cli` 已移除；
 - [ ] artifact import/inspect and legacy inspector removal;
-- [ ] missing probe/watch/reconcile/recovery query handlers.
+- [ ] missing watch/reconcile handlers（reconcile 仍属于 controller authority 面）.
 
 ## TASK-CLI-003 — Direct CLI authority
 

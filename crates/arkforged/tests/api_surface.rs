@@ -71,14 +71,8 @@ fn string_payload(field: u32, value: &str) -> Vec<u8> {
     out
 }
 
-fn complete_materialize_payload(payload: &mut Vec<u8>, toolchain_id: &str) {
+fn complete_public_assessment_payload(payload: &mut Vec<u8>) {
     wire::write_string(payload, 4, "fullRestore");
-    wire::write_string(payload, 5, toolchain_id);
-    wire::write_string(payload, 6, "test-authority");
-    wire::write_string(payload, 7, "BINDING-1");
-    wire::write_uint64(payload, 8, 1);
-    wire::write_bytes(payload, 9, sha256(b"stable-device").as_bytes());
-    wire::write_string(payload, 10, "primaryFlash");
 }
 
 /// Imports the fixture archive and returns its artifact id.
@@ -400,7 +394,7 @@ fn the_read_only_vertical_runs_over_the_api() {
     let mut payload = string_payload(1, &artifact_id);
     wire::write_string(&mut payload, 2, "org.openharmony.dayu200");
     wire::write_string(&mut payload, 3, &observation_id);
-    complete_materialize_payload(&mut payload, "arkforged-native-rockusb");
+    complete_public_assessment_payload(&mut payload);
     let response = service.handle(
         SessionKind::Public,
         &request(Api::MaterializePlan, payload),
@@ -414,7 +408,8 @@ fn the_read_only_vertical_runs_over_the_api() {
                 assessment
                     .unknowns
                     .iter()
-                    .any(|unknown| unknown.value.contains("AF-V2"))
+                    .any(|unknown| unknown.key == "RK-M02"
+                        && unknown.value.contains("not published"))
             );
             // The assessment still shows the full data impact, so an operator
             // can see that userdata would be overwritten.
@@ -482,7 +477,7 @@ fn materialize_requires_an_inspected_artifact() {
     let mut payload = string_payload(1, &artifact_id);
     wire::write_string(&mut payload, 2, "org.openharmony.dayu200");
     wire::write_string(&mut payload, 3, "OBS-PREFLIGHT");
-    complete_materialize_payload(&mut payload, "arkforged-native-rockusb");
+    complete_public_assessment_payload(&mut payload);
     let response = service.handle(
         SessionKind::Public,
         &request(Api::MaterializePlan, payload),

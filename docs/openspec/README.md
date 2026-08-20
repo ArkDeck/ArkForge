@@ -10,7 +10,7 @@
 | 目录 | 内容 | 状态 |
 |---|---|---|
 | `chg-arkdeck-arkforge-authority/` | ArkDeck 保留 authority，把 Rockchip lowering 交给 ArkForge | **已复制进 ArkDeck**（2026-08-15），落在 `openspec/changes/chg-2026-059-arkdeck-arkforge-authority/`；四份稿件 2026-08-19 起带 **NRU-004 超越声明**——fixed-tool 执行面已退役，照抄启动契约会失败 |
-| `chg-agent-native-cli/` | ArkForge 统一 Agent-native CLI、独立 CLI authority 与原生 RockUSB 救援面 | **implementing**（2026-08-20）；原生救援 software vertical 与 canonical `signing verify` 已落地，不依赖 rkdeveloptool；public query consolidation 与 normal direct-flash authority 继续按任务分阶段落地 |
+| `chg-agent-native-cli/` | ArkForge 统一 Agent-native CLI、独立 CLI authority 与原生 RockUSB 救援面 | **implementing**（2026-08-20）；原生救援、canonical `signing verify` 与 public query consolidation 已落地，旧 `arkforge-cli` 已移除且不依赖 rkdeveloptool；artifact import/inspect 与 normal direct-flash authority 继续按任务分阶段落地 |
 
 > 本目录留的是**草稿正本**；ArkDeck 里那份是按它的约定改过的落地版。
 > 两处若要再改，改 ArkDeck 那份——它已经进了那个仓的治理流程，

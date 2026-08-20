@@ -30,22 +30,29 @@ cargo clippy --workspace --all-targets --all-features -- -D warnings
 cargo test --workspace --all-targets
 ```
 
-跑起 daemon 与只读 CLI：
+跑起 daemon 与统一只读 CLI：
 
 ```bash
 cargo run -p arkforged --bin arkforged -- --runtime-dir /tmp/arkforge --profile profiles/dayu200.yaml --transcript transcripts/dayu200-gj4-ecamp-96effff15.yaml
 ```
 
 ```bash
-cargo run -p arkforged --bin arkforge-cli -- --socket /tmp/arkforge/public.sock discover
+cargo run -p arkforged --bin arkforge -- --runtime-dir /tmp/arkforge device list
 ```
 
 守护进程状态在重启后仍可查询：
 
 ```bash
-cargo run -p arkforged --bin arkforge-cli -- --socket /tmp/arkforge/public.sock jobs
-cargo run -p arkforged --bin arkforge-cli -- --socket /tmp/arkforge/public.sock job <job-id>
-cargo run -p arkforged --bin arkforge-cli -- --socket /tmp/arkforge/public.sock recovery-guide <job-id>
+cargo run -p arkforged --bin arkforge -- --runtime-dir /tmp/arkforge job list
+cargo run -p arkforged --bin arkforge -- --runtime-dir /tmp/arkforge job show --job <job-id>
+cargo run -p arkforged --bin arkforge -- --runtime-dir /tmp/arkforge job recovery guide --job <job-id>
+```
+
+Agent 可直接读取机器帮助，不需要推断 socket 或历史命令名：
+
+```bash
+cargo run -p arkforged --bin arkforge -- help --format json
+cargo run -p arkforged --bin arkforge -- help flash assess --format json
 ```
 
 ## 文档

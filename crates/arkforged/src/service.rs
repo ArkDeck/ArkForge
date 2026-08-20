@@ -586,7 +586,7 @@ impl Service {
             Api::InspectArtifact => self.inspect_artifact(request),
             Api::DiscoverDevices => self.discover_devices(request),
             Api::ProbeDevice => self.probe_device(request),
-            Api::MaterializePlan => self.materialize_plan(request),
+            Api::MaterializePlan => self.materialize_plan(session, request),
             Api::StartExecution => self.start_execution(request),
             Api::WatchJob => self.watch_job(request),
             Api::GetJob => self.get_job(request),
@@ -1416,7 +1416,7 @@ impl Service {
             .cloned()
     }
 
-    fn materialize_plan(&mut self, request: &Request) -> Response {
+    fn materialize_plan(&mut self, session: SessionKind, request: &Request) -> Response {
         let artifact_id = first_string_field(&request.payload, 1).unwrap_or_default();
         let profile_id = first_string_field(&request.payload, 2).unwrap_or_default();
         let observation_id = first_string_field(&request.payload, 3).unwrap_or_default();
@@ -1436,13 +1436,21 @@ impl Service {
                 "materializePlan currently requires intent=fullRestore",
             );
         }
-        let Some(execution_purpose) = ExecutionPurpose::parse(&execution_purpose) else {
-            return self.refuse(
-                request,
-                Status::InvalidArgument,
-                "UNSUPPORTED_EXECUTION_PURPOSE",
-                "materializePlan requires executionPurpose=primaryFlash or supersedingRecovery",
-            );
+        let execution_purpose = if session == SessionKind::Public {
+            // The public face is semantic and assessment-only. Authority
+            // binding and execution purpose are controller concerns and must
+            // not be invented by a diagnostic client.
+            ExecutionPurpose::PrimaryFlash
+        } else {
+            let Some(execution_purpose) = ExecutionPurpose::parse(&execution_purpose) else {
+                return self.refuse(
+                    request,
+                    Status::InvalidArgument,
+                    "UNSUPPORTED_EXECUTION_PURPOSE",
+                    "materializePlan requires executionPurpose=primaryFlash or supersedingRecovery",
+                );
+            };
+            execution_purpose
         };
 
         let Some(manifest) = self.manifests.get(&artifact_id).cloned() else {
@@ -1480,7 +1488,7 @@ impl Service {
         } else {
             self.bound_rockchip_toolchain_identity()
         };
-        if requested_toolchain_id != toolchain.id.as_str() {
+        if session == SessionKind::Controller && requested_toolchain_id != toolchain.id.as_str() {
             return self.refuse(
                 request,
                 Status::Refused,
@@ -1491,39 +1499,6 @@ impl Service {
                 ),
             );
         }
-        let Ok(authority_namespace) = AuthorityNamespace::new(authority_namespace) else {
-            return self.refuse(
-                request,
-                Status::InvalidArgument,
-                "BAD_AUTHORITY_NAMESPACE",
-                "authorityNamespace is not a usable identifier",
-            );
-        };
-        let Ok(binding_id) = OpaqueId::new(binding_id) else {
-            return self.refuse(
-                request,
-                Status::InvalidArgument,
-                "BAD_BINDING_ID",
-                "bindingId is not a usable identifier",
-            );
-        };
-        let Some(stable_identity_digest) = digest_from_bytes(&stable_identity) else {
-            return self.refuse(
-                request,
-                Status::InvalidArgument,
-                "BAD_STABLE_IDENTITY_DIGEST",
-                "stableIdentitySha256 must contain exactly 32 bytes",
-            );
-        };
-        if binding_revision == 0 {
-            return self.refuse(
-                request,
-                Status::InvalidArgument,
-                "BAD_BINDING_REVISION",
-                "bindingRevision must be greater than zero",
-            );
-        }
-
         let Some(provider) = provider_for(&profile, &self.rockchip, &self.unisoc) else {
             return self.refuse(
                 request,
@@ -1567,6 +1542,55 @@ impl Service {
             );
         };
 
+        let authority_binding = if session == SessionKind::Public {
+            AuthorityBindingRef {
+                authority_namespace: AuthorityNamespace::new("public-assessment")
+                    .expect("literal identifier"),
+                binding_id: OpaqueId::new("PUBLIC-ASSESSMENT").expect("literal identifier"),
+                binding_revision: 1,
+                stable_identity_digest: probe.facts_digest,
+            }
+        } else {
+            let Ok(authority_namespace) = AuthorityNamespace::new(authority_namespace) else {
+                return self.refuse(
+                    request,
+                    Status::InvalidArgument,
+                    "BAD_AUTHORITY_NAMESPACE",
+                    "authorityNamespace is not a usable identifier",
+                );
+            };
+            let Ok(binding_id) = OpaqueId::new(binding_id) else {
+                return self.refuse(
+                    request,
+                    Status::InvalidArgument,
+                    "BAD_BINDING_ID",
+                    "bindingId is not a usable identifier",
+                );
+            };
+            let Some(stable_identity_digest) = digest_from_bytes(&stable_identity) else {
+                return self.refuse(
+                    request,
+                    Status::InvalidArgument,
+                    "BAD_STABLE_IDENTITY_DIGEST",
+                    "stableIdentitySha256 must contain exactly 32 bytes",
+                );
+            };
+            if binding_revision == 0 {
+                return self.refuse(
+                    request,
+                    Status::InvalidArgument,
+                    "BAD_BINDING_REVISION",
+                    "bindingRevision must be greater than zero",
+                );
+            }
+            AuthorityBindingRef {
+                authority_namespace,
+                binding_id,
+                binding_revision,
+                stable_identity_digest,
+            }
+        };
+
         let materialize = MaterializeRequest {
             plan_id: PlanId::new(format!("PLAN-{}", &artifact_id[..12]))
                 .unwrap_or_else(|_| PlanId::new("PLAN-UNNAMED").expect("literal")),
@@ -1577,12 +1601,7 @@ impl Service {
                 .unwrap_or_else(|_| OpaqueId::new("ART-UNNAMED").expect("literal identifier")),
             profile: &profile,
             probe: &probe,
-            authority_binding: AuthorityBindingRef {
-                authority_namespace,
-                binding_id,
-                binding_revision,
-                stable_identity_digest,
-            },
+            authority_binding,
             // The native implementation this daemon actually bound, not a
             // source-revision constant. A plan materialized for one build and
             // started on another is refused because the executable digest is
@@ -1595,18 +1614,40 @@ impl Service {
             plan_lifetime_ms: 3_600_000,
         };
 
-        let materialized =
-            match provider.materialize_with_private_plan(&materialize, &self.maturity) {
-                Ok(materialized) => materialized,
-                Err(error) => {
-                    return self.refuse(
-                        request,
-                        Status::Refused,
-                        "MATERIALIZATION_REFUSED",
-                        &error.to_string(),
-                    );
-                }
-            };
+        // Public callers always see a non-executable assessment, even when
+        // this daemon has published execution maturity for the exact
+        // combination. An empty registry preserves the full projected steps
+        // and effects while making executability structurally unavailable.
+        let public_maturity = MaturityRegistry::new();
+        let maturity = if session == SessionKind::Public {
+            &public_maturity
+        } else {
+            &self.maturity
+        };
+        let materialized = match provider.materialize_with_private_plan(&materialize, maturity) {
+            Ok(materialized) => materialized,
+            Err(error) => {
+                return self.refuse(
+                    request,
+                    Status::Refused,
+                    "MATERIALIZATION_REFUSED",
+                    &error.to_string(),
+                );
+            }
+        };
+        if session == SessionKind::Public
+            && matches!(
+                materialized.materialization,
+                PlanMaterialization::Executable(_)
+            )
+        {
+            return self.refuse(
+                request,
+                Status::Internal,
+                "PUBLIC_PLAN_FORBIDDEN",
+                "the public session cannot receive or store an executable plan",
+            );
+        }
         // Store the executable plan and its private half together. A job can
         // only ever be started against a plan the daemon materialized itself,
         // which is what keeps `startExecution` free of anything a caller could

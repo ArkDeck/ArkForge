@@ -15,7 +15,7 @@ platforms: [macos]
 ## Why
 
 ArkForge 已经拥有 DAYU200 的原生完整刷写 mechanics，但当前可执行入口只属于
-ArkDeck authority。仓内三个面向操作者的二进制也没有形成一套产品语言：
+ArkDeck authority。统一改造开始前，仓内三个面向操作者的二进制没有形成一套产品语言：
 
 - `arkforge-cli` 只连 public socket，只有只读查询；
 - `arkforge-inspect` 直接处理本地归档；
@@ -169,6 +169,9 @@ ArkForge 尚未发布，不保留兼容 wrapper、旧参数或弃用周期。已
 迁移按完整纵向进行：先落 canonical handler、human/JSON help、测试和仓内调用方，
 再在同一提交删除对应旧二进制。第一批为 `signing verify`，之后依次迁移 public
 socket 查询与 artifact import/inspect；不会同时保留新旧命令名。
+
+当前 `signing verify` 与 public-socket 查询纵向已落地，`arkforge-signing`、
+`arkforge-cli` 已删除；artifact import/offline inspect 纵向仍待实施。
 
 ## Out of scope
 

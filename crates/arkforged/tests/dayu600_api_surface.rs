@@ -5,7 +5,6 @@
 //! DAYU600 path through the identical request surface and assert that the
 //! answers are the honest ones.
 
-use arkforge_core::digest::sha256;
 use arkforge_core::profile;
 use arkforge_ipc::messages::{
     ErrorBody, InspectArtifactResponse, MaterializePlanResponse, Request, Response,
@@ -67,14 +66,8 @@ fn decode_error(response: &Response) -> Option<ErrorBody> {
     ErrorBody::decode(&response.payload).ok()
 }
 
-fn complete_materialize_payload(payload: &mut Vec<u8>, toolchain_id: &str) {
+fn complete_public_assessment_payload(payload: &mut Vec<u8>) {
     wire::write_string(payload, 4, "fullRestore");
-    wire::write_string(payload, 5, toolchain_id);
-    wire::write_string(payload, 6, "test-authority");
-    wire::write_string(payload, 7, "BINDING-600");
-    wire::write_uint64(payload, 8, 1);
-    wire::write_bytes(payload, 9, sha256(b"stable-device-600").as_bytes());
-    wire::write_string(payload, 10, "primaryFlash");
 }
 
 /// A container shaped like a firmware package. Not a PAC file.
@@ -179,7 +172,7 @@ fn the_dayu600_research_vertical_runs_over_the_same_api() {
     wire::write_string(&mut payload, 1, &artifact_id);
     wire::write_string(&mut payload, 2, "org.openharmony.dayu600");
     wire::write_string(&mut payload, 3, "OBS-DAYU600-NORMAL");
-    complete_materialize_payload(&mut payload, "research-inspect");
+    complete_public_assessment_payload(&mut payload);
     let response = service.handle(
         SessionKind::Public,
         &request(Api::MaterializePlan, payload),
@@ -279,7 +272,7 @@ fn a_pac_container_offered_against_the_dayu200_profile_is_refused() {
     wire::write_string(&mut payload, 1, &artifact_id);
     wire::write_string(&mut payload, 2, "org.openharmony.dayu200");
     wire::write_string(&mut payload, 3, "OBS-DAYU600-NORMAL");
-    complete_materialize_payload(&mut payload, "arkforged-native-rockusb");
+    complete_public_assessment_payload(&mut payload);
     let response = service.handle(
         SessionKind::Public,
         &request(Api::MaterializePlan, payload),

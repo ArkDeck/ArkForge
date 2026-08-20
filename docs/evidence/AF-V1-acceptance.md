@@ -193,7 +193,8 @@ fsync + rename)，输入为等长确定性合成流，不是厂商归档本身�
   `rebootDevice` 的下限落在 `Mutating`，因此 Rockchip provider 的模式变更步骤按
   `Mutating` 声明(over-declare 只会收紧准入)。
 - `proto/arkforge.proto`：IPC 正本 schema，含演进规则(未知 field 跳过 / 未知 enum 硬失败)。
-- `arkforge-cli`：只读诊断，连 public socket，结构上无法 import 或 execute。
+- `arkforge`：统一只读诊断命令树，从 `--runtime-dir` 派生 public socket，结构上
+  无法 import 或 execute；旧 `arkforge-cli` 已在未发布阶段直接移除。
 
 ## 4. 已知边界(不在 AF-V1 范围，明写以免被误读为已完成)
 

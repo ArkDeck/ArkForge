@@ -273,6 +273,9 @@ message MaterializePlanRequest {
   string profile_id = 2;
   string observation_id = 3;
   string intent = 4;
+  // Fields 5-10 are controller-only execution bindings. A public session
+  // omits them; the daemon derives an assessment-only context, uses an
+  // unavailable maturity view, and can return only `assessment`.
   string toolchain_id = 5;
   // The authority binding is sealed into the plan. An executable plan may not
   // be materialized as "unbound" and acquire a target only when a permit

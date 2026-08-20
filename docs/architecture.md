@@ -1486,7 +1486,8 @@ SupersedingRecoveryPlan 必须：
 - arkforged：mechanics、Provider、Transport、operational journal；
 - parser worker：短生命周期、最低权限；
 - ArkDeck App：不直接访问 USB/vendor tool；
-- arkforge-cli：v1 默认仅 inspect/probe/assessment/diagnostics。
+- arkforge：统一 Agent-native 前门；public runtime 上的
+  device/artifact/assessment/job 查询只读，rescue 使用独立计划与收据域。
 
 ### 15.2 IPC
 
