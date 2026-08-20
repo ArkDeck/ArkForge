@@ -1,12 +1,11 @@
 # Tasks — CHG-2026-CLI
 
-> Status: implementing by explicit maintainer request. Native rescue is the first
-> vertical; normal direct-flash authority follows separately.
+> Status: software-complete by explicit maintainer request. Real-device campaign,
+> maintainer review and production support publication remain external evidence gates.
 
 ## TASK-CLI-001 — One typed command tree
 
-- Status: implementing (`rescue`、`signing` 和 public read-only 查询子树及其
-  human/JSON help 已实现；其余 normal-flash 树仍待实施)
+- Status: software-complete
 - Build a new `arkforge` binary from one typed command definition.
 - Generate parser metadata, human help, JSON help and shell completions from the
   same tree.
@@ -14,9 +13,17 @@
 - Add parse-only tests for every example and every invalid option relation.
 - Acceptance: CLI-AC-01..04.
 
+Progress:
+
+- [x] semantic artifact/profile/observation/job/plan/token validators reject paths,
+  placeholders and ellipses before I/O;
+- [x] all success documents use `schema`; JSON/JSONL redact host/control secrets and
+  provide actionable `next_commands` without echoing runtime paths;
+- [x] macOS packaging contains only the signed sibling `arkforge`/`arkforged` pair.
+
 ## TASK-CLI-002 — Consolidate current read-only commands
 
-- Status: implementing
+- Status: complete
 - Move public-socket discover/inspect/assess/job queries behind the new handlers.
 - Move offline import/inspect and signing verification behind the new handlers.
 - Add missing read APIs: probe, watch, reconcile and recovery guide.
@@ -37,12 +44,11 @@ Progress:
   `arkforge-inspect` removal；
 - [x] `device show/wait` 与 public `job watch`，包含 exact identity、resume
   sequence、timeout 和 ambiguity refusal；
-- [ ] missing reconcile handler（仍属于 controller authority 面）.
+- [x] controller `job reconcile` 与 distinct superseding recovery plan handler。
 
 ## TASK-CLI-003 — Direct CLI authority
 
-- Status: implementing（独立 CLI crate、持久 supervisor、内存 pairing 与 runtime
-  生命周期已完成；permit loop、managed HDC 与独立 support gate 继续实施）
+- Status: software-complete; real-device campaign pending
 - Add an authority-side crate/boundary that can mint exact StepPermit bytes;
   keep all minting symbols unreachable from `arkforged`.
 - Implement a persistent local authority supervisor, dedicated runtime pairing,
@@ -65,18 +71,29 @@ Progress:
   stdin pipe 进入 daemon，owner-only socket 不暴露 secret，active job 禁止 stop；
 - [x] shipped profiles 默认加载，`--profile-file` 只能附加且同一 `id@version`
   不可覆盖；CLI/IPC profile vocabulary 统一为 `id@version`；
-- [ ] durable target binding、permit loop、managed HDC、AuthoritySupportKey 与
-  restart/epoch/no-replay matrix。
+- [x] durable target binding、permit loop、typed managed HDC、独立
+  `AuthoritySupportKey` 双门、authority liveness pipe、持久单调 epoch、同 epoch
+  exact retransmit 与 restart/no-replay matrix；apply 会重新核对当前 CLI/HDC/campaign
+  support key 与 daemon toolchain，任一重建或替换都必须重新 plan。
 
 ## TASK-CLI-004 — Normal `flash plan/apply`
 
-- Status: blocked
+- Status: software-complete; real-device execution evidence pending
 - Implement exact artifact/profile/device/intent materialization.
 - Derive acknowledgement tokens from the sealed effect set.
 - Require plan digest and the exact token set at apply.
 - Render ordered events and terminal outcome in human, JSON and JSONL modes.
 - Preserve no-replay classification across CLI/daemon death.
 - Acceptance: CLI-AC-15..19.
+
+Progress:
+
+- [x] exact artifact/profile/device/intent materialization and unique sealed plan IDs;
+- [x] exact plan digest plus complete acknowledgement-set equality before job creation;
+- [x] persistent supervisor permit/control loop, `--detach`, safe-boundary cancel,
+  reconcile/recovery, human/JSON and ordered metadata→event→terminal JSONL;
+- [x] daemon restart rehydrates pre-intent work as cancelled-safe and unsettled
+  intent as outcome-unknown with no replay; supervisor restart rotates the durable epoch.
 
 ## TASK-CLI-005 — Separate native RockUSB rescue domain
 
@@ -93,7 +110,7 @@ Progress:
 
 ## TASK-CLI-006 — Hardware campaign and release gate
 
-- Status: blocked
+- Status: externally blocked; software campaign entry and evidence contracts complete
 - Run the full CLI-authority DAYU200 campaign: normal-to-Loader, nine writes,
   read-domain-aware verification, reset, exact HDC postflight and receipts.
 - Run a controlled native rescue campaign for each closed action.
@@ -101,6 +118,15 @@ Progress:
 - Publish only the exact CLI authority support key against the already exact
   mechanics maturity key after maintainer review. Rescue remains separately classified.
 - Acceptance: CLI-AC-28..32.
+
+Progress:
+
+- [x] `daemon run/start --hardware-campaign <id>` opens only named mechanics and
+  CLI-authority `HardwareCampaign` states and seals both into the plan;
+- [x] campaign state is reported by status/help and never populates the production registry;
+- [x] production `AuthoritySupportKey` registry intentionally remains empty;
+- [ ] execute CLI-AC-28..31 on controlled DAYU200 hardware and attach evidence;
+- [ ] maintainer review and exact-key production publication for CLI-AC-32.
 
 ## Delivery order
 

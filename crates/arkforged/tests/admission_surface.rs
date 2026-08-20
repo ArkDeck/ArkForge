@@ -25,7 +25,10 @@ use arkforge_core::ids::{
 use arkforge_core::plan::{ExecutionPurpose, FlashPlanEnvelope, PlanMaterialization};
 use arkforge_core::profile::{self, DeviceProfile};
 use arkforge_core::projection::StoredProviderPlan;
-use arkforge_core::{AuthorityBindingRef, AuthorityNamespace, Sha256Digest};
+use arkforge_core::{
+    AuthorityBindingRef, AuthorityNamespace, AuthoritySupportBinding, AuthoritySupportState,
+    Sha256Digest,
+};
 use arkforge_engine::JobState;
 use arkforge_ipc::messages::{
     JobEventKind, KeyValue, ManagedControlAction, SubmitManagedControlReceiptRequest,
@@ -36,7 +39,9 @@ use arkforge_provider::{
 };
 use arkforge_transport::replay::TranscriptTransport;
 use arkforge_transport::{DeviceObservation, DeviceTransport, TypedDiscoveryFilter, transcript};
-use arkforged::jobs::{AdmissionFacts, JobRegistry, JobStop, canonical_facts_digest};
+use arkforged::jobs::{
+    AdmissionFacts, CancellationDisposition, JobRegistry, JobStop, canonical_facts_digest,
+};
 use std::path::PathBuf;
 
 const PROFILE_SOURCE: &str = include_str!("../../../profiles/dayu200.yaml");
@@ -135,6 +140,10 @@ fn plan_fixture() -> Fixture {
         profile: &profile,
         probe: &probe,
         authority_binding: binding(),
+        authority_support: AuthoritySupportBinding {
+            key_digest: sha256(b"test authority support"),
+            state: AuthoritySupportState::ProductionVerified,
+        },
         toolchain,
         host_platform: host,
         driver_facts_digest: driver,
@@ -1020,10 +1029,10 @@ fn an_unanswered_control_request_expires_into_outcome_unknown() {
     );
 }
 
-/// architecture.md 13.4. Once an intent is durable there is an unresolved
-/// effect, and a job with one may not report `cancelledSafe`.
+/// architecture.md 13.4. Once an intent is durable, cancellation queues until
+/// the action reports a settled boundary; it does not interrupt the action.
 #[test]
-fn a_job_with_a_durable_intent_cannot_be_cancelled_safely() {
+fn a_job_with_a_durable_intent_queues_cancellation() {
     let root = TempRoot::new("cancel");
     let fixture = plan_fixture();
     let mut registry = JobRegistry::new(&root.0);
@@ -1050,10 +1059,11 @@ fn a_job_with_a_durable_intent_cannot_be_cancelled_safely() {
         .unwrap();
     assert_eq!(
         early.cancel(&early_id, NOW + 1).unwrap(),
-        JobState::CancelledSafe
+        CancellationDisposition::CancelledSafe
     );
 
-    // After one, it is not.
+    // Once a managed action owns the intent, cancellation queues at its safe
+    // receipt boundary instead of pretending the action can be interrupted.
     let snapshot = pending_snapshot(&mut registry, &fixture, &job_id, NOW);
     let (permit, tag, epoch) = mint(&snapshot, "PERMIT-1", NOW + 60_000);
     registry
@@ -1070,8 +1080,120 @@ fn a_job_with_a_durable_intent_cannot_be_cancelled_safely() {
             NOW + 10,
         )
         .unwrap();
-    let error = registry.cancel(&job_id, NOW + 20).unwrap_err();
-    assert_eq!(error.code(), "CANCEL_NOT_SAFE");
+    assert_eq!(
+        registry.cancel(&job_id, NOW + 20).unwrap(),
+        CancellationDisposition::QueuedAtSafeBoundary
+    );
+}
+
+#[test]
+fn cancellation_during_a_non_interruptible_dispatch_waits_for_its_checkpoint() {
+    let root = TempRoot::new("cancel-safe-boundary");
+    let fixture = plan_fixture();
+    let mut registry = JobRegistry::new(&root.0);
+    let job_id = registry
+        .start(
+            &fixture.envelope,
+            &fixture.private_plan,
+            ControllerSessionId::new("SESSION-1").unwrap(),
+            &admission_facts(&fixture, "hdc-normal", NOW),
+            NOW,
+        )
+        .unwrap();
+
+    let enter = pending_snapshot(&mut registry, &fixture, &job_id, NOW);
+    let (permit, tag, epoch) = mint(&enter, "PERMIT-ENTER", NOW + 60_000);
+    registry
+        .submit_permit(
+            &job_id,
+            &enter.request_id,
+            Some((permit, tag, epoch)),
+            "",
+            &secret(),
+            &fixture.envelope,
+            &fixture.private_plan,
+            &fixture.profile,
+            Some(current_facts(&enter, NOW + 1)),
+            NOW + 1,
+        )
+        .unwrap();
+    let control = registry
+        .job(&job_id)
+        .unwrap()
+        .events_from(0)
+        .into_iter()
+        .rev()
+        .find_map(|event| event.control_request)
+        .unwrap();
+    let control_facts = vec![KeyValue {
+        key: "mode".into(),
+        value: "Loader".into(),
+    }];
+    registry
+        .submit_control_receipt(
+            &SubmitManagedControlReceiptRequest {
+                job_id: job_id.clone(),
+                request_id: control.request_id,
+                action: control.action,
+                accepted: true,
+                evidence_sha256: canonical_facts_digest(&control_facts).as_bytes().to_vec(),
+                facts: control_facts,
+                failure_reason: String::new(),
+            },
+            &fixture.envelope,
+            &fixture.private_plan,
+            NOW + 2,
+        )
+        .unwrap();
+
+    let write = pending_snapshot(&mut registry, &fixture, &job_id, NOW + 3);
+    let (permit, tag, epoch) = mint(&write, "PERMIT-WRITE", NOW + 60_000);
+    registry
+        .submit_permit(
+            &job_id,
+            &write.request_id,
+            Some((permit, tag, epoch)),
+            "",
+            &secret(),
+            &fixture.envelope,
+            &fixture.private_plan,
+            &fixture.profile,
+            Some(current_facts(&write, NOW + 4)),
+            NOW + 4,
+        )
+        .unwrap();
+    let work = registry
+        .take_pending_dispatch()
+        .expect("write is in flight");
+    assert_eq!(
+        registry.cancel(&job_id, NOW + 5).unwrap(),
+        CancellationDisposition::QueuedAtSafeBoundary
+    );
+    assert_ne!(
+        registry.job(&job_id).unwrap().state(),
+        JobState::CancelledSafe
+    );
+
+    registry
+        .complete_dispatch(
+            &job_id,
+            arkforged::jobs::DispatchOutcome {
+                disposition: arkforge_core::outcome::ActionDisposition::SemanticSuccess,
+                facts: Vec::new(),
+                evidence_digest: sha256(b"settled write"),
+                verification: None,
+            },
+            &fixture.envelope,
+            &fixture.private_plan,
+            NOW + 6,
+        )
+        .unwrap();
+    assert_eq!(
+        registry.job(&job_id).unwrap().state(),
+        JobState::CancelledSafe
+    );
+    assert!(registry.take_pending_dispatch().is_none());
+    assert_eq!(work.job_id, job_id);
 }
 
 /// The permit crosses the wire as the exact bytes the authority signed, and is

@@ -41,7 +41,7 @@ fn usage() -> String {
         "  --runtime-dir      where the content store and sockets live\n",
         "  --profile          a DeviceProfile YAML document (repeatable)\n",
         "  --transcript       a golden transcript to serve as a replay transport (repeatable)\n",
-        "  --pair-from-stdin  read the authority's pairing secret from stdin and close it\n",
+        "  --pair-from-stdin  read the authority secret from stdin and monitor its liveness\n",
         "  RockUSB dispatch is always the native implementation compiled into arkforged.\n",
         "  --hardware-campaign <id>  run as a named DAYU200 acceptance campaign\n",
         "                     Without it a DAYU200 combination is hardwareGated and only\n",
@@ -165,6 +165,7 @@ fn run(arguments: &[String]) -> Result<(), String> {
     }
     if let Some(epoch) = pairing_epoch {
         service.pair_authority(arkforged::jobs::read_pairing_secret_from_stdin(epoch)?);
+        spawn_authority_liveness_monitor();
     }
     let service = Arc::new(Mutex::new(service));
 
@@ -228,6 +229,15 @@ fn run(arguments: &[String]) -> Result<(), String> {
     let _ = handle.join();
     drop(dispatch_handle);
     Ok(())
+}
+
+fn spawn_authority_liveness_monitor() {
+    std::thread::spawn(|| {
+        let mut trailing = [0_u8; 1];
+        let _ = std::io::stdin().read(&mut trailing);
+        eprintln!("arkforged: paired authority liveness pipe closed; refusing orphaned service");
+        std::process::exit(11);
+    });
 }
 
 fn spawn_dispatcher<P>(

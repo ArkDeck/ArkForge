@@ -459,6 +459,12 @@ pub struct ExecutablePlan {
     pub data_impact: Vec<KeyValue>,
     pub expires_at_epoch_ms: u64,
     pub execution_purpose: String,
+    pub mechanics_maturity_key_sha256: String,
+    pub mechanics_maturity_state: String,
+    pub mechanics_maturity_campaign: String,
+    pub authority_support_key_sha256: String,
+    pub authority_support_state: String,
+    pub authority_support_campaign: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
@@ -470,6 +476,10 @@ pub struct Assessment {
     pub availability: String,
     pub unavailable_reason: String,
     pub data_impact: Vec<KeyValue>,
+    pub mechanics_maturity_key_sha256: String,
+    pub mechanics_maturity_state: String,
+    pub authority_support_key_sha256: String,
+    pub authority_support_state: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
@@ -582,6 +592,12 @@ impl ExecutablePlan {
         }
         wire::write_uint64(&mut out, 9, self.expires_at_epoch_ms);
         wire::write_string(&mut out, 10, &self.execution_purpose);
+        wire::write_string(&mut out, 11, &self.mechanics_maturity_key_sha256);
+        wire::write_string(&mut out, 12, &self.mechanics_maturity_state);
+        wire::write_string(&mut out, 13, &self.mechanics_maturity_campaign);
+        wire::write_string(&mut out, 14, &self.authority_support_key_sha256);
+        wire::write_string(&mut out, 15, &self.authority_support_state);
+        wire::write_string(&mut out, 16, &self.authority_support_campaign);
         out
     }
 
@@ -606,6 +622,12 @@ impl ExecutablePlan {
                 8 => plan.data_impact.push(KeyValue::decode(value.as_bytes()?)?),
                 9 => plan.expires_at_epoch_ms = value.as_u64()?,
                 10 => plan.execution_purpose = value.as_str(10)?.to_string(),
+                11 => plan.mechanics_maturity_key_sha256 = value.as_str(11)?.to_string(),
+                12 => plan.mechanics_maturity_state = value.as_str(12)?.to_string(),
+                13 => plan.mechanics_maturity_campaign = value.as_str(13)?.to_string(),
+                14 => plan.authority_support_key_sha256 = value.as_str(14)?.to_string(),
+                15 => plan.authority_support_state = value.as_str(15)?.to_string(),
+                16 => plan.authority_support_campaign = value.as_str(16)?.to_string(),
                 _ => {}
             }
         }
@@ -633,6 +655,10 @@ impl Assessment {
         for impact in &self.data_impact {
             wire::write_message(&mut out, 7, &impact.encode());
         }
+        wire::write_string(&mut out, 8, &self.mechanics_maturity_key_sha256);
+        wire::write_string(&mut out, 9, &self.mechanics_maturity_state);
+        wire::write_string(&mut out, 10, &self.authority_support_key_sha256);
+        wire::write_string(&mut out, 11, &self.authority_support_state);
         out
     }
 
@@ -658,6 +684,10 @@ impl Assessment {
                 7 => assessment
                     .data_impact
                     .push(KeyValue::decode(value.as_bytes()?)?),
+                8 => assessment.mechanics_maturity_key_sha256 = value.as_str(8)?.to_string(),
+                9 => assessment.mechanics_maturity_state = value.as_str(9)?.to_string(),
+                10 => assessment.authority_support_key_sha256 = value.as_str(10)?.to_string(),
+                11 => assessment.authority_support_state = value.as_str(11)?.to_string(),
                 _ => {}
             }
         }

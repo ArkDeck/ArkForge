@@ -16,6 +16,12 @@
 > 下文 vendor 条款**只是历史实测**，不描述任何当前可调用的实现（见文末
 > 「NRU-004 后续状态」与「复核条件已触发」两节）。
 
+> **CHG-2026-CLI 修订（2026-08-20）**：独立 CLI authority 使发布形状成为同目录的
+> `arkforge` + `arkforged` 签名对；CLI 只按自身路径解析 sibling daemon。默认签名
+> namespace 改为 `com.arkforge`，ArkDeck 后续可在自己的发布流程中只嵌入 daemon，
+> 但不得据此把 ArkDeck runtime 与 CLI authority 合并。该修订只增加 canonical CLI，
+> 不恢复任何 vendor tool、PATH lookup 或外部 RockUSB 执行端口。
+
 ## 背景
 
 architecture.md 21.2 把这件事列为 Stage B 的**显式设计工作项，不是打包杂务**，
@@ -142,7 +148,8 @@ daemon 启动不是做这件事的地方。公证与 staple 由 packager 验一�
 
 ### 7. 打包顺序 fail-closed
 
-`packaging/macos/package-arkforged.sh`，顺序固定，任一阶段不得跳过或换序：
+`packaging/macos/package-arkforge.sh` 对 `arkforge` 与 `arkforged` 采用相同的
+fail-closed 顺序，任一阶段不得跳过或换序：
 
 ~~~text
 未签名输入逐字节核对(含 symlink 拒绝)
@@ -223,7 +230,9 @@ which is not a system library
 
 ## NRU-004 后续状态（2026-08-19）
 
-原生 RockUSB 现为唯一执行端口，发布包只携带并签名 `arkforged`。vendor
+原生 RockUSB 现为唯一执行端口。NRU-004 当时的发布包只携带并签名
+`arkforged`；CHG-2026-CLI 后 canonical 独立发行包携带同目录的 `arkforge` 与
+`arkforged`。vendor
 签名、自检、entitlement、显式端口选择与迁移 fallback 的 runtime lane 均已
 删除；本文此前记录的 vendor 条款只作为历史实测保留，不描述任何当前可调用或
 可恢复的实现。本附录取代文首 2026-08-18 修订中“仍保留 migration fallback”

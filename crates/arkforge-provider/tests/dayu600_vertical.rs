@@ -18,7 +18,9 @@ use arkforge_core::identity::{
 use arkforge_core::ids::{OpaqueId, PlanId};
 use arkforge_core::plan::{ExecutionAvailability, ExecutionPurpose};
 use arkforge_core::profile::{self, DeviceProfile};
-use arkforge_core::{AuthorityBindingRef, AuthorityNamespace};
+use arkforge_core::{
+    AuthorityBindingRef, AuthorityNamespace, AuthoritySupportBinding, AuthoritySupportState,
+};
 use arkforge_provider::rockchip::RockchipProvider;
 use arkforge_provider::unisoc::{UnisocProvider, publish_af_v3_maturity};
 use arkforge_provider::{
@@ -170,6 +172,10 @@ fn the_vertical_ends_in_an_assessment_with_evidence_requirements() {
                     binding_id: OpaqueId::new("TGT-UNKNOWN").unwrap(),
                     binding_revision: 0,
                     stable_identity_digest: probe.facts_digest,
+                },
+                authority_support: AuthoritySupportBinding {
+                    key_digest: sha256(b"test authority support"),
+                    state: AuthoritySupportState::ProductionVerified,
                 },
                 toolchain: research_toolchain(),
                 host_platform: HostPlatform::new("macos", "aarch64").unwrap(),

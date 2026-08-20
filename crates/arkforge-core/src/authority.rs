@@ -50,6 +50,87 @@ pub struct AuthorityBindingRef {
     pub stable_identity_digest: Sha256Digest,
 }
 
+/// The independently reviewed support state of the authority implementation
+/// that will interpret bindings and mint permits for this plan.
+///
+/// This is deliberately not [`crate::identity::MaturityState`]. Mechanics and
+/// authority implementations have different release axes and neither may
+/// inherit evidence from the other.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum AuthoritySupportState {
+    ProductionVerified,
+    HardwareCampaign { campaign: String },
+    HardwareGated { blocker: String },
+}
+
+impl AuthoritySupportState {
+    pub fn permits_execution(&self) -> bool {
+        matches!(
+            self,
+            AuthoritySupportState::ProductionVerified
+                | AuthoritySupportState::HardwareCampaign { .. }
+        )
+    }
+
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            AuthoritySupportState::ProductionVerified => "productionVerified",
+            AuthoritySupportState::HardwareCampaign { .. } => "hardwareCampaign",
+            AuthoritySupportState::HardwareGated { .. } => "hardwareGated",
+        }
+    }
+
+    pub fn campaign(&self) -> Option<&str> {
+        match self {
+            AuthoritySupportState::HardwareCampaign { campaign } => Some(campaign),
+            _ => None,
+        }
+    }
+
+    pub fn blocker(&self) -> Option<&str> {
+        match self {
+            AuthoritySupportState::HardwareGated { blocker } => Some(blocker),
+            _ => None,
+        }
+    }
+}
+
+impl CanonicalCbor for AuthoritySupportState {
+    fn to_cbor(&self) -> CborValue {
+        CborValue::map(vec![
+            ("state", CborValue::text(self.as_str())),
+            (
+                "campaign",
+                self.campaign()
+                    .map(CborValue::text)
+                    .unwrap_or(CborValue::Null),
+            ),
+            (
+                "blocker",
+                self.blocker()
+                    .map(CborValue::text)
+                    .unwrap_or(CborValue::Null),
+            ),
+        ])
+    }
+}
+
+/// The exact authority-support decision sealed into an executable plan.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AuthoritySupportBinding {
+    pub key_digest: Sha256Digest,
+    pub state: AuthoritySupportState,
+}
+
+impl CanonicalCbor for AuthoritySupportBinding {
+    fn to_cbor(&self) -> CborValue {
+        CborValue::map(vec![
+            ("keyDigest", self.key_digest.to_cbor()),
+            ("state", self.state.to_cbor()),
+        ])
+    }
+}
+
 impl CanonicalCbor for AuthorityBindingRef {
     fn to_cbor(&self) -> CborValue {
         CborValue::map(vec![

@@ -39,6 +39,7 @@ pub enum Domain {
     RecoveryCoverage,
     RescuePlan,
     RescueReceipt,
+    AuthoritySupportKey,
 }
 
 impl Domain {
@@ -67,6 +68,7 @@ impl Domain {
             Domain::RecoveryCoverage => b"arkforge/v1/recovery-coverage\0",
             Domain::RescuePlan => b"arkforge/v1/rescue-plan\0",
             Domain::RescueReceipt => b"arkforge/v1/rescue-receipt\0",
+            Domain::AuthoritySupportKey => b"arkforge/v1/authority-support-key\0",
         }
     }
 }

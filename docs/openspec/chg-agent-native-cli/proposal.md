@@ -1,6 +1,6 @@
 ---
 id: CHG-2026-CLI-arkforge-agent-native-cli
-revision: 1
+revision: 3
 status: implementing
 class: capability
 core_change_level: major
@@ -10,7 +10,9 @@ platforms: [macos]
 
 # ArkForge Agent-native CLI 与原生 RockUSB 救援面
 
-> 本文批准前只是一份命令与权限语义提案，不开放任何新的设备写入路径。
+> Revision 3 的软件实现已按维护者明确要求落地，包括 apply 时的完整 authority /
+> mechanics 重绑定检查与 canonical macOS 二进制对；production support 仍由真机
+> 证据和 exact-key review 门禁，具名 HardwareCampaign 只产生 campaign evidence。
 
 ## Why
 

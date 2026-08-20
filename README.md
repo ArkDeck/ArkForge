@@ -1,11 +1,15 @@
 # ArkForge
 
-设备无关的刷机机械层(Rust)。把固件容器解析、芯片下载协议、USB transport、分区擦写/校验与厂商工具语义收进一个独立 daemon(`arkforged`)，ArkDeck 只保留 authority。
+设备无关的刷机机械层与 Agent-native 命令行(Rust)。统一入口 `arkforge`
+负责显式计划、CLI authority、观察与恢复；独立 daemon `arkforged` 只负责固件
+解析、USB/芯片协议、分区擦写与验证。ArkDeck 可适配同一 mechanics 契约，但不再是
+CLI 直接刷机的运行时依赖。
 
 项目主页：[github.com/ArkDeck/ArkForge](https://github.com/ArkDeck/ArkForge)
 
 ~~~text
-ArkDeck 决定：谁、对哪台设备、以哪个已发布 Operation、在什么安全边界下执行。
+Authority（ArkDeck 或独立 arkforge.cli）决定：谁、对哪台设备、以哪个已发布
+Operation、在什么安全边界下执行。
 
 ArkForge 决定：该已授权语义计划如何通过具体固件格式、Provider 和 Transport 正确落地。
 ~~~
@@ -15,8 +19,13 @@ ArkForge 决定：该已授权语义计划如何通过具体固件格式、Provi
 DAYU200 的设备枚举、Loader 切模、读写、复位、九分区完整覆写和逐步状态均由
 `arkforged` 的原生 RockUSB 实现；仓内没有 vendor 可执行调用路径。执行采用耐久
 journal、精确 StepPermit、同一 transport session 的 freshness 复核，重启后不会
-重放未决写入。DAYU200 profile 发布 1.0.0 complete-overwrite coverage；ArkDeck 保留
-唯一 authority，使用 controller IPC 获取 admission/状态/收据并签发 permit。
+重放未决写入。DAYU200 profile 发布 1.0.0 complete-overwrite coverage；独立
+`arkforge.cli` supervisor 通过 owner-only controller IPC、typed HDC 与持久 epoch
+直接驱动 normal flash。原生 rescue 是另一套 plan/receipt 域，绝不自动 fallback。
+
+CLI authority 与 native rescue 的软件面已完成；production support registry 仍为空，
+等待受控 DAYU200 campaign 与维护者 exact-key review。`--hardware-campaign` 只开启
+具名 campaign evidence，不会发布生产支持。
 
 DAYU600 只有 inspect 与非可执行 PlanAssessment：PAC 格式、下载协议与数据影响
 全部未知(UNI-U01..U12)，17.5 的十八条证据门 0 条 PASS，见
@@ -30,36 +39,61 @@ cargo clippy --workspace --all-targets --all-features -- -D warnings
 cargo test --workspace --all-targets
 ```
 
-跑起 daemon 与统一只读 CLI：
+构建后先让 Agent 读取契约并检查主机：
 
 ```bash
-cargo run -p arkforged --bin arkforged -- --runtime-dir /tmp/arkforge --profile profiles/dayu200.yaml --transcript transcripts/dayu200-gj4-ecamp-96effff15.yaml
+cargo build --workspace
+target/debug/arkforge help --format json
+target/debug/arkforge --runtime-dir /tmp/arkforge doctor
 ```
 
+macOS 发布输入是同目录、分别签名的 `arkforge`/`arkforged` 二进制对；CLI 只启动
+自身旁边的 daemon。`packaging/macos/package-arkforge.sh` 不携带任何 vendor
+RockUSB 工具。
+
 ```bash
-cargo run -p arkforge-cli --bin arkforge -- --runtime-dir /tmp/arkforge device list
+target/debug/arkforge --runtime-dir /tmp/arkforge daemon start
+target/debug/arkforge --runtime-dir /tmp/arkforge device list
 ```
 
 固件先进入内容寻址存储，再按返回的 artifact ID 离线检查：
 
 ```bash
-cargo run -p arkforge-cli --bin arkforge -- --runtime-dir /tmp/arkforge artifact import --file ./firmware.tar.gz
-cargo run -p arkforge-cli --bin arkforge -- --runtime-dir /tmp/arkforge artifact inspect --artifact <artifact-id> --profile profiles/dayu200.yaml
+target/debug/arkforge --runtime-dir /tmp/arkforge artifact import --file ./firmware.tar.gz
+target/debug/arkforge --runtime-dir /tmp/arkforge artifact inspect --artifact <artifact-id> --profile-file profiles/dayu200.yaml
+```
+
+Normal flash 的 runtime 还必须绑定绝对路径和预期摘要完全匹配的 HDC（发布包可由
+签名 tool manifest 提供）；受控首轮真机验证另加 `--hardware-campaign <id>`。
+工作流始终是 `assess → plan → apply`，plan 返回的摘要与 token 必须原样带回：
+
+```bash
+target/debug/arkforge --runtime-dir /tmp/arkforge flash assess --artifact <artifact-id> --profile org.openharmony.dayu200@1.0.0 --device <observation-id> --intent full-restore
+target/debug/arkforge --runtime-dir /tmp/arkforge flash plan --artifact <artifact-id> --profile org.openharmony.dayu200@1.0.0 --device <observation-id> --intent full-restore
+target/debug/arkforge --runtime-dir /tmp/arkforge --output jsonl flash apply --plan <plan-id> --expect-plan-sha256 <sha256> --ack <returned-token>
+```
+
+救援必须显式进入独立的原生 RockUSB 域，不安装也不调用外部设备工具：
+
+```bash
+target/debug/arkforge --runtime-dir /tmp/arkforge rescue list
+target/debug/arkforge help rescue plan --format json
 ```
 
 守护进程状态在重启后仍可查询：
 
 ```bash
-cargo run -p arkforge-cli --bin arkforge -- --runtime-dir /tmp/arkforge job list
-cargo run -p arkforge-cli --bin arkforge -- --runtime-dir /tmp/arkforge job show --job <job-id>
-cargo run -p arkforge-cli --bin arkforge -- --runtime-dir /tmp/arkforge job recovery guide --job <job-id>
+target/debug/arkforge --runtime-dir /tmp/arkforge job list
+target/debug/arkforge --runtime-dir /tmp/arkforge job show --job <job-id>
+target/debug/arkforge --runtime-dir /tmp/arkforge job recovery guide --job <job-id>
 ```
 
 Agent 可直接读取机器帮助，不需要推断 socket 或历史命令名：
 
 ```bash
-cargo run -p arkforge-cli --bin arkforge -- help --format json
-cargo run -p arkforge-cli --bin arkforge -- help flash assess --format json
+target/debug/arkforge help --format json
+target/debug/arkforge help flash apply --format json
+target/debug/arkforge completion --shell zsh
 ```
 
 ## 文档
@@ -96,9 +130,11 @@ Protobuf wire codec 均在仓内实现并对公开测试向量，理由见
 ## 与 ArkDeck 的关系
 
 - 经 `arkforge-arkdeck-adapter` 接入；Core 不依赖 ArkDeck 类型；
-- ArkDeck Runtime 保留唯一 authority(admission / RuntimeCapability / device control / intent)；
+- ArkDeck Runtime 与 `arkforge.cli` 是彼此独立的 authority namespace/runtime，不能接管
+  对方已配对的 daemon；ArkDeck 后续按 canonical CLI/IPC 契约适配；
 - ArkForge 独占固件解析、计划 lowering、USB/RockUSB mechanics、耐久执行与状态投影；
-- 每个 mutation/destructive action 需要 exact StepPermit；outcomeUnknown 永不 replay；
+- CLI normal flash 的每个 mutation/destructive action 需要 exact StepPermit；
+  outcomeUnknown 永不 replay；native rescue 使用独立的一次性 intent/receipt；
 - 新 Operation/Provider/Profile 属 ArkDeck 明确要求 review 的变更，与真实产品能力同车交付。
 
 ## 命名

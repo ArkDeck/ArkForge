@@ -12,7 +12,7 @@ fn canonical_signing_help_is_agent_discoverable() {
         .expect("run canonical CLI help");
     assert!(output.status.success());
     let stdout = String::from_utf8(output.stdout).unwrap();
-    assert!(stdout.contains("\"schema_version\":\"arkforge.command-help/v1\""));
+    assert!(stdout.contains("\"schema\":\"arkforge.command-help/v1\""));
     assert!(stdout.contains("\"command\":\"rescue\""));
     assert!(stdout.contains("\"command\":\"signing\""));
 
@@ -44,10 +44,12 @@ fn development_verification_returns_stable_json() {
     assert!(output.status.success(), "{output:?}");
     assert!(output.stderr.is_empty(), "{output:?}");
     let stdout = String::from_utf8(output.stdout).unwrap();
-    assert!(stdout.contains("\"schema_version\":\"arkforge.signing-verification/v1\""));
+    assert!(stdout.contains("\"schema\":\"arkforge.signing-verification/v1\""));
+    assert!(stdout.contains("\"input_sha256\":"));
     assert!(stdout.contains("\"mode\":\"development\""));
     assert!(stdout.contains("\"compliant\":true"));
     assert!(stdout.contains("\"violations\":[]"));
+    assert!(!stdout.contains(env!("CARGO_BIN_EXE_arkforge")));
 }
 
 #[test]
@@ -66,8 +68,9 @@ fn removed_release_flag_is_not_a_compatibility_alias() {
         .output()
         .expect("run invalid historical syntax");
     assert_eq!(output.status.code(), Some(2));
-    assert!(output.stdout.is_empty(), "{output:?}");
-    let stderr = String::from_utf8(output.stderr).unwrap();
-    assert!(stderr.contains("\"schema_version\":\"arkforge.error/v1\""));
-    assert!(stderr.contains("\"code\":\"INVALID_ARGUMENT\""));
+    assert!(output.stderr.is_empty(), "{output:?}");
+    let stdout = String::from_utf8(output.stdout).unwrap();
+    assert!(stdout.contains("\"schema\":\"arkforge.command-result/v1\""));
+    assert!(stdout.contains("\"ok\":false"));
+    assert!(stdout.contains("\"code\":\"INVALID_ARGUMENT\""));
 }

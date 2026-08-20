@@ -35,7 +35,9 @@ pub mod step;
 pub mod verification;
 pub mod yaml;
 
-pub use authority::{AuthorityBindingRef, AuthorityNamespace};
+pub use authority::{
+    AuthorityBindingRef, AuthorityNamespace, AuthoritySupportBinding, AuthoritySupportState,
+};
 pub use digest::{
     CanonicalCbor, CborError, CborValue, Domain, Sha256, Sha256Digest, digest_canonical,
     digest_in_domain, digest_ordered,

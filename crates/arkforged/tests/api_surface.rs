@@ -241,7 +241,11 @@ fn an_unknown_job_is_not_found_on_status_and_recovery_surfaces() {
         Api::PlanSupersedingRecovery,
         Api::GetRecoveryGuide,
     ] {
-        let response = service.handle(SessionKind::Controller, &request(api, Vec::new()), None);
+        let mut payload = Vec::new();
+        if api == Api::CancelJob {
+            wire::write_uint64(&mut payload, 2, 1);
+        }
+        let response = service.handle(SessionKind::Controller, &request(api, payload), None);
         assert_eq!(response.status, Status::NotFound, "{api}");
         assert_eq!(
             decode_error(&response).unwrap().code,
@@ -470,7 +474,7 @@ fn an_import_whose_digest_does_not_match_is_refused() {
 }
 
 #[test]
-fn materialize_requires_an_inspected_artifact() {
+fn materialize_lazily_inspects_an_imported_artifact() {
     let root = TempRoot::new("materialize-order");
     let mut service = service(&root);
     let artifact_id = import(&mut service);
@@ -483,9 +487,9 @@ fn materialize_requires_an_inspected_artifact() {
         &request(Api::MaterializePlan, payload),
         None,
     );
-    assert_eq!(response.status, Status::NotFound);
-    assert_eq!(
-        decode_error(&response).unwrap().code,
-        "ARTIFACT_NOT_INSPECTED"
-    );
+    assert_eq!(response.status, Status::Ok);
+    assert!(matches!(
+        MaterializePlanResponse::decode(&response.payload).unwrap(),
+        MaterializePlanResponse::Assessment(_)
+    ));
 }

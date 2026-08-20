@@ -1,7 +1,8 @@
 # Verification — CHG-2026-CLI
 
-> Status: native-rescue software checks and legacy read-only command consolidation are
-> passing; remaining command/authority work and hardware checks are planned. Software tests do not authorize real writes.
+> Status: CLI/rescue/direct-authority software checks are implemented and passing;
+> CLI-AC-28..32 still require controlled hardware evidence and maintainer review.
+> Software tests and named campaign state do not publish production support.
 > DAYU200 normal CLI authority and native rescue require separate real-device evidence.
 
 ## Acceptance matrix
@@ -71,3 +72,20 @@ Each hardware run records:
 - whether the run is normal campaign evidence or limited rescue evidence.
 
 A process exit code or vendor stdout marker alone is never sufficient evidence.
+
+## Software verification record (2026-08-20)
+
+The implementation-side and synthetic portions of CLI-AC-01..27 pass with:
+
+- `cargo test --workspace --all-targets --quiet` (all enabled tests pass; the one
+  pre-existing ignored external fixture remains ignored);
+- `cargo clippy --workspace --all-targets --all-features -- -D warnings`;
+- `cargo fmt --all -- --check` and `git diff --check`;
+- release-pair build plus binary string scans for `rkdeveloptool` and removed wrapper
+  names (no matches in either `arkforge` or `arkforged`);
+- foreground `daemon run`, structured `daemon status`/`doctor`, and graceful
+  `daemon stop` against an owner-only temporary runtime;
+- `bash -n packaging/macos/package-arkforge.sh` and the package-contract tests.
+
+This record is not CLI-AC-28..32 evidence. Those entries remain open until the
+controlled DAYU200 runs and maintainer exact-key publication described above occur.

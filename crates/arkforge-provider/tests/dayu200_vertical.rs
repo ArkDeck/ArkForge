@@ -19,7 +19,9 @@ use arkforge_core::plan::ExecutionPurpose;
 use arkforge_core::profile;
 use arkforge_core::projection::{PrivateActionRole, validate_projection};
 use arkforge_core::step::{FlashStepKind, SemanticTarget, WorkflowEffect};
-use arkforge_core::{AuthorityBindingRef, AuthorityNamespace};
+use arkforge_core::{
+    AuthorityBindingRef, AuthorityNamespace, AuthoritySupportBinding, AuthoritySupportState,
+};
 use arkforge_provider::rockchip::{RockchipProvider, publish_af_v1_maturity};
 use arkforge_provider::{
     FlashIntent, FlashProvider, MaterializeRequest, MaturityRegistry, ProbeContext,
@@ -154,6 +156,10 @@ fn request<'a>(vertical: &'a Vertical, toolchain: ToolchainIdentity) -> Material
         profile: &vertical.profile,
         probe: &vertical.probe,
         authority_binding: binding(),
+        authority_support: AuthoritySupportBinding {
+            key_digest: sha256(b"test authority support"),
+            state: AuthoritySupportState::ProductionVerified,
+        },
         toolchain,
         host_platform: HostPlatform::new("macos", "aarch64").unwrap(),
         driver_facts_digest: sha256(b"driver facts"),

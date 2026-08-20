@@ -49,7 +49,7 @@ fn import_list_and_inspect_are_one_explicit_offline_resource_flow() {
     assert!(imported.status.success(), "{imported:?}");
     assert!(imported.stderr.is_empty(), "{imported:?}");
     let imported = String::from_utf8(imported.stdout).unwrap();
-    assert!(imported.contains("\"schema_version\":\"arkforge.artifact-import/v1\""));
+    assert!(imported.contains("\"schema\":\"arkforge.artifact-import/v1\""));
     assert!(imported.contains("\"device_accessed\":false"));
     assert!(imported.contains("\"deduplicated\":false"));
     let artifact_id = json_string(&imported, "artifact_id");
@@ -66,7 +66,7 @@ fn import_list_and_inspect_are_one_explicit_offline_resource_flow() {
     let listed = runtime.command(&["artifact", "list"]);
     assert!(listed.status.success(), "{listed:?}");
     let listed = String::from_utf8(listed.stdout).unwrap();
-    assert!(listed.contains("\"schema_version\":\"arkforge.artifact-list/v1\""));
+    assert!(listed.contains("\"schema\":\"arkforge.artifact-list/v1\""));
     assert!(listed.contains(&artifact_id));
 
     let repo = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
@@ -81,12 +81,12 @@ fn import_list_and_inspect_are_one_explicit_offline_resource_flow() {
         "inspect",
         "--artifact",
         &artifact_id,
-        "--profile",
+        "--profile-file",
         profile.to_str().unwrap(),
     ]);
     assert!(inspected.status.success(), "{inspected:?}");
     let inspected = String::from_utf8(inspected.stdout).unwrap();
-    assert!(inspected.contains("\"schema_version\":\"arkforge.artifact-inspection/v1\""));
+    assert!(inspected.contains("\"schema\":\"arkforge.artifact-inspection/v1\""));
     assert!(inspected.contains("\"format_id\":\"rockchip-images-targz\""));
     assert!(inspected.contains("\"complete\":true"));
     assert!(inspected.contains("\"targets\":["));
@@ -107,8 +107,8 @@ fn an_independent_digest_mismatch_refuses_before_publication() {
         &"0".repeat(64),
     ]);
     assert_eq!(output.status.code(), Some(3));
-    assert!(output.stdout.is_empty());
-    let error = String::from_utf8(output.stderr).unwrap();
+    assert!(output.stderr.is_empty());
+    let error = String::from_utf8(output.stdout).unwrap();
     assert!(error.contains("\"code\":\"ARTIFACT_IMPORT_REFUSED\""));
 
     let listed = runtime.command(&["artifact", "list"]);

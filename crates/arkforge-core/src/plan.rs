@@ -5,7 +5,7 @@
 //! evidence must produce something displayable and exportable that *cannot* be
 //! handed to `startExecution`, rather than an executable plan with a warning.
 
-use crate::authority::AuthorityBindingRef;
+use crate::authority::{AuthorityBindingRef, AuthoritySupportBinding};
 use crate::digest::{CanonicalCbor, CborError, CborValue, Domain, Sha256Digest, digest_in_domain};
 use crate::effect::EffectSet;
 use crate::identity::{
@@ -157,6 +157,9 @@ pub struct FlashPlanEnvelope {
     /// combination is supported" with nothing in the evidence able to
     /// contradict it.
     pub maturity: MaturityState,
+    /// Independent support decision for the authority implementation that
+    /// will drive this plan. Sealed separately from mechanics maturity.
+    pub authority_support: AuthoritySupportBinding,
 
     pub negotiated_capabilities: NegotiatedCapabilities,
     pub public_steps: Vec<PublicFlashStep>,
@@ -184,6 +187,7 @@ pub struct PlanSealInput {
     pub artifact: ArtifactIdentity,
     pub toolchain: ToolchainIdentity,
     pub maturity: MaturityState,
+    pub authority_support: AuthoritySupportBinding,
     pub negotiated_capabilities: NegotiatedCapabilities,
     pub public_steps: Vec<PublicFlashStep>,
     pub effect_set: EffectSet,
@@ -227,6 +231,7 @@ impl FlashPlanEnvelope {
             artifact: input.artifact,
             toolchain: input.toolchain,
             maturity: input.maturity,
+            authority_support: input.authority_support,
             negotiated_capabilities: input.negotiated_capabilities,
             public_steps: input.public_steps,
             effect_set: input.effect_set,
@@ -256,6 +261,7 @@ impl FlashPlanEnvelope {
             artifact: self.artifact.clone(),
             toolchain: self.toolchain.clone(),
             maturity: self.maturity.clone(),
+            authority_support: self.authority_support.clone(),
             negotiated_capabilities: self.negotiated_capabilities.clone(),
             public_steps: self.public_steps.clone(),
             effect_set: self.effect_set.clone(),
@@ -302,6 +308,7 @@ fn plan_digest_body(input: &PlanSealInput) -> CborValue {
         ("artifact", input.artifact.to_cbor()),
         ("toolchain", input.toolchain.to_cbor()),
         ("maturity", input.maturity.to_cbor()),
+        ("authoritySupport", input.authority_support.to_cbor()),
         (
             "negotiatedCapabilities",
             input.negotiated_capabilities.to_cbor(),
@@ -562,7 +569,7 @@ impl std::error::Error for PlanError {}
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::authority::AuthorityNamespace;
+    use crate::authority::{AuthorityNamespace, AuthoritySupportBinding, AuthoritySupportState};
     use crate::digest::sha256;
     use crate::effect::{ByteRange, DataImpact, DataImpactState, PersistentEffect};
     use crate::identity::{ArtifactFormat, ToolchainKind, Version};
@@ -631,6 +638,10 @@ mod tests {
             plan_id: PlanId::new("PLAN-001").unwrap(),
             execution_purpose: ExecutionPurpose::PrimaryFlash,
             maturity: MaturityState::ProductionVerified,
+            authority_support: AuthoritySupportBinding {
+                key_digest: sha256(b"authority support"),
+                state: AuthoritySupportState::ProductionVerified,
+            },
             authority_binding: AuthorityBindingRef {
                 authority_namespace: AuthorityNamespace::new("test-authority").unwrap(),
                 binding_id: OpaqueId::new("TGT-958780b2ffb7").unwrap(),
@@ -721,6 +732,23 @@ mod tests {
         assert!(production.maturity.is_production_evidence());
         assert!(!campaign.maturity.is_production_evidence());
         assert_eq!(campaign.maturity.campaign(), Some("AFA-AC-6"));
+    }
+
+    #[test]
+    fn authority_support_state_and_key_are_sealed_independently() {
+        let production = FlashPlanEnvelope::seal(seal_input()).unwrap();
+
+        let mut campaign_input = seal_input();
+        campaign_input.authority_support.state = AuthoritySupportState::HardwareCampaign {
+            campaign: "CLI-AC-28".into(),
+        };
+        let campaign = FlashPlanEnvelope::seal(campaign_input).unwrap();
+        assert_ne!(production.plan_digest, campaign.plan_digest);
+
+        let mut other_key_input = seal_input();
+        other_key_input.authority_support.key_digest = sha256(b"rebuilt authority");
+        let other_key = FlashPlanEnvelope::seal(other_key_input).unwrap();
+        assert_ne!(production.plan_digest, other_key.plan_digest);
     }
 
     #[test]

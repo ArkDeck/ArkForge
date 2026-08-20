@@ -27,7 +27,7 @@
 //! **It does not assess Gatekeeper.** Notarization and stapling are verified
 //! once by the packager (`spctl --assess`), not on every daemon start: an
 //! assessment can reach the network, and daemon startup is not the place for
-//! that. See `packaging/macos/package-arkforged.sh`.
+//! that. See `packaging/macos/package-arkforge.sh`.
 //!
 //! The full contract is
 //! `docs/decisions/AFD-0003-arkforged-signing-packaging.md`.

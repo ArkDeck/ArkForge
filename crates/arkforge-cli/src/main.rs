@@ -4,13 +4,17 @@
 //! normal-flash authority surface. No canonical command is a compatibility
 //! wrapper around an older binary.
 
+mod authority_support;
+mod controller_client;
+mod hdc_control;
 mod supervisor;
 
 use arkforge_artifact::cas::{CasError, CasQuota, ContentAddressedStore, ImportedObject};
-use arkforge_core::Sha256Digest;
 use arkforge_core::profile;
+use arkforge_core::{OpaqueId, Sha256Digest, Version};
 use arkforge_ipc::messages::{
-    Assessment, Effect, InspectArtifactResponse, JobEvent, JobSummary, KeyValue,
+    Assessment, Effect, ExecutablePlan, InspectArtifactResponse, JobEvent, JobSummary, KeyValue,
+    MaterializePlanResponse,
 };
 use arkforged::artifact_ops::{
     ProfileCoverage, inspect_container, manifest_response, profile_coverage,
@@ -40,9 +44,9 @@ impl Output {
     fn parse(value: &str) -> Result<Self, CliError> {
         match value {
             "human" => Ok(Self::Human),
-            "json" => Ok(Self::Json),
+            "json" | "jsonl" => Ok(Self::Json),
             _ => Err(CliError::invalid(
-                "--output accepts exactly 'human' or 'json'.",
+                "--output accepts exactly 'human', 'json', or 'jsonl'.",
             )),
         }
     }
@@ -52,6 +56,10 @@ impl Output {
 struct Globals {
     runtime_dir: Option<PathBuf>,
     output: Output,
+    jsonl: bool,
+    no_color: bool,
+    quiet: bool,
+    verbose: bool,
 }
 
 #[derive(Debug)]
@@ -60,6 +68,7 @@ struct CliError {
     message: String,
     exit_code: i32,
     retryable: bool,
+    required_acknowledgements: Vec<String>,
 }
 
 impl CliError {
@@ -74,21 +83,36 @@ impl CliError {
             message: message.into(),
             exit_code,
             retryable,
+            required_acknowledgements: Vec::new(),
         }
     }
 
     fn invalid(message: impl Into<String>) -> Self {
         Self::new("INVALID_ARGUMENT", message, 2, false)
     }
+
+    fn with_required_acknowledgements(mut self, tokens: Vec<String>) -> Self {
+        if !tokens.is_empty() {
+            self.retryable = true;
+        }
+        self.required_acknowledgements = tokens;
+        self
+    }
 }
 
 impl From<RescueError> for CliError {
     fn from(error: RescueError) -> Self {
+        let required_acknowledgements = if error.code == "ACKNOWLEDGEMENT_REQUIRED" {
+            bracketed_values_after(&error.message, "Missing: [")
+        } else {
+            Vec::new()
+        };
         Self {
             code: error.code.to_string(),
             message: error.message,
             exit_code: error.exit_code,
             retryable: error.retryable,
+            required_acknowledgements,
         }
     }
 }
@@ -100,6 +124,7 @@ impl From<PublicClientError> for CliError {
             message: error.message,
             exit_code: error.exit_code,
             retryable: error.retryable,
+            required_acknowledgements: Vec::new(),
         }
     }
 }
@@ -118,13 +143,366 @@ struct HelpSpec {
     exits: &'static [(i32, &'static str)],
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct TypedOptionSpec {
+    name: String,
+    value_type: String,
+    required: bool,
+    repeatable: bool,
+    enum_values: Vec<String>,
+    sensitive: bool,
+    effect_relevant: bool,
+    requires: Vec<String>,
+    conflicts: Vec<String>,
+    description: &'static str,
+}
+
+impl HelpSpec {
+    fn path(&self) -> Vec<&str> {
+        self.command.split_whitespace().collect()
+    }
+
+    fn typed_options(&self) -> Vec<TypedOptionSpec> {
+        self.options
+            .iter()
+            .filter_map(|(signature, description)| {
+                let name = signature
+                    .split(|character: char| character == ',' || character.is_whitespace())
+                    .find_map(|part| part.strip_prefix("--"))?
+                    .trim_end_matches(',')
+                    .to_string();
+                let shape = signature
+                    .split_once('<')
+                    .and_then(|(_, rest)| rest.split_once('>').map(|(shape, _)| shape));
+                let enum_values: Vec<String> = shape
+                    .filter(|shape| shape.contains('|') || matches!(*shape, "full-restore"))
+                    .map(|shape| shape.split('|').map(str::to_string).collect())
+                    .unwrap_or_default();
+                let value_type = match (name.as_str(), shape) {
+                    ("artifact", _) => "sha256",
+                    (_, None) => "boolean",
+                    (_, Some("u64")) => "uint64",
+                    (_, Some("sha256")) => "sha256",
+                    (
+                        _,
+                        Some(
+                            "file" | "new-file" | "firmware-file" | "mach-o" | "absolute-path"
+                            | "dir",
+                        ),
+                    ) => "path",
+                    (_, Some("profile-id" | "id@version")) => "profile-id",
+                    (_, Some("observation-id" | "device-id")) => "observation-id",
+                    (_, Some("job-id")) => "job-id",
+                    (_, Some("plan-id")) => "plan-id",
+                    (_, Some("campaign-id")) => "campaign-id",
+                    (_, Some("name")) if name == "partition" => "partition-id",
+                    (_, Some("mode")) => "device-mode",
+                    (_, Some("token")) => "acknowledgement-token",
+                    (_, Some(_)) if !enum_values.is_empty() => "enum",
+                    (_, Some(_)) => "string",
+                }
+                .to_string();
+                let prose = description.to_ascii_lowercase();
+                let required = (prose.contains("required.")
+                    && !prose.contains("required for")
+                    && !prose.contains("when required"))
+                    || (name == "ack" && matches!(self.command, "flash apply" | "rescue apply"));
+                let repeatable = prose.contains("repeatable") || prose.contains("repeat ");
+                let mut requires = Vec::new();
+                for token in description.split_whitespace() {
+                    if let Some(required) = token.strip_prefix("--") {
+                        let required = required.trim_end_matches(['.', ',', ';']);
+                        if required != name && prose.contains("requires") {
+                            requires.push(required.to_string());
+                        }
+                    }
+                }
+                let conflicts = match name.as_str() {
+                    "quiet" => vec!["verbose".into()],
+                    "verbose" => vec!["quiet".into()],
+                    _ => Vec::new(),
+                };
+                let effect_relevant = !matches!(
+                    name.as_str(),
+                    "output"
+                        | "no-color"
+                        | "quiet"
+                        | "verbose"
+                        | "help"
+                        | "version"
+                        | "format"
+                        | "shell"
+                        | "detach"
+                        | "timeout-ms"
+                        | "after-sequence"
+                );
+                let sensitive = matches!(
+                    name.as_str(),
+                    "runtime-dir" | "file" | "profile-file" | "image" | "out" | "hdc"
+                );
+                Some(TypedOptionSpec {
+                    name,
+                    value_type,
+                    required,
+                    repeatable,
+                    enum_values,
+                    sensitive,
+                    effect_relevant,
+                    requires,
+                    conflicts,
+                    description,
+                })
+            })
+            .collect()
+    }
+
+    fn effect_class(&self) -> &'static str {
+        match self.command {
+            "flash apply" | "rescue apply" => "destructive",
+            "job cancel" => "mutating-control",
+            "artifact import" | "rescue read" => "host-write",
+            "flash plan" | "job recovery plan" | "rescue plan" => "read-device-and-host-write",
+            "daemon status" => "read-only",
+            command if command.starts_with("daemon") => "service-lifecycle",
+            _ => "read-only",
+        }
+    }
+
+    fn output_schemas(&self) -> Vec<String> {
+        let mut schemas = self
+            .produces
+            .iter()
+            .flat_map(|description| description.split_whitespace())
+            .map(|word| {
+                word.trim_matches(|character: char| {
+                    matches!(character, ',' | '.' | ';' | ':' | '(' | ')')
+                })
+            })
+            .filter(|word| word.starts_with("arkforge.") && word.contains("/v1"))
+            .map(str::to_string)
+            .collect::<Vec<_>>();
+        schemas.sort();
+        schemas.dedup();
+        if schemas.is_empty() {
+            schemas.push("arkforge.command-help/v1".into());
+        }
+        schemas
+    }
+
+    fn requires_controller(&self) -> bool {
+        matches!(
+            self.command,
+            "flash assess"
+                | "flash plan"
+                | "flash apply"
+                | "job cancel"
+                | "job reconcile"
+                | "job recovery plan"
+                | "daemon stop"
+        )
+    }
+
+    fn requires_daemon(&self) -> bool {
+        self.command.starts_with("device ")
+            || self.command == "artifact show"
+            || self.command.starts_with("flash ")
+            || self.command.starts_with("job ")
+            || matches!(self.command, "daemon status" | "daemon stop")
+    }
+}
+
+fn validate_against_command_tree(arguments: &[String]) -> Result<(), CliError> {
+    let path_len = arguments
+        .iter()
+        .position(|argument| argument.starts_with('-'))
+        .unwrap_or(arguments.len());
+    let path = &arguments[..path_len];
+    let spec = help_spec(path)?;
+    let metadata = spec.typed_options();
+    let known = metadata
+        .iter()
+        .map(|option| (option.name.as_str(), option))
+        .collect::<BTreeMap<_, _>>();
+    let mut supplied: BTreeMap<&str, Vec<&str>> = BTreeMap::new();
+    let mut index = path_len;
+    while index < arguments.len() {
+        let token = &arguments[index];
+        let name = token.strip_prefix("--").ok_or_else(|| {
+            CliError::invalid(format!(
+                "Unexpected positional argument {token:?}; command inputs are named options."
+            ))
+        })?;
+        let option = known
+            .get(name)
+            .ok_or_else(|| CliError::invalid(format!("Unknown option --{name}.")))?;
+        if option.value_type == "boolean" {
+            supplied.entry(name).or_default().push("true");
+            index += 1;
+            continue;
+        }
+        let value = arguments.get(index + 1).ok_or_else(|| {
+            CliError::invalid(format!("--{name} requires a {} value.", option.value_type))
+        })?;
+        if value.starts_with("--") {
+            return Err(CliError::invalid(format!(
+                "--{name} requires a {} value.",
+                option.value_type
+            )));
+        }
+        if value.contains('<') || value.contains('>') || value == "..." || value.contains('…') {
+            return Err(CliError::invalid(format!(
+                "--{name} requires a concrete value; help placeholders and ellipses are not inputs."
+            )));
+        }
+        if !option.enum_values.is_empty()
+            && !option.enum_values.iter().any(|allowed| allowed == value)
+        {
+            return Err(CliError::invalid(format!(
+                "--{name} accepts exactly {}, not {value:?}.",
+                option.enum_values.join(", ")
+            )));
+        }
+        match option.value_type.as_str() {
+            "uint64" => {
+                value.parse::<u64>().map_err(|_| {
+                    CliError::invalid(format!("--{name} requires an unsigned 64-bit integer."))
+                })?;
+            }
+            "sha256" => {
+                let digest = Sha256Digest::parse_hex(value).map_err(|error| {
+                    CliError::invalid(format!("--{name} requires one SHA-256 digest: {error}"))
+                })?;
+                if digest.to_hex() != *value {
+                    return Err(CliError::invalid(format!(
+                        "--{name} requires canonical 64-character lowercase SHA-256 hex."
+                    )));
+                }
+            }
+            "profile-id" => validate_profile_id(name, value)?,
+            "observation-id" | "job-id" | "plan-id" | "campaign-id" | "partition-id"
+            | "device-mode" => validate_opaque_id(name, value)?,
+            "acknowledgement-token" => validate_acknowledgement(name, value)?,
+            _ => {}
+        }
+        supplied.entry(name).or_default().push(value);
+        index += 2;
+    }
+    for option in &metadata {
+        let count = supplied
+            .get(option.name.as_str())
+            .map_or(0, |values| values.len());
+        if option.required && count == 0 {
+            return Err(CliError::invalid(format!(
+                "Missing required --{}.",
+                option.name
+            )));
+        }
+        if !option.repeatable && count > 1 {
+            return Err(CliError::invalid(format!(
+                "--{} may be supplied only once.",
+                option.name
+            )));
+        }
+        if count > 0 {
+            for required in &option.requires {
+                if !supplied.contains_key(required.as_str()) {
+                    return Err(CliError::invalid(format!(
+                        "--{} requires --{}.",
+                        option.name, required
+                    )));
+                }
+            }
+            for conflict in &option.conflicts {
+                if supplied.contains_key(conflict.as_str()) {
+                    return Err(CliError::invalid(format!(
+                        "--{} conflicts with --{}.",
+                        option.name, conflict
+                    )));
+                }
+            }
+        }
+    }
+    if spec.command == "rescue plan" {
+        let operation = supplied
+            .get("operation")
+            .and_then(|values| values.first())
+            .copied()
+            .unwrap_or_default();
+        let write_options = ["partition", "image", "expect-image-sha256"];
+        if operation == "write-partition" {
+            if let Some(missing) = write_options
+                .iter()
+                .find(|name| !supplied.contains_key(**name))
+            {
+                return Err(CliError::invalid(format!(
+                    "--operation write-partition requires --{missing}."
+                )));
+            }
+        } else if let Some(present) = write_options
+            .iter()
+            .find(|name| supplied.contains_key(**name))
+        {
+            return Err(CliError::invalid(format!(
+                "--{present} is not valid for --operation reset-device."
+            )));
+        }
+    }
+    if matches!(spec.command, "daemon run" | "daemon start")
+        && supplied.contains_key("hdc") != supplied.contains_key("expect-hdc-sha256")
+    {
+        return Err(CliError::invalid(
+            "--hdc and --expect-hdc-sha256 must be supplied together.",
+        ));
+    }
+    Ok(())
+}
+
+fn validate_opaque_id(option: &str, value: &str) -> Result<(), CliError> {
+    OpaqueId::new(value).map_err(|error| {
+        CliError::invalid(format!(
+            "--{option} requires a canonical ArkForge identifier: {error}"
+        ))
+    })?;
+    Ok(())
+}
+
+fn validate_profile_id(option: &str, value: &str) -> Result<(), CliError> {
+    let (id, version) = value.rsplit_once('@').ok_or_else(|| {
+        CliError::invalid(format!(
+            "--{option} requires an exact profile id@major.minor.patch."
+        ))
+    })?;
+    validate_opaque_id(option, id)?;
+    Version::parse(version).ok_or_else(|| {
+        CliError::invalid(format!(
+            "--{option} requires an exact profile id@major.minor.patch."
+        ))
+    })?;
+    Ok(())
+}
+
+fn validate_acknowledgement(option: &str, value: &str) -> Result<(), CliError> {
+    if value.is_empty()
+        || value.len() > 256
+        || !value.bytes().all(|byte| {
+            byte.is_ascii_alphanumeric() || matches!(byte, b'.' | b'_' | b':' | b'-' | b'=')
+        })
+    {
+        return Err(CliError::invalid(format!(
+            "--{option} requires one exact ASCII acknowledgement token."
+        )));
+    }
+    Ok(())
+}
+
 fn main() {
     let arguments: Vec<String> = std::env::args().skip(1).collect();
     let fallback_output = requested_output(&arguments).unwrap_or(Output::Human);
+    let command_path = requested_command_path(&arguments);
     match run(&arguments) {
         Ok(exit_code) => std::process::exit(exit_code),
         Err(error) => {
-            print_error(fallback_output, &error);
+            print_error(fallback_output, &command_path, &arguments, &error);
             std::process::exit(error.exit_code);
         }
     }
@@ -140,7 +518,7 @@ fn run(arguments: &[String]) -> Result<i32, CliError> {
         match globals.output {
             Output::Human => println!("arkforge {}", env!("CARGO_PKG_VERSION")),
             Output::Json => println!(
-                "{{\"schema_version\":\"arkforge.version/v1\",\"name\":\"arkforge\",\"version\":{}}}",
+                "{{\"schema\":\"arkforge.version/v1\",\"name\":\"arkforge\",\"version\":{}}}",
                 json(env!("CARGO_PKG_VERSION"))
             ),
         }
@@ -161,7 +539,9 @@ fn run(arguments: &[String]) -> Result<i32, CliError> {
         print_help(help_spec(&topic)?, globals.output);
         return Ok(0);
     }
+    validate_against_command_tree(&command)?;
     match command[0].as_str() {
+        "doctor" => run_doctor(globals),
         "device" => run_device(&command[1..], globals),
         "artifact" => run_artifact(&command[1..], globals),
         "flash" => run_flash(&command[1..], globals),
@@ -169,6 +549,7 @@ fn run(arguments: &[String]) -> Result<i32, CliError> {
         "rescue" => run_rescue(&command[1..], globals),
         "daemon" => run_daemon(&command[1..], globals),
         "signing" => run_signing(&command[1..], globals.output),
+        "completion" => run_completion(&command[1..], globals.output),
         other => Err(CliError::invalid(format!(
             "Unknown command {other:?}. Run 'arkforge help' for the command tree."
         ))),
@@ -184,7 +565,11 @@ fn run_daemon(arguments: &[String], globals: Globals) -> Result<i32, CliError> {
     match subcommand.as_str() {
         "run" => {
             let options = supervisor::DaemonOptions::parse(&arguments[1..])?;
-            supervisor::run(runtime_dir, options, globals.output == Output::Human)?;
+            supervisor::run(
+                runtime_dir,
+                options,
+                globals.output == Output::Human && !globals.quiet,
+            )?;
             Ok(0)
         }
         "start" => {
@@ -203,9 +588,12 @@ fn run_daemon(arguments: &[String], globals: Globals) -> Result<i32, CliError> {
             reject_extra(&arguments[1..], "daemon stop")?;
             let status = supervisor::stop(&runtime_dir)?;
             match globals.output {
-                Output::Human => println!("ArkForge runtime stopped (epoch {}).", status.epoch),
+                Output::Human => {
+                    println!("ArkForge runtime stopped (epoch {}).", status.epoch);
+                    println!("Next: arkforge daemon start");
+                }
                 Output::Json => println!(
-                    "{{\"schema_version\":\"arkforge.daemon-stop/v1\",\"stopped\":true,\"pairing_epoch\":{}}}",
+                    "{{\"schema\":\"arkforge.daemon-stop/v1\",\"stopped\":true,\"pairing_epoch\":{},\"next_commands\":[\"arkforge daemon start\"]}}",
                     status.epoch
                 ),
             }
@@ -218,6 +606,7 @@ fn run_daemon(arguments: &[String], globals: Globals) -> Result<i32, CliError> {
 }
 
 fn print_daemon_status(status: &supervisor::DaemonStatus, output: Output) {
+    let next = daemon_next_commands(status);
     match output {
         Output::Human => {
             println!("ArkForge runtime: running");
@@ -230,30 +619,70 @@ fn print_daemon_status(status: &supervisor::DaemonStatus, output: Output) {
             println!("  daemon: {}", status.daemon_version);
             println!("  authority: arkforge.cli (epoch {})", status.epoch);
             println!("  mechanics ready: {}", status.mechanics_ready);
+            println!(
+                "  authority support available: {}",
+                status.authority_support_available
+            );
+            println!("  HDC bound: {}", status.hdc_bound);
+            if status.hdc_bound {
+                println!("  HDC SHA-256: {}", status.hdc_sha256);
+            }
+            if !status.hardware_campaign.is_empty() {
+                println!("  hardware campaign: {}", status.hardware_campaign);
+            }
             println!("  active jobs: {}", status.active_jobs);
             if !status.blockers.is_empty() {
                 println!("  blockers: {}", status.blockers.join(", "));
             }
+            println!("Next: {}", next[0]);
         }
         Output::Json => println!(
-            "{{\"schema_version\":\"arkforge.daemon-status/v1\",\"running\":true,\"supervisor_pid\":{},\"daemon_pid\":{},\"protocol\":{{\"major\":{},\"minor\":{}}},\"daemon_version\":{},\"authority\":{{\"namespace\":\"arkforge.cli\",\"pairing_epoch\":{}}},\"mechanics_ready\":{},\"active_jobs\":{},\"blockers\":{}}}",
+            "{{\"schema\":\"arkforge.daemon-status/v1\",\"running\":true,\"supervisor_pid\":{},\"daemon_pid\":{},\"protocol\":{{\"major\":{},\"minor\":{}}},\"daemon_version\":{},\"authority\":{{\"namespace\":\"arkforge.cli\",\"pairing_epoch\":{},\"support_records_available\":{},\"hardware_campaign\":{},\"hdc\":{{\"bound\":{},\"sha256\":{}}}}},\"mechanics_ready\":{},\"active_jobs\":{},\"blockers\":{},\"next_commands\":{}}}",
             status.supervisor_pid,
             status.daemon_pid,
             status.protocol_major,
             status.protocol_minor,
             json(&status.daemon_version),
             status.epoch,
+            status.authority_support_available,
+            optional_json(
+                (!status.hardware_campaign.is_empty()).then_some(status.hardware_campaign.as_str())
+            ),
+            status.hdc_bound,
+            optional_json(status.hdc_bound.then_some(status.hdc_sha256.as_str())),
             status.mechanics_ready,
             status.active_jobs,
             json_strings(&status.blockers),
+            json_strings(&next),
         ),
+    }
+}
+
+fn daemon_next_commands(status: &supervisor::DaemonStatus) -> Vec<String> {
+    if status.active_jobs > 0 {
+        return vec!["arkforge job list".into()];
+    }
+    if !status.hdc_bound || !status.authority_support_available {
+        return vec![
+            "arkforge daemon stop".into(),
+            "arkforge help daemon start --format json".into(),
+        ];
+    }
+    if status.mechanics_ready && status.blockers.is_empty() {
+        vec!["arkforge device list".into()]
+    } else {
+        vec!["arkforge daemon status".into()]
     }
 }
 
 fn parse_globals(arguments: &[String]) -> Result<(Globals, Vec<String>), CliError> {
     let mut runtime_dir = None;
     let mut output = Output::Human;
+    let mut jsonl = false;
     let mut output_seen = false;
+    let mut no_color = false;
+    let mut quiet = false;
+    let mut verbose = false;
     let mut command = Vec::new();
     let mut index = 0;
     while index < arguments.len() {
@@ -277,18 +706,33 @@ fn parse_globals(arguments: &[String]) -> Result<(Globals, Vec<String>), CliErro
                 index += 1;
                 let value = arguments
                     .get(index)
-                    .ok_or_else(|| CliError::invalid("--output requires human or json."))?;
+                    .ok_or_else(|| CliError::invalid("--output requires human, json, or jsonl."))?;
                 output = Output::parse(value)?;
+                jsonl = value == "jsonl";
             }
-            "--no-color" => {}
+            "--no-color" => no_color = true,
+            "--quiet" => quiet = true,
+            "--verbose" => verbose = true,
             argument => command.push(argument.to_string()),
         }
         index += 1;
+    }
+    if quiet && verbose {
+        return Err(CliError::invalid(
+            "--quiet conflicts with --verbose; select at most one presentation mode.",
+        ));
+    }
+    if output == Output::Json {
+        no_color = true;
     }
     Ok((
         Globals {
             runtime_dir,
             output,
+            jsonl,
+            no_color,
+            quiet,
+            verbose,
         },
         command,
     ))
@@ -310,11 +754,19 @@ fn run_help(arguments: &[String], global_output: Output) -> Result<i32, CliError
         match arguments[index].as_str() {
             "--format" => {
                 index += 1;
-                output = Output::parse(
-                    arguments
-                        .get(index)
-                        .ok_or_else(|| CliError::invalid("--format requires human or json."))?,
-                )?;
+                output = match arguments
+                    .get(index)
+                    .map(String::as_str)
+                    .ok_or_else(|| CliError::invalid("--format requires human or json."))?
+                {
+                    "human" => Output::Human,
+                    "json" => Output::Json,
+                    value => {
+                        return Err(CliError::invalid(format!(
+                            "--format accepts exactly 'human' or 'json', not {value:?}."
+                        )));
+                    }
+                };
             }
             argument if argument.starts_with('-') => {
                 return Err(CliError::invalid(format!(
@@ -329,6 +781,109 @@ fn run_help(arguments: &[String], global_output: Output) -> Result<i32, CliError
     Ok(0)
 }
 
+fn run_doctor(globals: Globals) -> Result<i32, CliError> {
+    let runtime_dir = command_runtime_dir(&globals)?;
+    let platform_supported = cfg!(target_os = "macos");
+    let runtime = supervisor::status(&runtime_dir).ok();
+    let runtime_running = runtime.is_some();
+    let mechanics_ready = runtime
+        .as_ref()
+        .is_some_and(|status| status.mechanics_ready);
+    let blockers = runtime
+        .as_ref()
+        .map(|status| status.blockers.clone())
+        .unwrap_or_else(|| vec!["DAEMON_UNAVAILABLE".into()]);
+    let inspect_ready = platform_supported;
+    let authority_ready = runtime
+        .as_ref()
+        .is_some_and(|status| status.authority_support_available);
+    let hdc_bound = runtime.as_ref().is_some_and(|status| status.hdc_bound);
+    let execute_ready = platform_supported
+        && mechanics_ready
+        && authority_ready
+        && hdc_bound
+        && blockers.is_empty();
+    let next = runtime.as_ref().map_or_else(
+        || vec!["arkforge daemon start".to_string()],
+        daemon_next_commands,
+    );
+
+    match globals.output {
+        Output::Human => {
+            if !globals.quiet {
+                println!("ArkForge host assessment");
+            }
+            println!("  platform supported: {platform_supported}");
+            println!("  inspect ready:      {inspect_ready}");
+            println!("  runtime running:    {runtime_running}");
+            println!("  mechanics ready:    {mechanics_ready}");
+            println!("  authority ready:    {authority_ready}");
+            println!("  HDC bound:          {hdc_bound}");
+            println!("  execute ready:      {execute_ready}");
+            if globals.verbose {
+                println!("  structured output disables color: {}", globals.no_color);
+                for blocker in &blockers {
+                    println!("  blocker: {blocker}");
+                }
+            }
+            println!("Next: {}", next[0]);
+        }
+        Output::Json => println!(
+            "{{\"schema\":\"arkforge.doctor/v1\",\"ok\":true,\"platform_supported\":{},\"inspect_ready\":{},\"runtime_running\":{},\"mechanics_ready\":{},\"authority_support_available\":{},\"hdc_bound\":{},\"execute_ready\":{},\"blockers\":{},\"next_commands\":{}}}",
+            platform_supported,
+            inspect_ready,
+            runtime_running,
+            mechanics_ready,
+            authority_ready,
+            hdc_bound,
+            execute_ready,
+            json_strings(&blockers),
+            json_strings(&next),
+        ),
+    }
+    Ok(0)
+}
+
+fn run_completion(arguments: &[String], output: Output) -> Result<i32, CliError> {
+    let options = Options::parse(arguments)?;
+    let shell = options.one("shell")?;
+    let script = completion_script(shell)?;
+    match output {
+        Output::Human => print!("{script}"),
+        Output::Json => println!(
+            "{{\"schema\":\"arkforge.completion/v1\",\"ok\":true,\"shell\":{},\"script\":{}}}",
+            json(shell),
+            json(&script)
+        ),
+    }
+    Ok(0)
+}
+
+fn completion_script(shell: &str) -> Result<String, CliError> {
+    let mut words = BTreeSet::new();
+    for spec in HELP {
+        words.extend(spec.command.split_whitespace().map(str::to_string));
+        for option in spec.typed_options() {
+            words.insert(format!("--{}", option.name));
+        }
+    }
+    let words = words.into_iter().collect::<Vec<_>>().join(" ");
+    match shell {
+        "bash" => Ok(format!(
+            "_arkforge_complete() {{\n  local cur=\"${{COMP_WORDS[COMP_CWORD]}}\"\n  COMPREPLY=( $(compgen -W '{}' -- \"$cur\") )\n}}\ncomplete -F _arkforge_complete arkforge\n",
+            words
+        )),
+        "zsh" => Ok(format!(
+            "#compdef arkforge\n_arkforge() {{\n  local -a words\n  words=({})\n  _describe 'arkforge command or option' words\n}}\ncompdef _arkforge arkforge\n",
+            words
+        )),
+        "fish" => Ok(format!("complete -c arkforge -f -a '{}'\n", words)),
+        value => Err(CliError::invalid(format!(
+            "--shell accepts 'bash', 'zsh', or 'fish', not {value:?}."
+        ))),
+    }
+}
+
 fn run_signing(arguments: &[String], output: Output) -> Result<i32, CliError> {
     let Some(subcommand) = arguments.first() else {
         print_help(help_spec(&["signing".into()])?, output);
@@ -341,7 +896,6 @@ fn run_signing(arguments: &[String], output: Output) -> Result<i32, CliError> {
     }
 
     let options = Options::parse(&arguments[1..])?;
-    options.ensure_only(&["file", "mode"])?;
     let file = Path::new(options.one("file")?);
     let (mode, mode_name) = match options.one("mode")? {
         "development" => (ContractMode::Development, "development"),
@@ -352,16 +906,25 @@ fn run_signing(arguments: &[String], output: Output) -> Result<i32, CliError> {
             )));
         }
     };
-    let code = packaging::read_file(file).map_err(|error| {
+    let input = std::fs::read(file).map_err(|error| {
         CliError::new(
             "SIGNING_INPUT_REFUSED",
-            format!("Unable to inspect {}: {error}", file.display()),
+            format!("Unable to read the selected signing input: {error}"),
+            3,
+            false,
+        )
+    })?;
+    let input_digest = arkforge_core::digest::sha256(&input);
+    let code = packaging::read(&input).map_err(|error| {
+        CliError::new(
+            "SIGNING_INPUT_REFUSED",
+            format!("Unable to inspect the selected signing input: {error}"),
             3,
             false,
         )
     })?;
     let violations = code.violations(mode);
-    print_signing(output, file, mode_name, &code, &violations);
+    print_signing(output, file, input_digest, mode_name, &code, &violations);
     Ok(if violations.is_empty() { 0 } else { 3 })
 }
 
@@ -373,14 +936,12 @@ fn run_device(arguments: &[String], globals: Globals) -> Result<i32, CliError> {
     let options = Options::parse(&arguments[1..])?;
     match subcommand.as_str() {
         "list" => {
-            options.ensure_only(&[])?;
             let mut client = public_client(&globals)?;
             let observations = client.device_list()?;
             print_device_observations(globals.output, &observations);
             Ok(0)
         }
         "show" => {
-            options.ensure_only(&["device"])?;
             let device = options.one("device")?;
             let mut client = public_client(&globals)?;
             let observations = client.device_list()?;
@@ -399,7 +960,6 @@ fn run_device(arguments: &[String], globals: Globals) -> Result<i32, CliError> {
             Ok(0)
         }
         "probe" => {
-            options.ensure_only(&["device", "profile"])?;
             let device = options.one("device")?;
             let profile = options.one("profile")?;
             let mut client = public_client(&globals)?;
@@ -408,7 +968,6 @@ fn run_device(arguments: &[String], globals: Globals) -> Result<i32, CliError> {
             Ok(0)
         }
         "wait" => {
-            options.ensure_only(&["profile", "mode", "timeout-ms"])?;
             let profile = options.one("profile")?;
             let mode = options.one("mode")?;
             if mode.trim().is_empty() {
@@ -490,7 +1049,6 @@ fn run_artifact(arguments: &[String], globals: Globals) -> Result<i32, CliError>
     let options = Options::parse(&arguments[1..])?;
     match subcommand.as_str() {
         "import" => {
-            options.ensure_only(&["file", "expect-sha256"])?;
             let file = Path::new(options.one("file")?);
             let expected = options
                 .optional_one("expect-sha256")?
@@ -526,7 +1084,6 @@ fn run_artifact(arguments: &[String], globals: Globals) -> Result<i32, CliError>
             Ok(0)
         }
         "inspect" => {
-            options.ensure_only(&["artifact", "profile"])?;
             let artifact_id = options.one("artifact")?;
             let digest = parse_digest("--artifact", artifact_id)?;
             let store = open_existing_artifact_store(&globals)?;
@@ -535,20 +1092,18 @@ fn run_artifact(arguments: &[String], globals: Globals) -> Result<i32, CliError>
                 .map_err(|message| CliError::new("ARTIFACT_REJECTED", message, 3, false))?;
             let response = manifest_response(&manifest);
             let coverage = options
-                .optional_one("profile")?
+                .optional_one("profile-file")?
                 .map(|path| load_profile_coverage(Path::new(path), &manifest))
                 .transpose()?;
             print_artifact_inspection(globals.output, artifact_id, &response, coverage.as_ref());
             Ok(0)
         }
         "list" => {
-            options.ensure_only(&[])?;
             let objects = list_artifacts(&globals)?;
             print_artifact_list(globals.output, &objects);
             Ok(0)
         }
         "show" => {
-            options.ensure_only(&["artifact"])?;
             let artifact = options.one("artifact")?;
             let mut client = public_client(&globals)?;
             let manifest = client.artifact_show(artifact)?;
@@ -569,7 +1124,6 @@ fn run_flash(arguments: &[String], globals: Globals) -> Result<i32, CliError> {
     let options = Options::parse(&arguments[1..])?;
     match subcommand.as_str() {
         "assess" => {
-            options.ensure_only(&["artifact", "profile", "device", "intent"])?;
             let intent = options.one("intent")?;
             if intent != "full-restore" {
                 return Err(CliError::invalid(format!(
@@ -579,8 +1133,8 @@ fn run_flash(arguments: &[String], globals: Globals) -> Result<i32, CliError> {
             let artifact = options.one("artifact")?;
             let profile = options.one("profile")?;
             let device = options.one("device")?;
-            let mut client = public_client(&globals)?;
-            let assessment = client.flash_assess(artifact, profile, device)?;
+            let runtime_dir = command_runtime_dir(&globals)?;
+            let assessment = supervisor::assess_plan(&runtime_dir, artifact, profile, device)?;
             print_flash_assessment(
                 globals.output,
                 artifact,
@@ -591,9 +1145,191 @@ fn run_flash(arguments: &[String], globals: Globals) -> Result<i32, CliError> {
             );
             Ok(0)
         }
+        "plan" => {
+            let intent = options.one("intent")?;
+            if intent != "full-restore" {
+                return Err(CliError::invalid(format!(
+                    "--intent accepts exactly 'full-restore', not {intent:?}."
+                )));
+            }
+            let artifact = options.one("artifact")?;
+            let profile = options.one("profile")?;
+            let device = options.one("device")?;
+            let runtime_dir = command_runtime_dir(&globals)?;
+            match supervisor::materialize_plan(&runtime_dir, artifact, profile, device)? {
+                MaterializePlanResponse::Plan(plan) => {
+                    print_flash_plan(globals.output, &plan, &[]);
+                    Ok(0)
+                }
+                MaterializePlanResponse::Assessment(assessment) => Err(CliError::new(
+                    "PLAN_UNAVAILABLE",
+                    format!(
+                        "No executable plan was created: {}",
+                        if assessment.unavailable_reason.is_empty() {
+                            assessment.availability
+                        } else {
+                            assessment.unavailable_reason
+                        }
+                    ),
+                    3,
+                    false,
+                )),
+            }
+        }
+        "apply" => {
+            let plan_id = options.one("plan")?;
+            let expected = options.one("expect-plan-sha256")?;
+            parse_digest("--expect-plan-sha256", expected)?;
+            let acknowledgements = options.many_required("ack")?.to_vec();
+            let detach = options.optional_one("detach")?.is_some();
+            let runtime_dir = command_runtime_dir(&globals)?;
+            let job_id =
+                supervisor::apply_plan(&runtime_dir, plan_id, expected, &acknowledgements, detach)?;
+            if detach {
+                match globals.output {
+                    Output::Human => {
+                        println!("Started durable job {job_id}.");
+                        println!("The authority supervisor continues to drive it.");
+                        println!("Next: arkforge job watch --job {job_id}");
+                    }
+                    Output::Json => println!(
+                        "{{\"schema\":\"arkforge.flash-apply/v1\",\"job_id\":{},\"detached\":true,\"authority_continues\":true,\"next_commands\":[{}]}}",
+                        json(&job_id),
+                        json(&format!("arkforge job watch --job {job_id}")),
+                    ),
+                }
+                return Ok(0);
+            }
+            let (events, summary, _) = watch_job(&globals, &job_id, 0, u64::MAX)?;
+            print_job_watch(
+                &globals,
+                &["flash", "apply"],
+                0,
+                u64::MAX,
+                &events,
+                &summary,
+                false,
+            );
+            Ok(match summary.state.as_str() {
+                "succeeded" => 0,
+                "outcomeUnknown" => 8,
+                "cancelledSafe" => 7,
+                _ if summary.terminal => 7,
+                _ => 9,
+            })
+        }
         other => Err(CliError::invalid(format!(
             "Unknown flash command {other:?}. Run 'arkforge help flash'."
         ))),
+    }
+}
+
+fn plan_acknowledgements(plan: &ExecutablePlan) -> Vec<String> {
+    if plan
+        .persistent_effects
+        .iter()
+        .any(|effect| effect.target == "userdata")
+    {
+        return vec!["data-loss:userdata".into()];
+    }
+    plan.persistent_effects
+        .iter()
+        .map(|effect| format!("overwrite:partition={}", effect.target))
+        .collect::<BTreeSet<_>>()
+        .into_iter()
+        .collect()
+}
+
+fn print_flash_plan(output: Output, plan: &ExecutablePlan, extra_acknowledgements: &[String]) {
+    let mut acknowledgements = plan_acknowledgements(plan);
+    acknowledgements.extend_from_slice(extra_acknowledgements);
+    acknowledgements.sort();
+    acknowledgements.dedup();
+    match output {
+        Output::Human => {
+            println!("Normal flash plan {}", plan.plan_id);
+            println!("  plan SHA-256: {}", plan.plan_sha256);
+            println!("  execution purpose: {}", plan.execution_purpose);
+            println!("  expires: {}", plan.expires_at_epoch_ms);
+            println!(
+                "  mechanics: {} ({})",
+                plan.mechanics_maturity_state, plan.mechanics_maturity_key_sha256
+            );
+            println!(
+                "  authority: {} ({})",
+                plan.authority_support_state, plan.authority_support_key_sha256
+            );
+            println!("  ordered steps: {}", plan.public_steps.len());
+            println!("  persistent effects: {}", plan.persistent_effects.len());
+            println!("Required acknowledgements:");
+            for token in &acknowledgements {
+                println!("  {token}");
+            }
+            let ack = acknowledgements
+                .iter()
+                .map(|token| format!(" --ack {token}"))
+                .collect::<String>();
+            println!(
+                "Next: arkforge flash apply --plan {} --expect-plan-sha256 {}{}",
+                plan.plan_id, plan.plan_sha256, ack
+            );
+        }
+        Output::Json => {
+            let steps = plan
+                .public_steps
+                .iter()
+                .map(|step| {
+                    format!(
+                        "{{\"step_id\":{},\"kind\":{},\"effect\":{},\"cancellation\":{},\"binding\":{},\"semantic_target\":{},\"content_sha256\":{},\"expected_mode_before\":{},\"expected_mode_after\":{},\"private_action_sha256\":{}}}",
+                        json(&step.step_id),
+                        json(&step.kind),
+                        json(&step.effect),
+                        json(&step.cancellation),
+                        json(&step.binding),
+                        json(&step.semantic_target),
+                        json(&step.content_sha256),
+                        json(&step.expected_mode_before),
+                        json(&step.expected_mode_after),
+                        json(&step.private_action_sha256),
+                    )
+                })
+                .collect::<Vec<_>>()
+                .join(",");
+            let effects = effects_json(&plan.persistent_effects);
+            println!(
+                "{{\"schema\":\"arkforge.flash-plan/v1\",\"plan_id\":{},\"plan_sha256\":{},\"provider_execution_plan_sha256\":{},\"public_projection_sha256\":{},\"execution_purpose\":{},\"expires_at_epoch_ms\":{},\"mechanics_maturity\":{{\"key_sha256\":{},\"state\":{},\"campaign\":{}}},\"authority_support\":{{\"key_sha256\":{},\"state\":{},\"campaign\":{}}},\"ordered_steps\":[{}],\"persistent_effects\":{},\"required_acknowledgements\":{},\"device_mutated\":false,\"next_commands\":[{}]}}",
+                json(&plan.plan_id),
+                json(&plan.plan_sha256),
+                json(&plan.provider_execution_plan_sha256),
+                json(&plan.public_projection_sha256),
+                json(&plan.execution_purpose),
+                plan.expires_at_epoch_ms,
+                json(&plan.mechanics_maturity_key_sha256),
+                json(&plan.mechanics_maturity_state),
+                optional_json(
+                    (!plan.mechanics_maturity_campaign.is_empty())
+                        .then_some(plan.mechanics_maturity_campaign.as_str())
+                ),
+                json(&plan.authority_support_key_sha256),
+                json(&plan.authority_support_state),
+                optional_json(
+                    (!plan.authority_support_campaign.is_empty())
+                        .then_some(plan.authority_support_campaign.as_str())
+                ),
+                steps,
+                effects,
+                json_strings(&acknowledgements),
+                json(&format!(
+                    "arkforge flash apply --plan {} --expect-plan-sha256 {}{}",
+                    plan.plan_id,
+                    plan.plan_sha256,
+                    acknowledgements
+                        .iter()
+                        .map(|token| format!(" --ack {token}"))
+                        .collect::<String>()
+                )),
+            );
+        }
     }
 }
 
@@ -604,8 +1340,6 @@ fn run_job(arguments: &[String], globals: Globals) -> Result<i32, CliError> {
     };
     match subcommand.as_str() {
         "list" => {
-            let options = Options::parse(&arguments[1..])?;
-            options.ensure_only(&[])?;
             let mut client = public_client(&globals)?;
             let jobs = client.job_list()?;
             print_jobs(globals.output, &jobs);
@@ -613,7 +1347,6 @@ fn run_job(arguments: &[String], globals: Globals) -> Result<i32, CliError> {
         }
         "show" => {
             let options = Options::parse(&arguments[1..])?;
-            options.ensure_only(&["job"])?;
             let job_id = options.one("job")?;
             let mut client = public_client(&globals)?;
             let job = client.job_show(job_id)?;
@@ -622,7 +1355,6 @@ fn run_job(arguments: &[String], globals: Globals) -> Result<i32, CliError> {
         }
         "watch" => {
             let options = Options::parse(&arguments[1..])?;
-            options.ensure_only(&["job", "after-sequence", "timeout-ms"])?;
             let job_id = options.one("job")?;
             let after_sequence = options
                 .optional_one("after-sequence")?
@@ -637,7 +1369,8 @@ fn run_job(arguments: &[String], globals: Globals) -> Result<i32, CliError> {
             let (events, summary, timed_out) =
                 watch_job(&globals, job_id, after_sequence, timeout_ms)?;
             print_job_watch(
-                globals.output,
+                &globals,
+                &["job", "watch"],
                 after_sequence,
                 timeout_ms,
                 &events,
@@ -646,10 +1379,85 @@ fn run_job(arguments: &[String], globals: Globals) -> Result<i32, CliError> {
             );
             Ok(0)
         }
+        "cancel" => {
+            let options = Options::parse(&arguments[1..])?;
+            let job_id = options.one("job")?;
+            let expected_sequence =
+                parse_u64("--expect-sequence", options.one("expect-sequence")?)?;
+            let runtime_dir = command_runtime_dir(&globals)?;
+            let state = supervisor::cancel_job(&runtime_dir, job_id, expected_sequence)?;
+            match globals.output {
+                Output::Human => {
+                    println!("Cancellation result for {job_id}: {state}");
+                    println!("The original journal remains durable; no action was replayed.");
+                }
+                Output::Json => println!(
+                    "{{\"schema\":\"arkforge.job-cancellation/v1\",\"job_id\":{},\"expect_sequence\":{},\"disposition\":{},\"automatic_replay\":false,\"next_commands\":[{}]}}",
+                    json(job_id),
+                    expected_sequence,
+                    json(&state),
+                    json(&format!("arkforge job show --job {job_id}")),
+                ),
+            }
+            Ok(match state.as_str() {
+                "cancelled-safe" | "already-terminal" => 0,
+                "outcome-unknown" => 8,
+                _ => 9,
+            })
+        }
+        "reconcile" => {
+            let options = Options::parse(&arguments[1..])?;
+            let job_id = options.one("job")?;
+            let runtime_dir = command_runtime_dir(&globals)?;
+            let status = supervisor::reconcile_job(&runtime_dir, job_id)?;
+            print_reconciliation(globals.output, &status);
+            Ok(if status.verdict == "stillUnknown" {
+                8
+            } else {
+                0
+            })
+        }
         "recovery" => run_job_recovery(&arguments[1..], globals),
         other => Err(CliError::invalid(format!(
             "Unknown job command {other:?}. Run 'arkforge help job'."
         ))),
+    }
+}
+
+fn print_reconciliation(output: Output, status: &supervisor::ReconcileStatus) {
+    match output {
+        Output::Human => {
+            println!("Reconciliation for {}: {}", status.job_id, status.verdict);
+            println!("  original state: {}", status.original_state);
+            println!("  possible-effect completeness: {}", status.completeness);
+            println!("  {}", status.detail);
+            for effect in &status.possible_effects {
+                println!("  possible effect: {effect}");
+            }
+            if status.verdict == "stillUnknown" {
+                println!("Next: arkforge job recovery guide --job {}", status.job_id);
+            }
+        }
+        Output::Json => println!(
+            "{{\"schema\":\"arkforge.job-reconciliation/v1\",\"job_id\":{},\"verdict\":{},\"detail\":{},\"possible_effect_completeness\":{},\"possible_effects\":{},\"original_state\":{},\"original_outcome_immutable\":true,\"automatic_replay_forbidden\":true,\"next_commands\":{}}}",
+            json(&status.job_id),
+            json(&status.verdict),
+            json(&status.detail),
+            json(&status.completeness),
+            json_strings(&status.possible_effects),
+            json(&status.original_state),
+            if status.verdict == "stillUnknown" {
+                format!(
+                    "[{}]",
+                    json(&format!(
+                        "arkforge job recovery guide --job {}",
+                        status.job_id
+                    ))
+                )
+            } else {
+                "[]".into()
+            }
+        ),
     }
 }
 
@@ -703,12 +1511,48 @@ fn run_job_recovery(arguments: &[String], globals: Globals) -> Result<i32, CliEr
     match subcommand.as_str() {
         "guide" => {
             let options = Options::parse(&arguments[1..])?;
-            options.ensure_only(&["job"])?;
             let job = options.one("job")?;
             let mut client = public_client(&globals)?;
             let guide = client.recovery_guide(job)?;
             print_recovery_guide(globals.output, &guide);
             Ok(0)
+        }
+        "plan" => {
+            let options = Options::parse(&arguments[1..])?;
+            let job_id = options.one("job")?;
+            let artifact = options.one("artifact")?;
+            let profile = options.one("profile")?;
+            let device = options.one("device")?;
+            let runtime_dir = command_runtime_dir(&globals)?;
+            match supervisor::materialize_recovery_plan(
+                &runtime_dir,
+                job_id,
+                artifact,
+                profile,
+                device,
+            )? {
+                MaterializePlanResponse::Plan(plan) => {
+                    print_flash_plan(
+                        globals.output,
+                        &plan,
+                        &[format!("recovery:supersedes-job={job_id}")],
+                    );
+                    Ok(0)
+                }
+                MaterializePlanResponse::Assessment(assessment) => Err(CliError::new(
+                    "RECOVERY_PLAN_UNAVAILABLE",
+                    format!(
+                        "No executable superseding plan was created: {}",
+                        if assessment.unavailable_reason.is_empty() {
+                            assessment.availability
+                        } else {
+                            assessment.unavailable_reason
+                        }
+                    ),
+                    3,
+                    false,
+                )),
+            }
         }
         other => Err(CliError::invalid(format!(
             "Unknown recovery command {other:?}. Run 'arkforge help job recovery'."
@@ -828,18 +1672,15 @@ fn run_rescue(arguments: &[String], globals: Globals) -> Result<i32, CliError> {
 
     match subcommand.as_str() {
         "list" => {
-            options.ensure_only(&[])?;
             print_devices(globals.output, &manager.list_devices()?);
             Ok(0)
         }
         "inspect" => {
-            options.ensure_only(&["device"])?;
             let result = manager.inspect(options.one("device")?)?;
             print_inspection(globals.output, &result);
             Ok(0)
         }
         "read" => {
-            options.ensure_only(&["device", "start-sector", "sector-count", "out"])?;
             let start = parse_u64("--start-sector", options.one("start-sector")?)?;
             let count = parse_u64("--sector-count", options.one("sector-count")?)?;
             let result = manager.read_sectors(
@@ -852,13 +1693,6 @@ fn run_rescue(arguments: &[String], globals: Globals) -> Result<i32, CliError> {
             Ok(0)
         }
         "plan" => {
-            options.ensure_only(&[
-                "device",
-                "operation",
-                "partition",
-                "image",
-                "expect-image-sha256",
-            ])?;
             let now = now_epoch_ms()?;
             let result = match options.one("operation")? {
                 "write-partition" => manager.plan_write(
@@ -882,7 +1716,6 @@ fn run_rescue(arguments: &[String], globals: Globals) -> Result<i32, CliError> {
             Ok(0)
         }
         "apply" => {
-            options.ensure_only(&["plan", "expect-plan-sha256", "ack"])?;
             let result = manager.apply(
                 options.one("plan")?,
                 parse_digest("--expect-plan-sha256", options.one("expect-plan-sha256")?)?,
@@ -902,6 +1735,7 @@ fn run_rescue(arguments: &[String], globals: Globals) -> Result<i32, CliError> {
 fn print_signing(
     output: Output,
     file: &Path,
+    input_digest: Sha256Digest,
     mode: &str,
     code: &SignedCode,
     violations: &[packaging::ContractViolation],
@@ -914,6 +1748,7 @@ fn print_signing(
                 if compliant { "compliant" } else { "refused" }
             );
             println!("file     {}", file.display());
+            println!("sha256   {input_digest}");
             println!("mode     {mode}");
             println!("facts    {}", code.summary());
             if compliant {
@@ -943,14 +1778,11 @@ fn print_signing(
             let next = if compliant {
                 Vec::new()
             } else {
-                vec![format!(
-                    "arkforge signing verify --file {} --mode {mode}",
-                    file.display()
-                )]
+                vec!["arkforge help signing verify --format json".to_string()]
             };
             println!(
-                "{{\"schema_version\":\"arkforge.signing-verification/v1\",\"file\":{},\"mode\":{},\"compliant\":{},\"facts\":{},\"violations\":[{}],\"contract\":{},\"next_commands\":{}}}",
-                json(&file.display().to_string()),
+                "{{\"schema\":\"arkforge.signing-verification/v1\",\"input_sha256\":{},\"mode\":{},\"compliant\":{},\"facts\":{},\"violations\":[{}],\"contract\":{},\"next_commands\":{}}}",
+                json(&input_digest.to_string()),
                 json(mode),
                 compliant,
                 json(&code.summary()),
@@ -1000,7 +1832,7 @@ fn print_device_observations(output: Output, observations: &[DeviceObservationVi
                 .collect::<Vec<_>>()
                 .join(",");
             println!(
-                "{{\"schema_version\":\"arkforge.device-list/v1\",\"observations\":[{values}],\"next_commands\":{}}}",
+                "{{\"schema\":\"arkforge.device-list/v1\",\"observations\":[{values}],\"next_commands\":{}}}",
                 json_array(&next)
             );
         }
@@ -1025,7 +1857,7 @@ fn print_device_observation(output: Output, observation: &DeviceObservationView)
             println!("Next: {next}");
         }
         Output::Json => println!(
-            "{{\"schema_version\":\"arkforge.device-observation/v1\",\"observation\":{},\"next_commands\":[{}]}}",
+            "{{\"schema\":\"arkforge.device-observation/v1\",\"observation\":{},\"next_commands\":[{}]}}",
             observation_json(observation),
             json(&next)
         ),
@@ -1048,7 +1880,7 @@ fn print_device_probe(output: Output, probe: &DeviceProbeView) {
             println!("Next: {next}");
         }
         Output::Json => println!(
-            "{{\"schema_version\":\"arkforge.device-probe/v1\",\"observation\":{},\"profile_id\":{},\"facts_sha256\":{},\"protocol_facts\":{},\"next_commands\":[{}]}}",
+            "{{\"schema\":\"arkforge.device-probe/v1\",\"observation\":{},\"profile_id\":{},\"facts_sha256\":{},\"protocol_facts\":{},\"next_commands\":[{}]}}",
             observation_json(&probe.observation),
             json(&probe.profile_id),
             json(&probe.facts_sha256),
@@ -1080,7 +1912,7 @@ fn print_device_wait(
             println!("Next: {next}");
         }
         Output::Json => println!(
-            "{{\"schema_version\":\"arkforge.device-wait/v1\",\"requested_profile\":{},\"requested_mode\":{},\"timeout_ms\":{},\"match\":{{\"observation\":{},\"profile_id\":{},\"facts_sha256\":{},\"protocol_facts\":{}}},\"next_commands\":[{}]}}",
+            "{{\"schema\":\"arkforge.device-wait/v1\",\"requested_profile\":{},\"requested_mode\":{},\"timeout_ms\":{},\"match\":{{\"observation\":{},\"profile_id\":{},\"facts_sha256\":{},\"protocol_facts\":{}}},\"next_commands\":[{}]}}",
             json(requested_profile),
             json(requested_mode),
             timeout_ms,
@@ -1107,7 +1939,7 @@ fn print_artifact_import(output: Output, imported: &ImportedObject) {
             println!("Next: {next}");
         }
         Output::Json => println!(
-            "{{\"schema_version\":\"arkforge.artifact-import/v1\",\"artifact_id\":{},\"sha256\":{},\"size_bytes\":{},\"deduplicated\":{},\"host_store_mutated\":{},\"device_accessed\":false,\"next_commands\":[{}]}}",
+            "{{\"schema\":\"arkforge.artifact-import/v1\",\"artifact_id\":{},\"sha256\":{},\"size_bytes\":{},\"deduplicated\":{},\"host_store_mutated\":{},\"device_accessed\":false,\"next_commands\":[{}]}}",
             json(&artifact_id),
             json(&artifact_id),
             imported.size_bytes,
@@ -1150,7 +1982,7 @@ fn print_artifact_list(output: Output, objects: &[(Sha256Digest, u64)]) {
                 .collect::<Vec<_>>()
                 .join(",");
             println!(
-                "{{\"schema_version\":\"arkforge.artifact-list/v1\",\"artifacts\":[{artifacts}],\"next_commands\":{}}}",
+                "{{\"schema\":\"arkforge.artifact-list/v1\",\"artifacts\":[{artifacts}],\"next_commands\":{}}}",
                 json_array(&next)
             );
         }
@@ -1176,7 +2008,7 @@ fn print_artifact_inspection(
             println!("Next: {next}");
         }
         Output::Json => println!(
-            "{{\"schema_version\":\"arkforge.artifact-inspection/v1\",{},\"profile_coverage\":{},\"device_accessed\":false,\"next_commands\":[{}]}}",
+            "{{\"schema\":\"arkforge.artifact-inspection/v1\",{},\"profile_coverage\":{},\"device_accessed\":false,\"next_commands\":[{}]}}",
             artifact_fields_json(artifact_id, manifest),
             coverage
                 .map(profile_coverage_json)
@@ -1196,7 +2028,7 @@ fn print_artifact(output: Output, artifact_id: &str, manifest: &InspectArtifactR
             println!("Next: {next}");
         }
         Output::Json => println!(
-            "{{\"schema_version\":\"arkforge.artifact/v1\",{},\"next_commands\":[{}]}}",
+            "{{\"schema\":\"arkforge.artifact/v1\",{},\"next_commands\":[{}]}}",
             artifact_fields_json(artifact_id, manifest),
             json(&next)
         ),
@@ -1347,17 +2179,58 @@ fn print_flash_assessment(
     intent: &str,
     assessment: &Assessment,
 ) {
-    let next = vec![format!(
-        "arkforge flash assess --artifact {artifact} --profile {profile} --device {device} --intent {intent}"
-    )];
+    let mechanics_permits = execution_support_state_permits(&assessment.mechanics_maturity_state);
+    let authority_permits = execution_support_state_permits(&assessment.authority_support_state);
+    let executable =
+        assessment.availability == "available" && mechanics_permits && authority_permits;
+    let next = if executable {
+        vec![format!(
+            "arkforge flash plan --artifact {artifact} --profile {profile} --device {device} --intent {intent}"
+        )]
+    } else {
+        vec!["arkforge daemon status".to_string()]
+    };
+    let mut blockers = Vec::new();
+    let mut blocker_codes = Vec::new();
+    if !mechanics_permits {
+        blocker_codes.push("MECHANICS_MATURITY_UNAVAILABLE");
+        blockers.push(format!(
+            "{{\"code\":\"MECHANICS_MATURITY_UNAVAILABLE\",\"state\":{},\"key_sha256\":{},\"remediation\":\"Run only a named reviewed hardware campaign or wait for production mechanics support.\"}}",
+            json(&assessment.mechanics_maturity_state),
+            json(&assessment.mechanics_maturity_key_sha256),
+        ));
+    }
+    if !authority_permits {
+        blocker_codes.push("AUTHORITY_SUPPORT_UNAVAILABLE");
+        blockers.push(format!(
+            "{{\"code\":\"AUTHORITY_SUPPORT_UNAVAILABLE\",\"state\":{},\"key_sha256\":{},\"remediation\":\"Bind exact HDC and use a named acceptance campaign, or wait for exact-key production support.\"}}",
+            json(&assessment.authority_support_state),
+            json(&assessment.authority_support_key_sha256),
+        ));
+    }
+    if blockers.is_empty() && !executable {
+        blocker_codes.push("PLAN_PRECONDITION_UNAVAILABLE");
+        blockers.push(format!(
+            "{{\"code\":\"PLAN_PRECONDITION_UNAVAILABLE\",\"state\":{},\"key_sha256\":null,\"remediation\":\"Inspect unavailable_reason and repeat assessment only after the named precondition changes.\"}}",
+            json(&assessment.availability),
+        ));
+    }
     match output {
         Output::Human => {
-            println!("Flash assessment (not executable)");
+            println!("Flash assessment (executable: {executable})");
             println!("artifact      {artifact}");
             println!("profile       {profile}");
             println!("device        {device}");
             println!("intent        {intent}");
             println!("availability  {}", assessment.availability);
+            println!(
+                "mechanics      {} ({})",
+                assessment.mechanics_maturity_state, assessment.mechanics_maturity_key_sha256
+            );
+            println!(
+                "authority      {} ({})",
+                assessment.authority_support_state, assessment.authority_support_key_sha256
+            );
             if !assessment.unavailable_reason.is_empty() {
                 println!("reason        {}", assessment.unavailable_reason);
             }
@@ -1375,10 +2248,14 @@ fn print_flash_assessment(
             print_key_values_human("data impact", &assessment.data_impact);
             print_key_values_human("unknowns", &assessment.unknowns);
             print_key_values_human("evidence requirements", &assessment.evidence_requirements);
+            for blocker in &blocker_codes {
+                println!("blocker       {blocker}");
+            }
             println!("Next: {}", next[0]);
         }
         Output::Json => println!(
-            "{{\"schema_version\":\"arkforge.flash-assessment/v1\",\"executable\":false,\"artifact_id\":{},\"profile_id\":{},\"device_id\":{},\"intent\":{},\"availability\":{},\"unavailable_reason\":{},\"would_be_steps\":{},\"known_persistent_effects\":{},\"data_impact\":{},\"unknowns\":{},\"evidence_requirements\":{},\"next_commands\":{}}}",
+            "{{\"schema\":\"arkforge.flash-assessment/v1\",\"executable\":{},\"artifact_id\":{},\"profile_id\":{},\"device_id\":{},\"intent\":{},\"availability\":{},\"unavailable_reason\":{},\"mechanics_maturity\":{{\"key_sha256\":{},\"state\":{}}},\"authority_support\":{{\"key_sha256\":{},\"state\":{}}},\"blockers\":[{}],\"would_be_steps\":{},\"known_persistent_effects\":{},\"data_impact\":{},\"unknowns\":{},\"evidence_requirements\":{},\"next_commands\":{}}}",
+            executable,
             json(artifact),
             json(profile),
             json(device),
@@ -1388,6 +2265,11 @@ fn print_flash_assessment(
                 (!assessment.unavailable_reason.is_empty())
                     .then_some(assessment.unavailable_reason.as_str())
             ),
+            json(&assessment.mechanics_maturity_key_sha256),
+            json(&assessment.mechanics_maturity_state),
+            json(&assessment.authority_support_key_sha256),
+            json(&assessment.authority_support_state),
+            blockers.join(","),
             steps_json(&assessment.would_be_steps),
             effects_json(&assessment.known_persistent_effects),
             key_values_json(&assessment.data_impact),
@@ -1396,6 +2278,10 @@ fn print_flash_assessment(
             json_array(&next)
         ),
     }
+}
+
+fn execution_support_state_permits(state: &str) -> bool {
+    matches!(state, "productionVerified" | "hardwareCampaign")
 }
 
 fn print_jobs(output: Output, jobs: &[JobSummary]) {
@@ -1420,7 +2306,7 @@ fn print_jobs(output: Output, jobs: &[JobSummary]) {
         Output::Json => {
             let values = jobs.iter().map(job_json).collect::<Vec<_>>().join(",");
             println!(
-                "{{\"schema_version\":\"arkforge.job-list/v1\",\"jobs\":[{values}],\"next_commands\":{}}}",
+                "{{\"schema\":\"arkforge.job-list/v1\",\"jobs\":[{values}],\"next_commands\":{}}}",
                 json_array(&next)
             );
         }
@@ -1443,7 +2329,7 @@ fn print_job(output: Output, job: &JobSummary) {
             }
         }
         Output::Json => println!(
-            "{{\"schema_version\":\"arkforge.job/v1\",\"job\":{},\"next_commands\":{}}}",
+            "{{\"schema\":\"arkforge.job/v1\",\"job\":{},\"next_commands\":{}}}",
             job_json(job),
             json_array(&next)
         ),
@@ -1451,7 +2337,8 @@ fn print_job(output: Output, job: &JobSummary) {
 }
 
 fn print_job_watch(
-    output: Output,
+    globals: &Globals,
+    command: &[&str],
     after_sequence: u64,
     timeout_ms: u64,
     events: &[JobEvent],
@@ -1470,7 +2357,20 @@ fn print_job_watch(
             summary.job_id
         )]
     };
-    match output {
+    if globals.jsonl {
+        for record in render_job_jsonl(
+            command,
+            after_sequence,
+            timeout_ms,
+            events,
+            summary,
+            timed_out,
+        ) {
+            println!("{record}");
+        }
+        return;
+    }
+    match globals.output {
         Output::Human => {
             println!(
                 "Job events after sequence {after_sequence} ({} returned)",
@@ -1514,7 +2414,7 @@ fn print_job_watch(
                 .collect::<Vec<_>>()
                 .join(",");
             println!(
-                "{{\"schema_version\":\"arkforge.job-watch/v1\",\"after_sequence\":{},\"timeout_ms\":{},\"timed_out\":{},\"events\":[{}],\"job\":{},\"next_commands\":{}}}",
+                "{{\"schema\":\"arkforge.job-watch/v1\",\"after_sequence\":{},\"timeout_ms\":{},\"timed_out\":{},\"events\":[{}],\"job\":{},\"next_commands\":{}}}",
                 after_sequence,
                 timeout_ms,
                 timed_out,
@@ -1524,6 +2424,52 @@ fn print_job_watch(
             );
         }
     }
+}
+
+fn render_job_jsonl(
+    command: &[&str],
+    after_sequence: u64,
+    timeout_ms: u64,
+    events: &[JobEvent],
+    summary: &JobSummary,
+    timed_out: bool,
+) -> Vec<String> {
+    let cursor = events
+        .last()
+        .map(|event| event.sequence)
+        .unwrap_or(after_sequence);
+    let next = if summary.terminal {
+        Vec::new()
+    } else {
+        vec![format!(
+            "arkforge job watch --job {} --after-sequence {cursor}",
+            summary.job_id
+        )]
+    };
+    let mut records = vec![format!(
+        "{{\"schema\":\"arkforge.job-stream/v1\",\"record\":\"metadata\",\"stream_sequence\":0,\"command\":{},\"job_id\":{},\"after_sequence\":{},\"timeout_ms\":{}}}",
+        json_array(command),
+        json(&summary.job_id),
+        after_sequence,
+        timeout_ms,
+    )];
+    for (index, event) in events.iter().enumerate() {
+        records.push(format!(
+            "{{\"schema\":\"arkforge.job-event/v1\",\"record\":\"event\",\"stream_sequence\":{},\"event\":{}}}",
+            index + 1,
+            job_event_json(event),
+        ));
+    }
+    records.push(format!(
+        "{{\"schema\":\"arkforge.command-result/v1\",\"record\":\"terminal\",\"stream_sequence\":{},\"ok\":true,\"command\":{},\"result\":{{\"timed_out\":{},\"job_terminal\":{},\"job\":{}}},\"next_commands\":{}}}",
+        events.len() + 1,
+        json_array(command),
+        timed_out,
+        summary.terminal,
+        job_json(summary),
+        json_array(&next),
+    ));
+    records
 }
 
 fn print_recovery_guide(output: Output, guide: &RecoveryGuideView) {
@@ -1555,7 +2501,7 @@ fn print_recovery_guide(output: Output, guide: &RecoveryGuideView) {
             println!("Next: Follow the actions in order. Never replay the original intent.");
         }
         Output::Json => println!(
-            "{{\"schema_version\":\"arkforge.recovery-guide/v1\",\"job_id\":{},\"original_state\":{},\"original_outcome_immutable\":{},\"automatic_replay_forbidden\":{},\"complete_overwrite_supported\":{},\"contract\":{},\"actions\":{},\"next_commands\":[]}}",
+            "{{\"schema\":\"arkforge.recovery-guide/v1\",\"job_id\":{},\"original_state\":{},\"original_outcome_immutable\":{},\"automatic_replay_forbidden\":{},\"complete_overwrite_supported\":{},\"contract\":{},\"actions\":{},\"next_commands\":[]}}",
             json(&guide.job_id),
             json(&guide.original_state),
             guide.original_outcome_immutable,
@@ -1628,12 +2574,16 @@ fn print_effects_human(title: &str, effects: &[Effect]) {
 
 fn observation_json(observation: &DeviceObservationView) -> String {
     format!(
-        "{{\"observation_id\":{},\"observed_at_epoch_ms\":{},\"mode\":{},\"topology_sha256\":{},\"descriptor_sha256\":{},\"identity_strength\":{},\"malformed_descriptor\":{},\"protocol_identity\":{}}}",
+        "{{\"observation_id\":{},\"observed_at_epoch_ms\":{},\"mode\":{},\"topology_sha256\":{},\"descriptor_sha256\":{},\"serial_sha256\":{},\"serial_evidence_kind\":{},\"identity_strength\":{},\"malformed_descriptor\":{},\"protocol_identity\":{}}}",
         json(&observation.observation_id),
         observation.observed_at_epoch_ms,
         json(&observation.mode),
         json(&observation.topology_sha256),
         json(&observation.descriptor_sha256),
+        optional_json(
+            (!observation.serial_sha256.is_empty()).then_some(observation.serial_sha256.as_str())
+        ),
+        json(&observation.serial_evidence_kind),
         json(&observation.identity_strength),
         observation.malformed_descriptor,
         key_values_json(&observation.protocol_identity)
@@ -1825,6 +2775,14 @@ impl Options {
             if option.is_empty() {
                 return Err(CliError::invalid("'--' is not a command option."));
             }
+            if option == "detach" {
+                values
+                    .entry(option.to_string())
+                    .or_default()
+                    .push("true".into());
+                index += 1;
+                continue;
+            }
             index += 1;
             let value = arguments
                 .get(index)
@@ -1839,25 +2797,6 @@ impl Options {
             index += 1;
         }
         Ok(Self { values })
-    }
-
-    fn ensure_only(&self, allowed: &[&str]) -> Result<(), CliError> {
-        let allowed: BTreeSet<&str> = allowed.iter().copied().collect();
-        if let Some(name) = self
-            .values
-            .keys()
-            .find(|name| !allowed.contains(name.as_str()))
-        {
-            return Err(CliError::invalid(format!("Unknown option --{name}.")));
-        }
-        for (name, values) in &self.values {
-            if name != "ack" && values.len() != 1 {
-                return Err(CliError::invalid(format!(
-                    "--{name} may be supplied only once."
-                )));
-            }
-        }
-        Ok(())
     }
 
     fn ensure_absent(&self, names: &[&str]) -> Result<(), CliError> {
@@ -1979,7 +2918,7 @@ fn print_devices(output: Output, devices: &[RescueDevice]) {
                 .collect::<Vec<_>>()
                 .join(",");
             println!(
-                "{{\"schema_version\":\"arkforge.rescue-device-list/v1\",\"devices\":[{values}],\"next_commands\":[\"arkforge rescue inspect --device <device-id>\"]}}"
+                "{{\"schema\":\"arkforge.rescue-device-list/v1\",\"devices\":[{values}],\"next_commands\":[\"arkforge rescue inspect --device <device-id>\"]}}"
             );
         }
     }
@@ -2027,7 +2966,7 @@ fn print_inspection(output: Output, result: &RescueInspection) {
                 .collect::<Vec<_>>()
                 .join(",");
             println!(
-                "{{\"schema_version\":\"arkforge.rescue-inspection/v1\",\"device\":{},\"capacity_sectors\":{},\"capacity_evidence_sha256\":{},\"layout_sha256\":{},\"layout_evidence_sha256\":{},\"profile_compatible\":{},\"profile_blocker\":{},\"partitions\":[{}],\"next_commands\":[\"arkforge rescue plan --device <device-id> --operation <write-partition|reset-device> ...\"]}}",
+                "{{\"schema\":\"arkforge.rescue-inspection/v1\",\"device\":{},\"capacity_sectors\":{},\"capacity_evidence_sha256\":{},\"layout_sha256\":{},\"layout_evidence_sha256\":{},\"profile_compatible\":{},\"profile_blocker\":{},\"partitions\":[{}],\"next_commands\":[\"arkforge help rescue plan --format json\"]}}",
                 device_json(&result.device),
                 result.capacity_sectors,
                 json(&result.capacity_evidence_digest.to_string()),
@@ -2053,13 +2992,16 @@ fn print_read(output: Output, result: &RescueReadReceipt) {
             println!("The device was not mutated.");
         }
         Output::Json => println!(
-            "{{\"schema_version\":\"arkforge.rescue-read-receipt/v1\",\"device_id\":{},\"start_sector\":{},\"sector_count\":{},\"bytes\":{},\"sha256\":{},\"output\":{},\"device_mutated\":false}}",
+            "{{\"schema\":\"arkforge.rescue-read-receipt/v1\",\"device_id\":{},\"start_sector\":{},\"sector_count\":{},\"bytes\":{},\"sha256\":{},\"output_written\":true,\"device_mutated\":false,\"next_commands\":[{}]}}",
             json(&result.device.device_id),
             result.begin_sector,
             result.sector_count,
             result.bytes,
             json(&result.sha256.to_string()),
-            json(&result.output.display().to_string())
+            json(&format!(
+                "arkforge rescue inspect --device {}",
+                result.device.device_id
+            ))
         ),
     }
 }
@@ -2098,7 +3040,7 @@ fn print_plan(output: Output, result: &RescuePlanSummary) {
                     .collect::<String>()
             );
             println!(
-                "{{\"schema_version\":\"arkforge.rescue-plan-summary/v1\",\"plan_id\":{},\"plan_sha256\":{},\"device_id\":{},\"operation\":{},\"expires_at_epoch_ms\":{},\"required_acknowledgements\":{},\"device_mutated\":false,\"next_commands\":[{}]}}",
+                "{{\"schema\":\"arkforge.rescue-plan-summary/v1\",\"plan_id\":{},\"plan_sha256\":{},\"device_id\":{},\"operation\":{},\"expires_at_epoch_ms\":{},\"required_acknowledgements\":{},\"device_mutated\":false,\"next_commands\":[{}]}}",
                 json(&result.plan_id),
                 json(&result.plan_sha256.to_string()),
                 json(&result.plan.device_id),
@@ -2131,7 +3073,7 @@ fn print_apply(output: Output, result: &RescueApplyResult) -> Result<(), CliErro
             }
         }
         Output::Json => println!(
-            "{{\"schema_version\":\"arkforge.rescue-receipt/v1\",\"receipt_id\":{},\"receipt_sha256\":{},\"plan_id\":{},\"plan_sha256\":{},\"device_id\":{},\"operation\":{},\"disposition\":{},\"evidence_sha256\":{},\"completed_at_epoch_ms\":{},\"detail\":{},\"payload_bytes\":{},\"payload_sha256\":{},\"replay_allowed\":false,\"next_commands\":{}}}",
+            "{{\"schema\":\"arkforge.rescue-receipt/v1\",\"receipt_id\":{},\"receipt_sha256\":{},\"plan_id\":{},\"plan_sha256\":{},\"device_id\":{},\"operation\":{},\"disposition\":{},\"evidence_sha256\":{},\"completed_at_epoch_ms\":{},\"detail\":{},\"payload_bytes\":{},\"payload_sha256\":{},\"replay_allowed\":false,\"next_commands\":{}}}",
             json(&receipt_id),
             json(&receipt_digest.to_string()),
             json(&receipt.plan_id),
@@ -2170,33 +3112,172 @@ fn device_json(device: &RescueDevice) -> String {
     )
 }
 
-fn print_error(output: Output, error: &CliError) {
-    let remediation = remediation(&error.code);
+fn print_error(output: Output, command: &[String], arguments: &[String], error: &CliError) {
+    let fallback_next = if matches!(
+        error.code.as_str(),
+        "PLAN_DIGEST_MISMATCH" | "UNEXPECTED_ACKNOWLEDGEMENT"
+    ) && command == ["rescue", "apply"]
+    {
+        Some("arkforge help rescue apply --format json".to_string())
+    } else {
+        remediation(&error.code).map(str::to_string)
+    };
+    let exact_retry = acknowledgement_retry_command(arguments, error);
+    let next_commands = exact_retry
+        .or(fallback_next)
+        .into_iter()
+        .collect::<Vec<_>>();
+    let remediation_text = match error.code.as_str() {
+        "ACKNOWLEDGEMENT_REQUIRED" => {
+            "Review the sealed effects and supply every required acknowledgement exactly once."
+        }
+        "OUTCOME_UNKNOWN" => {
+            "Do not retry automatically; reconcile the recorded job or device state."
+        }
+        "INVALID_ARGUMENT" => "Read the machine help for the exact command and option constraints.",
+        _ if next_commands.is_empty() => {
+            "Inspect the stable error code and preserve all durable evidence."
+        }
+        _ => "Follow one next_commands entry without changing effect-relevant identifiers.",
+    };
+    let structured_message = structured_error_message(error, arguments);
     match output {
         Output::Human => {
             eprintln!("arkforge: {}: {}", error.code, error.message);
-            if let Some(next) = remediation {
+            eprintln!("Remediation: {remediation_text}");
+            if let Some(next) = next_commands.first() {
                 eprintln!("Next: {next}");
             }
         }
-        Output::Json => eprintln!(
-            "{{\"schema_version\":\"arkforge.error/v1\",\"code\":{},\"message\":{},\"remediation\":{},\"retryable\":{},\"next_commands\":{}}}",
+        Output::Json => println!(
+            "{{\"schema\":\"arkforge.command-result/v1\",\"ok\":false,\"command\":{},\"error\":{{\"code\":{},\"message\":{},\"remediation\":{},\"retryable\":{},\"required_acknowledgements\":{},\"next_commands\":{}}}}}",
+            json_strings(command),
             json(&error.code),
-            json(&error.message),
-            optional_json(remediation),
+            json(&structured_message),
+            json(remediation_text),
             error.retryable,
-            remediation
-                .map(|value| format!("[{}]", json(value)))
-                .unwrap_or_else(|| "[]".into())
+            json_strings(&error.required_acknowledgements),
+            json_strings(&next_commands),
         ),
     }
+}
+
+fn structured_error_message(error: &CliError, arguments: &[String]) -> String {
+    let mut message = match error.code.as_str() {
+        "DAEMON_UNAVAILABLE" => {
+            "No CLI authority supervisor is listening in the selected runtime.".to_string()
+        }
+        "CONTROLLER_UNAVAILABLE" => {
+            "The selected runtime has no available authority controller.".to_string()
+        }
+        "MECHANICS_DAEMON_UNAVAILABLE" | "MECHANICS_DAEMON_START_FAILED" => {
+            "The signed sibling mechanics daemon is unavailable.".to_string()
+        }
+        code if code.ends_with("_IO_FAILED") || code == "ARTIFACT_STORE_FAILED" => {
+            "The operation failed at a local I/O boundary; no device action was inferred from the failure."
+                .to_string()
+        }
+        _ => error.message.clone(),
+    };
+    let mut index = 0;
+    while index < arguments.len() {
+        if matches!(
+            arguments[index].as_str(),
+            "--runtime-dir" | "--file" | "--profile-file" | "--image" | "--out" | "--hdc"
+        ) {
+            if let Some(value) = arguments.get(index + 1) {
+                message = message.replace(value, "<redacted-path>");
+            }
+            index += 2;
+        } else {
+            index += 1;
+        }
+    }
+    message
+}
+
+fn requested_command_path(arguments: &[String]) -> Vec<String> {
+    let mut command = Vec::new();
+    let mut index = 0;
+    while index < arguments.len() {
+        match arguments[index].as_str() {
+            "--runtime-dir" | "--output" => index += 2,
+            "--no-color" | "--quiet" | "--verbose" => index += 1,
+            value if value.starts_with('-') => break,
+            value => {
+                command.push(value.to_string());
+                index += 1;
+            }
+        }
+    }
+    let longest = (0..=command.len()).rev().find(|length| {
+        let key = command[..*length].join(" ");
+        HELP.iter().any(|spec| spec.command == key)
+    });
+    longest
+        .map(|length| command[..length].to_vec())
+        .unwrap_or(command)
+}
+
+fn acknowledgement_retry_command(arguments: &[String], error: &CliError) -> Option<String> {
+    if error.code != "ACKNOWLEDGEMENT_REQUIRED" || error.required_acknowledgements.is_empty() {
+        return None;
+    }
+    let mut command = vec!["arkforge".to_string()];
+    let mut index = 0;
+    while index < arguments.len() {
+        match arguments[index].as_str() {
+            "--runtime-dir" | "--output" => index += 2,
+            "--no-color" | "--quiet" | "--verbose" => index += 1,
+            _ => {
+                command.push(arguments[index].clone());
+                index += 1;
+            }
+        }
+    }
+    for token in &error.required_acknowledgements {
+        command.push("--ack".into());
+        command.push(token.clone());
+    }
+    Some(
+        command
+            .iter()
+            .map(|word| shell_word(word))
+            .collect::<Vec<_>>()
+            .join(" "),
+    )
+}
+
+fn shell_word(value: &str) -> String {
+    if value
+        .bytes()
+        .all(|byte| byte.is_ascii_alphanumeric() || b"-._:/=@".contains(&byte))
+    {
+        return value.to_string();
+    }
+    format!("'{}'", value.replace('\'', "'\\''"))
+}
+
+fn bracketed_values_after(message: &str, marker: &str) -> Vec<String> {
+    message
+        .split_once(marker)
+        .and_then(|(_, rest)| rest.split_once(']'))
+        .map(|(values, _)| {
+            values
+                .split(',')
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+                .map(str::to_string)
+                .collect()
+        })
+        .unwrap_or_default()
 }
 
 fn remediation(code: &str) -> Option<&'static str> {
     match code {
         "INVALID_ARGUMENT" => Some("arkforge help --format json"),
         "SIGNING_INPUT_REFUSED" => Some("arkforge help signing verify --format json"),
-        "DAEMON_UNAVAILABLE" | "IPC_IO_FAILED" => Some("arkforged --runtime-dir <dir>"),
+        "DAEMON_UNAVAILABLE" | "IPC_IO_FAILED" => Some("arkforge daemon start"),
         "PROTOCOL_REFUSED" | "IPC_RESPONSE_INVALID" | "IPC_RESPONSE_MISMATCH" => {
             Some("arkforge --version")
         }
@@ -2213,6 +3294,17 @@ fn remediation(code: &str) -> Option<&'static str> {
         "DEVICE_WAIT_TIMEOUT" | "AMBIGUOUS_DEVICE" => Some("arkforge device list"),
         "PROFILE_NOT_FOUND" | "NO_PROVIDER_FOR_PROFILE" => {
             Some("arkforge help device probe --format json")
+        }
+        "PLAN_UNAVAILABLE"
+        | "RECOVERY_PLAN_UNAVAILABLE"
+        | "AUTHORITY_SUPPORT_UNAVAILABLE"
+        | "AUTHORITY_SUPPORT_SEAL_MISMATCH"
+        | "MECHANICS_MATURITY_KEY_INVALID"
+        | "HDC_BINDING_REFUSED"
+        | "HDC_DIGEST_MISMATCH" => Some("arkforge daemon status"),
+        "MECHANICS_RUNTIME_CHANGED" => Some("arkforge help flash plan --format json"),
+        "PLAN_DIGEST_MISMATCH" | "UNEXPECTED_ACKNOWLEDGEMENT" => {
+            Some("arkforge help flash apply --format json")
         }
         "UNKNOWN_JOB" => Some("arkforge job list"),
         "STALE_JOB_SEQUENCE" => Some("arkforge job show --job <job-id>"),
@@ -2237,6 +3329,48 @@ fn help_spec(topic: &[String]) -> Result<&'static HelpSpec, CliError> {
             key
         ))
     })
+}
+
+fn help_constraints(spec: &HelpSpec) -> Vec<String> {
+    let mut constraints = Vec::new();
+    for option in spec.typed_options() {
+        for required in option.requires {
+            constraints.push(format!(
+                "{{\"kind\":\"requires\",\"if\":{},\"then\":{}}}",
+                json(&format!("--{}", option.name)),
+                json(&format!("--{required}"))
+            ));
+        }
+        for conflict in option.conflicts {
+            constraints.push(format!(
+                "{{\"kind\":\"conflicts\",\"left\":{},\"right\":{}}}",
+                json(&format!("--{}", option.name)),
+                json(&format!("--{conflict}"))
+            ));
+        }
+    }
+    if matches!(spec.command, "daemon run" | "daemon start") {
+        constraints.push(
+            "{\"kind\":\"allOrNone\",\"options\":[\"--hdc\",\"--expect-hdc-sha256\"]}".into(),
+        );
+        constraints.push(
+            "{\"kind\":\"campaignEvidenceOnly\",\"option\":\"--hardware-campaign\",\"productionSupport\":false}"
+                .into(),
+        );
+    }
+    if spec.command == "rescue plan" {
+        constraints.push(
+            "{\"kind\":\"oneOf\",\"branches\":[{\"when\":{\"--operation\":\"write-partition\"},\"required\":[\"--partition\",\"--image\",\"--expect-image-sha256\"]},{\"when\":{\"--operation\":\"reset-device\"},\"forbidden\":[\"--partition\",\"--image\",\"--expect-image-sha256\"]}]}"
+                .into(),
+        );
+    }
+    if matches!(spec.command, "flash apply" | "rescue apply") {
+        constraints.push(
+            "{\"kind\":\"exactAcknowledgementSet\",\"plan\":\"--plan\",\"digest\":\"--expect-plan-sha256\",\"tokens\":\"--ack\"}"
+                .into(),
+        );
+    }
+    constraints
 }
 
 fn print_help(spec: &HelpSpec, output: Output) {
@@ -2278,13 +3412,21 @@ fn print_help(spec: &HelpSpec, output: Output) {
         }
         Output::Json => {
             let options = spec
-                .options
-                .iter()
-                .map(|(name, description)| {
+                .typed_options()
+                .into_iter()
+                .map(|option| {
                     format!(
-                        "{{\"name\":{},\"description\":{}}}",
-                        json(name),
-                        json(description)
+                        "{{\"name\":{},\"type\":{},\"required\":{},\"repeatable\":{},\"enum_values\":{},\"sensitive\":{},\"effect_relevant\":{},\"requires\":{},\"conflicts\":{},\"description\":{}}}",
+                        json(&format!("--{}", option.name)),
+                        json(&option.value_type),
+                        option.required,
+                        option.repeatable,
+                        json_strings(&option.enum_values),
+                        option.sensitive,
+                        option.effect_relevant,
+                        json_strings(&option.requires),
+                        json_strings(&option.conflicts),
+                        json(option.description)
                     )
                 })
                 .collect::<Vec<_>>()
@@ -2306,17 +3448,24 @@ fn print_help(spec: &HelpSpec, output: Output) {
                 })
                 .collect::<Vec<_>>()
                 .join(",");
+            let constraints = help_constraints(spec).join(",");
             println!(
-                "{{\"schema_version\":{},\"command\":{},\"summary\":{},\"usage\":{},\"effect\":{},\"subcommands\":[{}],\"requires\":{},\"produces\":{},\"options\":[{}],\"examples\":{},\"next_commands\":{},\"exits\":[{}]}}",
+                "{{\"schema\":{},\"path\":{},\"command\":{},\"summary\":{},\"usage\":{},\"effect\":{},\"effect_detail\":{},\"interactive\":false,\"availability\":{{\"platforms\":[\"macos\"],\"requires_daemon\":{},\"requires_controller\":{}}},\"subcommands\":[{}],\"requires\":{},\"outputs\":{},\"output_descriptions\":{},\"options\":[{}],\"constraints\":[{}],\"examples\":{},\"next_commands\":{},\"exit_codes\":[{}]}}",
                 json(HELP_SCHEMA),
+                json_array(&spec.path()),
                 json(spec.command),
                 json(spec.summary),
                 json(spec.usage),
+                json(spec.effect_class()),
                 json(spec.effect),
+                spec.requires_daemon(),
+                spec.requires_controller(),
                 subcommands,
                 json_array(spec.requires),
+                json_strings(&spec.output_schemas()),
                 json_array(spec.produces),
                 options,
+                constraints,
                 json_array(spec.examples),
                 json_array(spec.next),
                 exits
@@ -2402,31 +3551,55 @@ fn optional_u64(value: Option<u64>) -> String {
 static HELP: &[HelpSpec] = &[
     HelpSpec {
         command: "",
-        summary: "ArkForge performs explicit, evidence-bound device firmware operations.",
-        usage: "arkforge [--runtime-dir <dir>] [--output <human|json>] <command> [options]",
+        summary: "ArkForge plans, executes, verifies, and recovers device firmware operations.",
+        usage: "arkforge [global options] <command> [<subcommand>] [options]",
         effect: "The root command only describes capabilities. It does not access or mutate a device.",
         requires: &[],
         produces: &["Human help or arkforge.command-help/v1 JSON."],
         options: &[
             ("--runtime-dir <dir>", "Per-user ArkForge state directory."),
             (
-                "--output <human|json>",
+                "--output <human|json|jsonl>",
                 "Stable presentation format; default: human.",
             ),
             (
                 "--no-color",
                 "Disable color; accepted for deterministic scripts.",
             ),
+            ("--quiet", "Print only the final human result."),
+            (
+                "--verbose",
+                "Include diagnostic evidence; never include secrets.",
+            ),
+            ("-h, --help", "Show help for the current command."),
             ("-V, --version", "Print this build's ArkForge version."),
         ],
         examples: &[
             "arkforge help --format json",
             "arkforge help flash assess --format json",
         ],
-        next: &["arkforge device list"],
+        next: &["arkforge doctor"],
         exits: &[
             (0, "Help or version produced."),
             (2, "Command or option is invalid."),
+        ],
+    },
+    HelpSpec {
+        command: "doctor",
+        summary: "Check whether this host can inspect or execute.",
+        usage: "arkforge doctor",
+        effect: "Read-only host and runtime assessment. It never starts services, opens a device for mutation, or changes local state.",
+        requires: &[],
+        produces: &[
+            "arkforge.doctor/v1 with inspect readiness, execution readiness, blockers, and an exact next command.",
+        ],
+        options: &[],
+        examples: &["arkforge --output json doctor"],
+        next: &["arkforge daemon start"],
+        exits: &[
+            (0, "Assessment produced, including a not-ready result."),
+            (2, "A global option is invalid."),
+            (10, "The host itself could not be assessed."),
         ],
     },
     HelpSpec {
@@ -2626,7 +3799,7 @@ static HELP: &[HelpSpec] = &[
     HelpSpec {
         command: "artifact inspect",
         summary: "Inspect one stored artifact offline and optionally compare profile target coverage.",
-        usage: "arkforge artifact inspect --artifact <artifact-id> [--profile <profile-file>]",
+        usage: "arkforge artifact inspect --artifact <artifact-id> [--profile-file <file>]",
         effect: "Read-only artifact parsing after opening bytes by content digest. It never reparses a caller path and never accesses a device.",
         requires: &["One exact artifact id already present in this runtime store."],
         produces: &[
@@ -2638,12 +3811,12 @@ static HELP: &[HelpSpec] = &[
                 "Exact stored content SHA-256; required.",
             ),
             (
-                "--profile <profile-file>",
+                "--profile-file <file>",
                 "Optional DeviceProfile used only for coverage comparison.",
             ),
         ],
         examples: &[
-            "arkforge --output json artifact inspect --artifact <64-lowercase-hex> --profile profiles/dayu200.yaml",
+            "arkforge --output json artifact inspect --artifact <64-lowercase-hex> --profile-file profiles/dayu200.yaml",
         ],
         next: &[
             "arkforge flash assess --artifact <artifact-id> --profile <profile-id> --device <observation-id> --intent full-restore",
@@ -2701,9 +3874,9 @@ static HELP: &[HelpSpec] = &[
     },
     HelpSpec {
         command: "flash",
-        summary: "Assess normal firmware work without granting execution authority.",
-        usage: "arkforge flash assess --artifact <id> --profile <id> --device <id> --intent full-restore",
-        effect: "The implemented public command is assessment-only and can never return or store an executable plan.",
+        summary: "Assess and seal normal firmware work against exact resources.",
+        usage: "arkforge flash <assess|plan|apply> [options]",
+        effect: "Assessment is read-only; plan stores a sealed host object; apply is the only destructive normal-flash command.",
         requires: &["Explicit artifact, profile, device observation, and semantic intent."],
         produces: &["Projected steps, effects, data impact, unknowns, and evidence requirements."],
         options: &[],
@@ -2723,7 +3896,7 @@ static HELP: &[HelpSpec] = &[
         command: "flash assess",
         summary: "Project the full-restore steps and effects for one exact semantic target.",
         usage: "arkforge flash assess --artifact <artifact-id> --profile <profile-id> --device <observation-id> --intent full-restore",
-        effect: "Read-only assessment through the public socket. The result is structurally non-executable; no plan is stored and no device is mutated.",
+        effect: "Read-only assessment through the paired runtime. The result is structurally non-executable; no binding or plan is stored and no device is mutated.",
         requires: &[
             "An inspected artifact id.",
             "A loaded profile id.",
@@ -2731,7 +3904,7 @@ static HELP: &[HelpSpec] = &[
             "The explicit intent full-restore.",
         ],
         produces: &[
-            "arkforge.flash-assessment/v1 with executable=false, projected steps, effects, data impact, blockers, and evidence requirements.",
+            "arkforge.flash-assessment/v1 with executable, exact mechanics/authority keys, projected steps, effects, data impact, blockers, and evidence requirements.",
         ],
         options: &[
             (
@@ -2747,7 +3920,7 @@ static HELP: &[HelpSpec] = &[
                 "Exact current observation; required.",
             ),
             (
-                "--intent full-restore",
+                "--intent <full-restore>",
                 "Only supported semantic intent; required.",
             ),
         ],
@@ -2775,10 +3948,105 @@ static HELP: &[HelpSpec] = &[
         ],
     },
     HelpSpec {
+        command: "flash plan",
+        summary: "Seal one executable normal-flash plan for exact artifact, profile, and device facts.",
+        usage: "arkforge flash plan --artifact <artifact-id> --profile <id@version> --device <observation-id> --intent full-restore",
+        effect: "Reads the exact device through the paired runtime and stores a sealed plan. It does not mutate the device.",
+        requires: &[
+            "A running paired CLI authority supervisor.",
+            "Exact mechanics maturity and independent authority support.",
+            "An imported artifact, canonical profile id@version, and exact current observation.",
+        ],
+        produces: &[
+            "arkforge.flash-plan/v1 with plan digest, ordered steps, sealed effects, expiry, and exact acknowledgement tokens.",
+        ],
+        options: &[
+            (
+                "--artifact <artifact-id>",
+                "Exact imported content id; required.",
+            ),
+            (
+                "--profile <id@version>",
+                "Exact loaded profile identity; required.",
+            ),
+            (
+                "--device <observation-id>",
+                "Exact current observation; required.",
+            ),
+            (
+                "--intent <full-restore>",
+                "Only supported semantic intent; required.",
+            ),
+        ],
+        examples: &[
+            "arkforge --output json flash plan --artifact <artifact-id> --profile org.openharmony.dayu200@1.0.0 --device OBS-PREFLIGHT --intent full-restore",
+        ],
+        next: &[
+            "Use the returned next_commands entry verbatim after reviewing required_acknowledgements.",
+        ],
+        exits: &[
+            (0, "Executable plan sealed; the device was not mutated."),
+            (2, "Inputs are invalid."),
+            (3, "Mechanics or authority support is unavailable."),
+            (5, "A named resource or runtime is unavailable."),
+            (6, "Target binding conflicts with durable state."),
+            (10, "Controller, store, or supervisor failed."),
+        ],
+    },
+    HelpSpec {
+        command: "flash apply",
+        summary: "Apply one sealed normal-flash plan under persistent per-step authority.",
+        usage: "arkforge flash apply --plan <plan-id> --expect-plan-sha256 <sha256> --ack <token> [--ack <token>...] [--detach]",
+        effect: "Destructive. Starts only the exact sealed plan after digest and acknowledgement equality; the supervisor mints one durable single-use permit per admitted step.",
+        requires: &[
+            "A live paired authority supervisor and fresh exact target continuity.",
+            "The exact plan digest and exactly every returned acknowledgement token, with no extras.",
+        ],
+        produces: &[
+            "arkforge.job-event/v1 and arkforge.command-result/v1 with a durable job id, ordered events, and terminal classification; --detach returns after durable job creation while authority continues.",
+        ],
+        options: &[
+            (
+                "--plan <plan-id>",
+                "Exact stored normal-flash plan; required.",
+            ),
+            (
+                "--expect-plan-sha256 <sha256>",
+                "Caller expectation for sealed plan bytes; required.",
+            ),
+            (
+                "--ack <token>",
+                "Exact required effect token; repeat exactly as returned.",
+            ),
+            (
+                "--detach",
+                "Return after job creation; does not cancel or transfer authority.",
+            ),
+        ],
+        examples: &[
+            "arkforge flash apply --plan PLAN-EXAMPLE --expect-plan-sha256 <64-lowercase-hex> --ack data-loss:userdata",
+        ],
+        next: &["arkforge job watch --job <job-id>"],
+        exits: &[
+            (0, "Detached job created or watched job succeeded."),
+            (2, "Inputs are invalid."),
+            (
+                3,
+                "Plan, target, authority, or freshness precondition refused.",
+            ),
+            (4, "Plan digest or acknowledgement set is not exact."),
+            (5, "Runtime or plan was not found."),
+            (7, "Operation ended with a known non-success outcome."),
+            (8, "Outcome is unknown; never retry automatically."),
+            (9, "Watching ended without a terminal result."),
+            (10, "Controller, supervisor, or journal failed."),
+        ],
+    },
+    HelpSpec {
         command: "job",
-        summary: "Read durable job state and no-replay recovery guidance.",
-        usage: "arkforge job <list|show|watch|recovery> [options]",
-        effect: "Read-only public-socket queries. These commands cannot cancel, reconcile, replay, or authorize a job.",
+        summary: "Observe, cancel, reconcile, and recover durable jobs.",
+        usage: "arkforge job <list|show|watch|cancel|reconcile|recovery> [options]",
+        effect: "Observation and reconciliation are read-only; cancel is explicit optimistic control; recovery creates a distinct superseding plan and never replays the original job.",
         requires: &["A running ArkForge runtime."],
         produces: &["Durable point-in-time job status or typed recovery guidance."],
         options: &[],
@@ -2839,7 +4107,7 @@ static HELP: &[HelpSpec] = &[
             "One exact job id and a resume sequence no greater than the durable last_sequence.",
         ],
         produces: &[
-            "arkforge.job-watch/v1 with strictly ordered typed events, terminal/timed-out status, and an exact resume command.",
+            "arkforge.job-watch/v1, arkforge.job-event/v1, and arkforge.command-result/v1 with strictly ordered typed events, terminal/timed-out status, and an exact resume command.",
         ],
         options: &[
             ("--job <job-id>", "Exact durable job id; required."),
@@ -2867,10 +4135,62 @@ static HELP: &[HelpSpec] = &[
         ],
     },
     HelpSpec {
+        command: "job cancel",
+        summary: "Request cancellation against one exact observed journal sequence.",
+        usage: "arkforge job cancel --job <job-id> --expect-sequence <u64>",
+        effect: "Mutating job control. It cancels only at the daemon's declared safe boundary and never kills an in-flight device action.",
+        requires: &[
+            "A live paired supervisor and the exact last_sequence returned by job show/watch.",
+        ],
+        produces: &[
+            "arkforge.job-cancellation/v1 with cancelled-safe, queued-at-safe-boundary, already-terminal, or outcome-unknown disposition.",
+        ],
+        options: &[
+            ("--job <job-id>", "Exact durable job; required."),
+            (
+                "--expect-sequence <u64>",
+                "Optimistic journal sequence; required.",
+            ),
+        ],
+        examples: &["arkforge --output json job cancel --job JOB-EXAMPLE --expect-sequence 4"],
+        next: &["arkforge job watch --job <job-id> --after-sequence <u64>"],
+        exits: &[
+            (0, "Cancellation reached a confirmed safe terminal state."),
+            (2, "Inputs are invalid."),
+            (5, "Runtime or job was not found."),
+            (6, "Expected sequence is stale."),
+            (8, "Outcome is unknown."),
+            (9, "Cancellation is queued at a safe boundary."),
+            (10, "Controller or supervisor failed."),
+        ],
+    },
+    HelpSpec {
+        command: "job reconcile",
+        summary: "Assess possible effects without replaying an unresolved job.",
+        usage: "arkforge job reconcile --job <job-id>",
+        effect: "Read-only controller assessment. It never dispatches, resumes, edits, or reclassifies the original job optimistically.",
+        requires: &["A durable job in the selected paired runtime."],
+        produces: &[
+            "arkforge.job-reconciliation/v1 with immutable original state, possible-effect completeness, effects, and verdict.",
+        ],
+        options: &[("--job <job-id>", "Exact durable job; required.")],
+        examples: &["arkforge --output json job reconcile --job JOB-EXAMPLE"],
+        next: &["arkforge job recovery guide --job <job-id>"],
+        exits: &[
+            (0, "No unresolved outcome remains."),
+            (5, "Runtime or job was not found."),
+            (
+                8,
+                "Original outcome remains unknown; never retry automatically.",
+            ),
+            (10, "Controller or supervisor failed."),
+        ],
+    },
+    HelpSpec {
         command: "job recovery",
-        summary: "Read safe recovery guidance without replaying or reconciling the original intent.",
-        usage: "arkforge job recovery guide --job <job-id>",
-        effect: "Read-only. The original outcome and intent remain immutable and automatic replay stays forbidden.",
+        summary: "Guide recovery or seal a distinct complete-overwrite superseding plan.",
+        usage: "arkforge job recovery <guide|plan> [options]",
+        effect: "Guide is read-only; plan may store a new sealed host object. Neither edits, resumes, or replays the original job.",
         requires: &["One exact durable job id."],
         produces: &[
             "Typed operator actions and complete-overwrite recovery contract facts, when available.",
@@ -2907,6 +4227,47 @@ static HELP: &[HelpSpec] = &[
         ],
     },
     HelpSpec {
+        command: "job recovery plan",
+        summary: "Seal a distinct superseding plan when the recovery contract covers every possible effect.",
+        usage: "arkforge job recovery plan --job <job-id> --artifact <artifact-id> --profile <id@version> --device <observation-id>",
+        effect: "Reads recovery eligibility and exact target facts, then stores a new sealed plan. It does not mutate the device or original job.",
+        requires: &[
+            "An outcome-unknown original job with bounded effects and a complete-overwrite recovery contract.",
+            "Fresh explicit artifact, profile, and device binding.",
+        ],
+        produces: &[
+            "arkforge.flash-plan/v1 for a new normal-flash plan requiring recovery:supersedes-job=<job-id> in addition to its effect acknowledgements.",
+        ],
+        options: &[
+            ("--job <job-id>", "Immutable original outcome; required."),
+            (
+                "--artifact <artifact-id>",
+                "Exact imported artifact; required.",
+            ),
+            ("--profile <id@version>", "Exact loaded profile; required."),
+            (
+                "--device <observation-id>",
+                "Fresh exact target observation; required.",
+            ),
+        ],
+        examples: &[
+            "arkforge --output json job recovery plan --job JOB-EXAMPLE --artifact <artifact-id> --profile org.openharmony.dayu200@1.0.0 --device OBS-PREFLIGHT",
+        ],
+        next: &[
+            "Use the returned flash apply command only after reviewing the new plan and superseding token.",
+        ],
+        exits: &[
+            (0, "Distinct superseding plan sealed."),
+            (2, "Inputs are invalid."),
+            (
+                3,
+                "Recovery eligibility or execution support is unavailable.",
+            ),
+            (5, "Runtime or named resource was not found."),
+            (10, "Controller, supervisor, or journal failed."),
+        ],
+    },
+    HelpSpec {
         command: "rescue",
         summary: "Perform an explicit native RockUSB recovery operation.",
         usage: "arkforge rescue <list|inspect|read|plan|apply> [options]",
@@ -2932,7 +4293,9 @@ static HELP: &[HelpSpec] = &[
         usage: "arkforge rescue list",
         effect: "Read-only USB enumeration and readiness classification. The device is not mutated.",
         requires: &[],
-        produces: &["A list of opaque rescue device IDs; raw serial values are not printed."],
+        produces: &[
+            "arkforge.rescue-device-list/v1 with opaque rescue device IDs; raw serial values are not printed.",
+        ],
         options: &[],
         examples: &["arkforge --output json rescue list"],
         next: &["arkforge rescue inspect --device <device-id>"],
@@ -2948,7 +4311,7 @@ static HELP: &[HelpSpec] = &[
         effect: "Read-only native RockUSB commands. The device is not mutated.",
         requires: &["One exact device ID returned by the current 'rescue list'."],
         produces: &[
-            "Capacity, layout digest, partition extents, evidence digests, and profile compatibility.",
+            "arkforge.rescue-inspection/v1 with capacity, layout digest, partition extents, evidence digests, and profile compatibility.",
         ],
         options: &[(
             "--device <device-id>",
@@ -2972,7 +4335,9 @@ static HELP: &[HelpSpec] = &[
             "A range within reported capacity and at most 512 MiB.",
             "An output path that does not exist.",
         ],
-        produces: &["A new file plus byte count and SHA-256 read receipt."],
+        produces: &[
+            "arkforge.rescue-read/v1 plus a new file, byte count, and SHA-256 read receipt.",
+        ],
         options: &[
             (
                 "--device <device-id>",
@@ -3012,7 +4377,7 @@ static HELP: &[HelpSpec] = &[
             "For write-partition: a profile-allowed partition, image path, and independently supplied image SHA-256.",
         ],
         produces: &[
-            "plan_id, plan_sha256, expiry, sealed effects, and the exact acknowledgement set required by apply.",
+            "arkforge.rescue-plan/v1 with plan_id, plan_sha256, expiry, sealed effects, and the exact acknowledgement set required by apply.",
         ],
         options: &[
             (
@@ -3020,7 +4385,7 @@ static HELP: &[HelpSpec] = &[
                 "Exact current Loader observation; required.",
             ),
             (
-                "--operation <operation>",
+                "--operation <write-partition|reset-device>",
                 "write-partition or reset-device; required.",
             ),
             (
@@ -3058,7 +4423,7 @@ static HELP: &[HelpSpec] = &[
             "Unchanged build, profile, device identity, and (for writes) partition layout.",
         ],
         produces: &[
-            "A separate RescueReceipt with semantic-success, confirmed-no-effect, or outcome-unknown disposition.",
+            "arkforge.rescue-receipt/v1 with a separate RescueReceipt and semantic-success, confirmed-no-effect, or outcome-unknown disposition.",
         ],
         options: &[
             ("--plan <plan-id>", "Stored rescue-plan:<sha256>; required."),
@@ -3080,7 +4445,7 @@ static HELP: &[HelpSpec] = &[
         exits: &[
             (0, "Native mutation has semantic success evidence."),
             (3, "A safety precondition refused before intent."),
-            (4, "Acknowledgement set is not exact."),
+            (4, "Plan digest or acknowledgement set is not exact."),
             (6, "Plan already has an intent and cannot be replayed."),
             (
                 7,
@@ -3116,14 +4481,14 @@ static HELP: &[HelpSpec] = &[
     HelpSpec {
         command: "daemon run",
         summary: "Run the CLI authority supervisor and mechanics daemon in the foreground.",
-        usage: "arkforge daemon run [--profile-file <file>]... [--hdc <absolute-path> --expect-hdc-sha256 <sha256>] [--require-release-signing]",
+        usage: "arkforge daemon run [--profile-file <file>]... [--hdc <absolute-path> --expect-hdc-sha256 <sha256>] [--hardware-campaign <campaign-id>] [--require-release-signing]",
         effect: "Service lifecycle. Creates owner-only local sockets and keeps both processes supervised until daemon stop is requested.",
         requires: &[
             "A runtime directory not owned by another live supervisor.",
             "HDC path and digest together when managed normal-mode control is required.",
         ],
         produces: &[
-            "A paired foreground runtime; the pairing secret exists only in supervisor/daemon memory and crosses an inherited stdin pipe.",
+            "arkforge.daemon-status/v1 for a paired foreground runtime; the pairing secret exists only in supervisor/daemon memory and crosses an inherited stdin pipe.",
         ],
         options: &[
             (
@@ -3142,6 +4507,10 @@ static HELP: &[HelpSpec] = &[
                 "--require-release-signing",
                 "Refuse unless arkforged satisfies the release signing contract.",
             ),
+            (
+                "--hardware-campaign <campaign-id>",
+                "Explicit mechanics and CLI-authority acceptance campaign; receipts remain campaign evidence and never publish production support.",
+            ),
         ],
         examples: &["arkforge --runtime-dir /tmp/arkforge daemon run"],
         next: &["arkforge daemon status"],
@@ -3156,7 +4525,7 @@ static HELP: &[HelpSpec] = &[
     HelpSpec {
         command: "daemon start",
         summary: "Start the same paired runtime under a background supervisor.",
-        usage: "arkforge daemon start [--profile-file <file>]... [--hdc <absolute-path> --expect-hdc-sha256 <sha256>] [--require-release-signing]",
+        usage: "arkforge daemon start [--profile-file <file>]... [--hdc <absolute-path> --expect-hdc-sha256 <sha256>] [--hardware-campaign <campaign-id>] [--require-release-signing]",
         effect: "Service lifecycle. Starts a background supervisor and mechanics daemon; it does not access or mutate a device.",
         requires: &["The same exact bindings as daemon run."],
         produces: &["arkforge.daemon-status/v1 after the public protocol handshake succeeds."],
@@ -3176,6 +4545,10 @@ static HELP: &[HelpSpec] = &[
             (
                 "--require-release-signing",
                 "Require the daemon release signing contract.",
+            ),
+            (
+                "--hardware-campaign <campaign-id>",
+                "Explicit mechanics and CLI-authority acceptance campaign; receipts remain campaign evidence and never publish production support.",
             ),
         ],
         examples: &["arkforge --output json daemon start"],
@@ -3287,11 +4660,89 @@ static HELP: &[HelpSpec] = &[
             ),
         ],
     },
+    HelpSpec {
+        command: "completion",
+        summary: "Generate shell completion from the canonical command tree.",
+        usage: "arkforge completion --shell <bash|zsh|fish>",
+        effect: "Read-only and offline. Completion text is generated from the same typed command definitions used by parsing and help.",
+        requires: &["An explicit supported shell."],
+        produces: &[
+            "Shell completion source on stdout, or arkforge.completion/v1 for structured output.",
+        ],
+        options: &[("--shell <bash|zsh|fish>", "Target shell; required.")],
+        examples: &["arkforge completion --shell zsh"],
+        next: &[
+            "Evaluate or install the generated source using the selected shell's normal mechanism.",
+        ],
+        exits: &[
+            (0, "Completion source produced."),
+            (2, "The shell or option is invalid."),
+        ],
+    },
+    HelpSpec {
+        command: "help",
+        summary: "Describe commands for humans or Agents without runtime access.",
+        usage: "arkforge help [<command> [<subcommand>...]] [--format <human|json>]",
+        effect: "Read-only and offline. Help is generated from the canonical typed command tree.",
+        requires: &[],
+        produces: &["Human command guidance or arkforge.command-help/v1."],
+        options: &[(
+            "--format <human|json>",
+            "Help presentation format; default follows --output.",
+        )],
+        examples: &[
+            "arkforge help --format json",
+            "arkforge help flash apply --format json",
+        ],
+        next: &["Follow one returned next_commands entry with exact identifiers."],
+        exits: &[
+            (0, "Help produced."),
+            (2, "The topic or format is invalid."),
+        ],
+    },
 ];
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn daemon_status_next_commands_do_not_loop_on_authority_blockers() {
+        let mut status = supervisor::DaemonStatus {
+            supervisor_pid: 1,
+            daemon_pid: 2,
+            epoch: 3,
+            protocol_major: 1,
+            protocol_minor: 0,
+            daemon_version: "0.1.0".into(),
+            mechanics_ready: true,
+            authority_support_available: false,
+            hdc_bound: false,
+            hdc_sha256: String::new(),
+            hardware_campaign: String::new(),
+            active_jobs: 0,
+            blockers: vec![
+                "AUTHORITY_HDC_UNBOUND".into(),
+                "AUTHORITY_SUPPORT_UNPUBLISHED".into(),
+            ],
+        };
+        assert_eq!(
+            daemon_next_commands(&status),
+            vec![
+                "arkforge daemon stop",
+                "arkforge help daemon start --format json"
+            ]
+        );
+
+        status.active_jobs = 1;
+        assert_eq!(daemon_next_commands(&status), vec!["arkforge job list"]);
+
+        status.active_jobs = 0;
+        status.hdc_bound = true;
+        status.authority_support_available = true;
+        status.blockers.clear();
+        assert_eq!(daemon_next_commands(&status), vec!["arkforge device list"]);
+    }
 
     #[test]
     fn globals_are_accepted_before_or_after_the_command() {
@@ -3315,15 +4766,22 @@ mod tests {
     #[test]
     fn rescue_options_reject_positionals_duplicates_and_unknowns() {
         assert!(Options::parse(&strings(&["device-id"])).is_err());
-        let duplicate = Options::parse(&strings(&["--device", "a", "--device", "b"])).unwrap();
-        assert!(duplicate.ensure_only(&["device"]).is_err());
-        let unknown = Options::parse(&strings(&["--backend", "external"])).unwrap();
-        assert!(unknown.ensure_only(&[]).is_err());
+        assert!(
+            validate_against_command_tree(&strings(&[
+                "rescue", "inspect", "--device", "a", "--device", "b"
+            ]))
+            .is_err()
+        );
+        assert!(
+            validate_against_command_tree(&strings(&["rescue", "list", "--backend", "external"]))
+                .is_err()
+        );
     }
 
     #[test]
     fn help_tree_has_every_implemented_leaf_and_agent_fields() {
         for topic in [
+            "doctor",
             "device list",
             "device show",
             "device probe",
@@ -3333,10 +4791,15 @@ mod tests {
             "artifact list",
             "artifact show",
             "flash assess",
+            "flash plan",
+            "flash apply",
             "job list",
             "job show",
             "job watch",
+            "job cancel",
+            "job reconcile",
             "job recovery guide",
+            "job recovery plan",
             "rescue list",
             "rescue inspect",
             "rescue read",
@@ -3347,6 +4810,8 @@ mod tests {
             "daemon status",
             "daemon stop",
             "signing verify",
+            "completion",
+            "help",
         ] {
             let topic = strings(&topic.split_whitespace().collect::<Vec<_>>());
             let help = help_spec(&topic).unwrap();
@@ -3363,7 +4828,16 @@ mod tests {
         assert_eq!(
             root_children,
             vec![
-                "device", "artifact", "flash", "job", "rescue", "daemon", "signing"
+                "doctor",
+                "device",
+                "artifact",
+                "flash",
+                "job",
+                "rescue",
+                "daemon",
+                "signing",
+                "completion",
+                "help"
             ]
         );
         assert_eq!(
@@ -3371,28 +4845,240 @@ mod tests {
                 .iter()
                 .map(|spec| spec.command)
                 .collect::<Vec<_>>(),
-            vec!["job list", "job show", "job watch", "job recovery"]
+            vec![
+                "job list",
+                "job show",
+                "job watch",
+                "job cancel",
+                "job reconcile",
+                "job recovery"
+            ]
         );
-        assert_eq!(child_specs("job recovery")[0].command, "job recovery guide");
+        assert_eq!(
+            child_specs("job recovery")
+                .iter()
+                .map(|spec| spec.command)
+                .collect::<Vec<_>>(),
+            vec!["job recovery guide", "job recovery plan"]
+        );
         assert_eq!(child_specs("signing")[0].command, "signing verify");
         assert_eq!(HELP_SCHEMA, "arkforge.command-help/v1");
+    }
+
+    #[test]
+    fn every_example_parses_from_the_same_typed_tree_without_io() {
+        for spec in HELP {
+            for example in spec.examples {
+                let words = example
+                    .split_whitespace()
+                    .map(example_fixture)
+                    .collect::<Vec<_>>();
+                assert_eq!(words.first().map(String::as_str), Some("arkforge"));
+                parse_only(&words[1..]).unwrap_or_else(|error| {
+                    panic!(
+                        "example for {:?} did not parse: {example:?}: {}: {}",
+                        spec.command, error.code, error.message
+                    )
+                });
+            }
+        }
+    }
+
+    #[test]
+    fn help_placeholders_files_and_ellipses_are_never_concrete_identifiers() {
+        let uppercase_digest = "A".repeat(64);
+        for artifact in [
+            "<artifact-id>",
+            "./firmware.tar.gz",
+            "...",
+            &uppercase_digest,
+        ] {
+            assert!(
+                validate_against_command_tree(&strings(&[
+                    "flash",
+                    "assess",
+                    "--artifact",
+                    artifact,
+                    "--profile",
+                    "org.openharmony.dayu200@1.0.0",
+                    "--device",
+                    "OBS-1",
+                    "--intent",
+                    "full-restore",
+                ]))
+                .is_err(),
+                "artifact value {artifact:?} must not parse"
+            );
+        }
+        assert!(
+            validate_against_command_tree(&strings(&[
+                "device",
+                "show",
+                "--device",
+                "<observation-id>"
+            ]))
+            .is_err()
+        );
+    }
+
+    #[test]
+    fn typed_relations_refuse_ambiguous_or_incomplete_effect_inputs() {
+        assert!(
+            validate_against_command_tree(&strings(&["daemon", "start", "--hdc", "/opt/hdc"]))
+                .is_err()
+        );
+        assert!(
+            validate_against_command_tree(&strings(&[
+                "rescue",
+                "plan",
+                "--device",
+                "RESCUE-1",
+                "--operation",
+                "write-partition",
+                "--partition",
+                "boot_linux"
+            ]))
+            .is_err()
+        );
+        assert!(
+            validate_against_command_tree(&strings(&[
+                "rescue",
+                "plan",
+                "--device",
+                "RESCUE-1",
+                "--operation",
+                "reset-device",
+                "--image",
+                "/tmp/image"
+            ]))
+            .is_err()
+        );
+        assert!(
+            validate_against_command_tree(&strings(&[
+                "flash",
+                "apply",
+                "--plan",
+                "PLAN-1",
+                "--expect-plan-sha256",
+                &"0".repeat(64)
+            ]))
+            .is_err()
+        );
+        assert!(
+            validate_against_command_tree(&strings(&[
+                "rescue",
+                "list",
+                "--backend",
+                "rkdeveloptool"
+            ]))
+            .is_err()
+        );
+        assert!(parse_globals(&strings(&["--quiet", "--verbose", "doctor"])).is_err());
+    }
+
+    #[test]
+    fn jsonl_job_stream_has_metadata_ordered_events_and_terminal_record() {
+        let events = vec![
+            JobEvent {
+                job_id: "JOB-1".into(),
+                sequence: 2,
+                job_state: "running".into(),
+                ..JobEvent::default()
+            },
+            JobEvent {
+                job_id: "JOB-1".into(),
+                sequence: 3,
+                job_state: "succeeded".into(),
+                ..JobEvent::default()
+            },
+        ];
+        let summary = JobSummary {
+            job_id: "JOB-1".into(),
+            state: "succeeded".into(),
+            terminal: true,
+            last_sequence: 3,
+            ..JobSummary::default()
+        };
+        let records = render_job_jsonl(&["job", "watch"], 1, 1000, &events, &summary, false);
+        assert_eq!(records.len(), 4);
+        assert!(records[0].contains("\"record\":\"metadata\""));
+        assert!(records[1].contains("\"stream_sequence\":1"));
+        assert!(records[2].contains("\"stream_sequence\":2"));
+        assert!(records[3].contains("\"record\":\"terminal\""));
+        assert!(records.iter().all(|record| !record.contains("\u{1b}[")));
+        assert!(records.iter().all(|record| !record.contains("connect_key")));
+        assert!(
+            records
+                .iter()
+                .all(|record| !record.contains("pairing_secret"))
+        );
     }
 
     #[test]
     fn signing_requires_explicit_file_and_mode_options() {
         let valid =
             Options::parse(&strings(&["--file", "./arkforged", "--mode", "release"])).unwrap();
-        valid.ensure_only(&["file", "mode"]).unwrap();
+        validate_against_command_tree(&strings(&[
+            "signing",
+            "verify",
+            "--file",
+            "./arkforged",
+            "--mode",
+            "release",
+        ]))
+        .unwrap();
         assert_eq!(valid.one("file").unwrap(), "./arkforged");
         assert_eq!(valid.one("mode").unwrap(), "release");
 
-        let implicit_release = Options::parse(&strings(&["--release", "true"])).unwrap();
-        assert!(implicit_release.ensure_only(&["file", "mode"]).is_err());
+        assert!(
+            validate_against_command_tree(&strings(&["signing", "verify", "--release", "true"]))
+                .is_err()
+        );
     }
 
     #[test]
     fn json_escaping_covers_agent_visible_control_characters() {
         assert_eq!(json("a\n\"b\\c\t"), "\"a\\n\\\"b\\\\c\\t\"");
+    }
+
+    #[test]
+    fn structured_errors_and_retries_do_not_echo_host_paths() {
+        let arguments = strings(&[
+            "--runtime-dir",
+            "/private/secret/runtime",
+            "--output",
+            "json",
+            "flash",
+            "apply",
+            "--plan",
+            "PLAN-1",
+            "--expect-plan-sha256",
+            &"0".repeat(64),
+        ]);
+        let error = CliError::new(
+            "ACKNOWLEDGEMENT_REQUIRED",
+            "Missing exact acknowledgements.",
+            4,
+            true,
+        )
+        .with_required_acknowledgements(vec!["data-loss:userdata".into()]);
+        let retry = acknowledgement_retry_command(&arguments, &error).unwrap();
+        assert!(!retry.contains("/private/secret/runtime"));
+        assert!(!retry.contains("--output"));
+        assert!(retry.contains("--plan PLAN-1"));
+        assert!(retry.contains("--ack data-loss:userdata"));
+
+        let error = CliError::new(
+            "PROFILE_FILE_NOT_FOUND",
+            "Cannot read profile /private/secret/profile.yaml: missing",
+            5,
+            false,
+        );
+        let message = structured_error_message(
+            &error,
+            &strings(&["--profile-file", "/private/secret/profile.yaml"]),
+        );
+        assert_eq!(message, "Cannot read profile <redacted-path>: missing");
     }
 
     #[test]
@@ -3414,5 +5100,62 @@ mod tests {
 
     fn strings(values: &[&str]) -> Vec<String> {
         values.iter().map(|value| (*value).to_string()).collect()
+    }
+
+    fn parse_only(arguments: &[String]) -> Result<(), CliError> {
+        let (_, command) = parse_globals(arguments)?;
+        if command.is_empty() || command == ["--version"] || command == ["-V"] {
+            return Ok(());
+        }
+        if command.first().is_some_and(|value| value == "help") {
+            let mut topic = Vec::new();
+            let mut index = 1;
+            while index < command.len() {
+                if command[index] == "--format" {
+                    let format = command
+                        .get(index + 1)
+                        .ok_or_else(|| CliError::invalid("--format requires a value."))?;
+                    if !matches!(format.as_str(), "human" | "json") {
+                        return Err(CliError::invalid("invalid help format"));
+                    }
+                    index += 2;
+                } else {
+                    topic.push(command[index].clone());
+                    index += 1;
+                }
+            }
+            help_spec(&topic)?;
+            return Ok(());
+        }
+        validate_against_command_tree(&command)
+    }
+
+    fn example_fixture(word: &str) -> String {
+        if !word.contains('<') {
+            return word.to_string();
+        }
+        if word.contains("sha256") || word.contains("64-lowercase-hex") {
+            return "0".repeat(64);
+        }
+        if word.contains("u64") {
+            return "1".into();
+        }
+        if word.contains("id@version") {
+            return "org.openharmony.dayu200@1.0.0".into();
+        }
+        if word.contains("file") || word.contains("mach-o") || word.contains("absolute-path") {
+            return "/tmp/arkforge-fixture".into();
+        }
+        match word {
+            "<artifact-id>" => "0".repeat(64),
+            "<profile-id>" => "org.openharmony.dayu200@1.0.0".into(),
+            "<observation-id>" => "OBS-FIXTURE".into(),
+            "<device-id>" => "RESCUE-FIXTURE".into(),
+            "<job-id>" => "JOB-FIXTURE".into(),
+            "<plan-id>" => "PLAN-FIXTURE".into(),
+            "<partition>" => "boot_linux".into(),
+            "<token>" => "data-loss:userdata".into(),
+            _ => word.replace(['<', '>'], "fixture"),
+        }
     }
 }

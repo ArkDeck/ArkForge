@@ -102,9 +102,9 @@ impl JobState {
             ReadOnlyDispatch => matches!(next, Preflight | Postflight | CancelledSafe),
             AwaitingPermit => matches!(next, StepIntentDurable | CancelledSafe),
             StepIntentDurable => matches!(next, Dispatching | OutcomeUnknown),
-            Dispatching => matches!(next, ReceiptDurable | OutcomeUnknown),
+            Dispatching => matches!(next, ReceiptDurable | CancelledSafe | OutcomeUnknown),
             ReceiptDurable => matches!(next, Checkpointed | OutcomeUnknown),
-            Checkpointed => matches!(next, RebindWait | Preflight | Postflight),
+            Checkpointed => matches!(next, RebindWait | Preflight | Postflight | CancelledSafe),
             RebindWait => matches!(next, Preflight | OutcomeUnknown),
             Postflight => matches!(next, Succeeded | ConfirmedFailed),
             OutcomeUnknown => matches!(next, Reconciling | RecoveryAssessable),
@@ -500,12 +500,14 @@ mod tests {
     }
 
     #[test]
-    fn cancellation_before_a_permit_is_safe_but_not_after_dispatch() {
+    fn cancellation_state_edges_exist_only_at_declared_safe_boundaries() {
         assert!(JobState::AwaitingPermit.may_transition_to(JobState::CancelledSafe));
-        // Once an intent is durable, the only honest answers are a receipt or
-        // an unknown outcome (architecture.md 13.4).
+        // StepIntentDurable cannot claim safety. Dispatching may transition
+        // only when JobRegistry proves the work never left its queue; an
+        // in-flight action instead reaches ReceiptDurable/Checkpointed first.
         assert!(!JobState::StepIntentDurable.may_transition_to(JobState::CancelledSafe));
-        assert!(!JobState::Dispatching.may_transition_to(JobState::CancelledSafe));
+        assert!(JobState::Dispatching.may_transition_to(JobState::CancelledSafe));
+        assert!(JobState::Checkpointed.may_transition_to(JobState::CancelledSafe));
     }
 
     fn bound(digest: Sha256Digest) -> ExecutionReadiness {

@@ -25,7 +25,7 @@ use arkforge_core::ids::OpaqueId;
 use arkforge_core::plan::{ExecutionPurpose, PlanMaterialization};
 use arkforge_core::profile::DeviceProfile;
 use arkforge_core::projection::StoredProviderPlan;
-use arkforge_core::{AuthorityBindingRef, PlanId, Sha256Digest};
+use arkforge_core::{AuthorityBindingRef, AuthoritySupportBinding, PlanId, Sha256Digest};
 use arkforge_transport::{DeviceObservation, DeviceTransport};
 use core::fmt;
 
@@ -118,6 +118,10 @@ pub struct MaterializeRequest<'a> {
     pub profile: &'a DeviceProfile,
     pub probe: &'a ProviderProbe,
     pub authority_binding: AuthorityBindingRef,
+    /// Independent support decision published by the paired authority. The
+    /// provider requires it in addition to mechanics maturity and seals it
+    /// into every executable envelope.
+    pub authority_support: AuthoritySupportBinding,
     pub toolchain: ToolchainIdentity,
     pub host_platform: HostPlatform,
     pub driver_facts_digest: Sha256Digest,

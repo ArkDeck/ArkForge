@@ -33,6 +33,7 @@ dependencies = [
  "arkforge-authority-api",
  "arkforge-core",
  "arkforge-ipc",
+ "arkforge-transport",
  "arkforged",
 ]
 

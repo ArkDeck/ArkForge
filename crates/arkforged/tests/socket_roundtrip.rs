@@ -32,6 +32,10 @@ impl Drop for Daemon {
 
 impl Daemon {
     fn start(name: &str) -> Option<Self> {
+        Self::start_with_pairing(name, false)
+    }
+
+    fn start_with_pairing(name: &str, paired: bool) -> Option<Self> {
         let runtime_dir =
             std::env::temp_dir().join(format!("arkforged-live-{}-{}", name, std::process::id()));
         let _ = std::fs::remove_dir_all(&runtime_dir);
@@ -42,7 +46,8 @@ impl Daemon {
             .parent()?
             .to_path_buf();
 
-        let child = Command::new(env!("CARGO_BIN_EXE_arkforged"))
+        let mut command = Command::new(env!("CARGO_BIN_EXE_arkforged"));
+        command
             .arg("--runtime-dir")
             .arg(&runtime_dir)
             .arg("--profile")
@@ -50,9 +55,19 @@ impl Daemon {
             .arg("--transcript")
             .arg(repo_root.join("transcripts/dayu200-gj4-ecamp-96effff15.yaml"))
             .stdout(Stdio::null())
-            .stderr(Stdio::null())
-            .spawn()
-            .ok()?;
+            .stderr(Stdio::null());
+        if paired {
+            command
+                .arg("--pair-from-stdin")
+                .arg("1")
+                .stdin(Stdio::piped());
+        }
+        let mut child = command.spawn().ok()?;
+        if paired {
+            let stdin = child.stdin.as_mut()?;
+            stdin.write_all(&[0xA5; 32]).ok()?;
+            stdin.flush().ok()?;
+        }
 
         let daemon = Daemon { child, runtime_dir };
         // Wait for both sockets rather than sleeping a fixed interval.
@@ -102,6 +117,26 @@ impl Daemon {
             Some(refusal) => Err(refusal.clone()),
             None => Ok((stream, ack)),
         }
+    }
+}
+
+#[test]
+fn a_paired_daemon_exits_when_its_authority_liveness_pipe_closes() {
+    let Some(mut daemon) = Daemon::start_with_pairing("liveness", true) else {
+        panic!("the paired daemon did not come up");
+    };
+    drop(daemon.child.stdin.take());
+    let deadline = Instant::now() + Duration::from_secs(3);
+    loop {
+        if let Some(status) = daemon.child.try_wait().unwrap() {
+            assert_eq!(status.code(), Some(11));
+            break;
+        }
+        assert!(
+            Instant::now() < deadline,
+            "orphaned paired daemon did not exit after authority EOF"
+        );
+        std::thread::sleep(Duration::from_millis(25));
     }
 }
 

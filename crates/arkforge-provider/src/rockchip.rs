@@ -141,6 +141,21 @@ impl RockchipProvider {
                 ),
             });
         }
+        if !request.authority_support.state.permits_execution() {
+            blockers.push(ExecutionUnknown {
+                id: OpaqueId::new("RK-A01").expect("literal identifier"),
+                summary: format!(
+                    "authority implementation is {}{}",
+                    request.authority_support.state.as_str(),
+                    request
+                        .authority_support
+                        .state
+                        .blocker()
+                        .map(|blocker| format!(": {blocker}"))
+                        .unwrap_or_default()
+                ),
+            });
+        }
 
         // Build the whole plan regardless, so an assessment is as informative
         // as an executable plan minus its authority.
@@ -221,6 +236,7 @@ impl RockchipProvider {
             // producing it. Sealing it is what keeps those two apart in the
             // evidence afterwards.
             maturity: maturity_state,
+            authority_support: request.authority_support.clone(),
             negotiated_capabilities: NegotiatedCapabilities::empty(),
             public_steps: built.public_steps,
             effect_set: built.effect_set,

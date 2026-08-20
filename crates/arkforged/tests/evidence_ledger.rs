@@ -287,7 +287,7 @@ fn the_unshippable_toolchain_finding_is_closed_by_native_packaging() {
         LEDGER.contains("### AD-023 对 toolchain 摘要的后果"),
         "the consequence for the maturity combination must be written down, not implied"
     );
-    let package_script = include_str!("../../../packaging/macos/package-arkforged.sh");
+    let package_script = include_str!("../../../packaging/macos/package-arkforge.sh");
     assert!(!package_script.contains("rkdeveloptool"));
     assert!(!package_script.contains("RKDEVELOPTOOL"));
 }

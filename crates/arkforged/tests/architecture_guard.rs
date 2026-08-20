@@ -130,6 +130,7 @@ fn the_dependency_direction_matches_the_architecture() {
                 "arkforge-authority-api",
                 "arkforge-artifact",
                 "arkforge-ipc",
+                "arkforge-transport",
                 "arkforged",
             ]),
         ),
@@ -446,7 +447,9 @@ mod support {
     use arkforge_core::ids::{OpaqueId, PlanId};
     use arkforge_core::plan::{ExecutionPurpose, FlashPlanEnvelope};
     use arkforge_core::profile;
-    use arkforge_core::{AuthorityBindingRef, AuthorityNamespace};
+    use arkforge_core::{
+        AuthorityBindingRef, AuthorityNamespace, AuthoritySupportBinding, AuthoritySupportState,
+    };
     use arkforge_provider::rockchip::RockchipProvider;
     use arkforge_provider::{
         FlashIntent, FlashProvider, MaterializeRequest, MaturityRegistry, ProbeContext,
@@ -515,6 +518,10 @@ mod support {
                 binding_id: OpaqueId::new("TGT-958780b2ffb7").unwrap(),
                 binding_revision: 2,
                 stable_identity_digest: sha256(b"device"),
+            },
+            authority_support: AuthoritySupportBinding {
+                key_digest: sha256(b"test authority support"),
+                state: AuthoritySupportState::ProductionVerified,
             },
             toolchain,
             host_platform,

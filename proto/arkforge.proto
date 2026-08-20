@@ -287,6 +287,11 @@ message MaterializePlanRequest {
   // `supersedingRecovery` seals a distinct immutable recovery plan. It is
   // never interpreted as permission to replay an earlier primary plan.
   string execution_purpose = 10;
+  // Independent CLI/ArkDeck authority maturity. The daemon seals these exact
+  // caller-bound fields and never derives them from mechanics maturity.
+  bytes authority_support_key_sha256 = 11;
+  string authority_support_state = 12;
+  string authority_support_detail = 13;
 }
 
 message PublicStepMessage {
@@ -327,6 +332,12 @@ message ExecutablePlan {
   repeated KeyValue data_impact = 8;
   uint64 expires_at_epoch_ms = 9;
   string execution_purpose = 10;
+  string mechanics_maturity_key_sha256 = 11;
+  string mechanics_maturity_state = 12;
+  string mechanics_maturity_campaign = 13;
+  string authority_support_key_sha256 = 14;
+  string authority_support_state = 15;
+  string authority_support_campaign = 16;
 }
 
 message Assessment {
@@ -338,6 +349,10 @@ message Assessment {
   string availability = 5;
   string unavailable_reason = 6;
   repeated KeyValue data_impact = 7;
+  string mechanics_maturity_key_sha256 = 8;
+  string mechanics_maturity_state = 9;
+  string authority_support_key_sha256 = 10;
+  string authority_support_state = 11;
 }
 
 message StartExecutionRequest {

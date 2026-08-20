@@ -15,6 +15,7 @@ arkforge-core = { path = "../arkforge-core" }
 arkforge-authority-api = { path = "../arkforge-authority-api" }
 arkforge-artifact = { path = "../arkforge-artifact" }
 arkforge-ipc = { path = "../arkforge-ipc" }
+arkforge-transport = { path = "../arkforge-transport" }
 arkforged = { path = "../arkforged" }
 
 [dev-dependencies]

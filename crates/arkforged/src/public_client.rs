@@ -60,6 +60,10 @@ pub struct DeviceObservationView {
     pub identity_strength: String,
     pub malformed_descriptor: bool,
     pub protocol_identity: Vec<KeyValue>,
+    /// Domain-separated digest only; the raw descriptor serial/connect key is
+    /// never exposed on the public socket.
+    pub serial_sha256: String,
+    pub serial_evidence_kind: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -400,6 +404,11 @@ fn decode_observation(payload: &[u8]) -> Result<DeviceObservationView, PublicCli
                 })?)
                 .map_err(|error| PublicClientError::decode("Invalid protocol identity", error))?,
             ),
+            9 => observation.serial_sha256 = string_value(value, field, "serial digest")?,
+            10 => {
+                observation.serial_evidence_kind =
+                    string_value(value, field, "serial evidence kind")?
+            }
             _ => {}
         }
     }
@@ -558,11 +567,15 @@ mod tests {
             }
             .encode(),
         );
+        wire::write_string(&mut encoded, 9, "serial-digest");
+        wire::write_string(&mut encoded, 10, "descriptor");
 
         let decoded = decode_observation(&encoded).unwrap();
         assert_eq!(decoded.observation_id, "OBS-1");
         assert_eq!(decoded.protocol_identity[0].key, "usbVendorId");
         assert_eq!(decoded.protocol_identity[0].value, "2207");
+        assert_eq!(decoded.serial_sha256, "serial-digest");
+        assert_eq!(decoded.serial_evidence_kind, "descriptor");
     }
 
     #[test]

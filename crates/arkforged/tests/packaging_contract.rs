@@ -42,11 +42,14 @@ fn the_shipped_entitlement_files_are_empty_dictionaries() {
 }
 
 #[test]
-fn the_release_packager_contains_only_the_native_daemon() {
-    const SCRIPT: &str = include_str!("../../../packaging/macos/package-arkforged.sh");
+fn the_release_packager_contains_only_the_canonical_cli_daemon_pair() {
+    const SCRIPT: &str = include_str!("../../../packaging/macos/package-arkforge.sh");
 
+    assert!(SCRIPT.contains("cp \"$release_bin/arkforge\" \"$stage/arkforge\""));
     assert!(SCRIPT.contains("cp \"$release_bin/arkforged\" \"$stage/arkforged\""));
+    assert!(SCRIPT.contains("\\\"arkforge\\\": {"));
     assert!(SCRIPT.contains("\\\"arkforged\\\": {"));
+    assert!(SCRIPT.contains("for component in arkforge arkforged"));
     assert!(SCRIPT.contains("-p arkforged --bin arkforged -p arkforge-cli --bin arkforge"));
     assert!(SCRIPT.contains("\"$release_bin/arkforge\" signing verify"));
     assert!(!SCRIPT.contains("arkforge-signing"));

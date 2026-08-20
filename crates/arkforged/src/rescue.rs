@@ -940,11 +940,12 @@ impl<B: RescueBackend> RescueManager<B> {
     ) -> Result<RescueApplyResult, RescueError> {
         let (plan, plan_digest, plan_bytes) = self.load_plan(plan_id)?;
         if plan_digest != expected_plan_digest {
-            return Err(RescueError::refused(
+            return Err(RescueError::new(
                 "PLAN_DIGEST_MISMATCH",
                 format!(
                     "The stored rescue plan hashes to {plan_digest}; --expect-plan-sha256 supplied {expected_plan_digest}."
                 ),
+                4,
             ));
         }
         if plan.expires_at_epoch_ms <= now_epoch_ms {

@@ -118,6 +118,28 @@ pub struct Job {
     in_flight: Option<PendingDispatch>,
     /// Set once the job has stopped for a reason that is not a state.
     stopped: Option<JobStop>,
+    /// Durable operator intent to stop after the current non-interruptible
+    /// action reaches a settled checkpoint.
+    cancellation_requested: bool,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CancellationDisposition {
+    QueuedAtSafeBoundary,
+    CancelledSafe,
+    AlreadyTerminal,
+    OutcomeUnknown,
+}
+
+impl CancellationDisposition {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::QueuedAtSafeBoundary => "queued-at-safe-boundary",
+            Self::CancelledSafe => "cancelled-safe",
+            Self::AlreadyTerminal => "already-terminal",
+            Self::OutcomeUnknown => "outcome-unknown",
+        }
+    }
 }
 
 /// What a job is waiting for.
@@ -425,6 +447,7 @@ impl JobRegistry {
             pending: None,
             in_flight: None,
             stopped: None,
+            cancellation_requested: false,
         };
 
         let digest = job.journal.append(
@@ -970,7 +993,11 @@ impl JobRegistry {
             |_| {},
         );
 
-        advance(job, envelope, now_epoch_ms, checkpoint)
+        if job.cancellation_requested {
+            finish_queued_cancellation(job, now_epoch_ms, checkpoint)
+        } else {
+            advance(job, envelope, now_epoch_ms, checkpoint)
+        }
     }
 
     /// Records what the authority's own control channel observed.
@@ -1145,7 +1172,11 @@ impl JobRegistry {
         );
 
         job.pending = None;
-        advance(job, envelope, now_epoch_ms, checkpoint)
+        if job.cancellation_requested {
+            finish_queued_cancellation(job, now_epoch_ms, checkpoint)
+        } else {
+            advance(job, envelope, now_epoch_ms, checkpoint)
+        }
     }
 
     /// Cancels a job, if cancelling is still safe.
@@ -1153,20 +1184,17 @@ impl JobRegistry {
     /// architecture.md 13.4: before a permit, `CancelledSafe`. Once an intent
     /// is durable there is an unresolved effect, and a job with one may not
     /// return `CancelledSafe` — the honest answer is an unknown outcome.
-    pub fn cancel(&mut self, job_id: &str, now_epoch_ms: u64) -> Result<JobState, JobError> {
+    pub fn cancel(
+        &mut self,
+        job_id: &str,
+        now_epoch_ms: u64,
+    ) -> Result<CancellationDisposition, JobError> {
         let job = self.jobs.get_mut(job_id).ok_or(JobError::UnknownJob)?;
-        let ledger = PermitLedger::from_journal(job.journal.journal());
-        if !ledger.unresolved().is_empty() {
-            return Err(JobError::CancelWouldHideAnUnresolvedEffect);
+        if job.state == JobState::OutcomeUnknown {
+            return Ok(CancellationDisposition::OutcomeUnknown);
         }
-        if !matches!(
-            job.state,
-            JobState::Planned
-                | JobState::AwaitingStart
-                | JobState::Preflight
-                | JobState::AwaitingPermit
-        ) {
-            return Err(JobError::CancelWouldHideAnUnresolvedEffect);
+        if job.state.is_terminal() {
+            return Ok(CancellationDisposition::AlreadyTerminal);
         }
         let digest = job.journal.append(
             JournalRecordKind::CancellationRequested,
@@ -1175,28 +1203,95 @@ impl JobRegistry {
             id(job_id)?,
             Vec::new(),
         )?;
+        job.cancellation_requested = true;
+
+        // A dispatch still sitting in the daemon queue has not crossed the
+        // process boundary. Drop it and conclude safely; an in-flight or
+        // authority-owned action must be allowed to reach its receipt first.
+        if matches!(job.pending, Some(Pending::Dispatch { .. })) && job.in_flight.is_none() {
+            job.pending = None;
+            job.move_to(JobState::CancelledSafe)?;
+            conclude_cancellation(job, now_epoch_ms, digest, "cancelled before dispatch")?;
+            return Ok(CancellationDisposition::CancelledSafe);
+        }
+
+        if job.in_flight.is_some()
+            || matches!(job.pending, Some(Pending::Control { .. }))
+            || matches!(
+                job.state,
+                JobState::StepIntentDurable | JobState::Dispatching
+            )
+        {
+            job.publish(JobEventKind::StateChanged, now_epoch_ms, digest, |event| {
+                event.facts.push(KeyValue {
+                    key: "cancellation".into(),
+                    value: "queued-at-safe-boundary".into(),
+                });
+            });
+            return Ok(CancellationDisposition::QueuedAtSafeBoundary);
+        }
+
         if job.state != JobState::AwaitingPermit {
             job.state = JobState::AwaitingPermit;
         }
         job.move_to(JobState::CancelledSafe)?;
         job.pending = None;
-        job.stopped = Some(JobStop::RefusedByAuthority {
-            step_id: String::new(),
-            reason: "cancelled before any permit".into(),
-        });
-        job.publish(
-            JobEventKind::OutcomeClassified,
-            now_epoch_ms,
-            digest,
-            |event| {
-                event.facts.push(KeyValue {
-                    key: "outcome".into(),
-                    value: "cancelledSafe".into(),
-                });
-            },
-        );
-        Ok(JobState::CancelledSafe)
+        conclude_cancellation(job, now_epoch_ms, digest, "cancelled before any permit")?;
+        Ok(CancellationDisposition::CancelledSafe)
     }
+}
+
+fn finish_queued_cancellation(
+    job: &mut Job,
+    now_epoch_ms: u64,
+    checkpoint: Sha256Digest,
+) -> Result<(), JobError> {
+    job.move_to(JobState::CancelledSafe)?;
+    conclude_cancellation(
+        job,
+        now_epoch_ms,
+        checkpoint,
+        "cancelled after the in-flight action reached a durable safe boundary",
+    )
+}
+
+fn conclude_cancellation(
+    job: &mut Job,
+    now_epoch_ms: u64,
+    _prior: Sha256Digest,
+    reason: &str,
+) -> Result<(), JobError> {
+    let digest = job.journal.append(
+        JournalRecordKind::OutcomeClassified,
+        now_epoch_ms,
+        1,
+        id(&job.job_id)?,
+        vec![
+            (id("outcome")?, "cancelledSafe".into()),
+            (id("reason")?, reason.into()),
+        ],
+    )?;
+    job.pending = None;
+    job.stopped = Some(JobStop::RefusedByAuthority {
+        step_id: job.current_step_id(),
+        reason: reason.into(),
+    });
+    job.publish(
+        JobEventKind::OutcomeClassified,
+        now_epoch_ms,
+        digest,
+        |event| {
+            event.facts.push(KeyValue {
+                key: "outcome".into(),
+                value: "cancelledSafe".into(),
+            });
+            event.facts.push(KeyValue {
+                key: "reason".into(),
+                value: reason.into(),
+            });
+        },
+    );
+    Ok(())
 }
 
 /// Moves to the next step, or concludes.
@@ -1588,6 +1683,7 @@ fn recover_job(path: &Path) -> Result<Job, JobError> {
         pending: None,
         in_flight: None,
         stopped,
+        cancellation_requested: false,
     })
 }
 
@@ -1754,27 +1850,20 @@ impl From<DurableJournalError> for JobError {
 /// Reads the pairing secret the authority handed the daemon at startup.
 ///
 /// architecture.md 15.2: held in memory only, never written to disk in the
-/// clear. The authority writes it to the daemon's stdin and closes it, so it
-/// never appears in an argv or an environment either — both of which other
-/// processes on this host can sometimes read, and neither of which the daemon
-/// can erase after reading.
+/// clear. The authority writes exactly 32 bytes to the daemon's inherited
+/// stdin and retains the write end as a liveness capability. The secret never
+/// appears in argv or the environment; EOF after these bytes proves that the
+/// authority process died and is handled by the daemon binary's monitor.
 pub fn read_pairing_secret_from_stdin(epoch: u64) -> Result<ControllerPairingSecret, String> {
     use std::io::Read;
-    let mut bytes = Vec::new();
+    let mut bytes = [0_u8; 32];
     std::io::stdin()
-        .read_to_end(&mut bytes)
+        .read_exact(&mut bytes)
         .map_err(|error| format!("reading the pairing secret: {error}"))?;
-    while matches!(bytes.last(), Some(b'\n') | Some(b'\r')) {
-        bytes.pop();
-    }
-    if bytes.len() < 32 {
-        return Err(format!(
-            "the pairing secret is {} bytes; at least 32 are required for an HMAC key that is not \
-             guessable",
-            bytes.len()
-        ));
-    }
-    Ok(ControllerPairingSecret::new(PairingEpoch(epoch), bytes))
+    Ok(ControllerPairingSecret::new(
+        PairingEpoch(epoch),
+        bytes.to_vec(),
+    ))
 }
 
 /// The path a job's journal lives at, given the registry root.

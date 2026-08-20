@@ -285,8 +285,10 @@ meaning accidentally.
 
 `daemon start` creates a dedicated CLI runtime containing two processes: an
 authority supervisor and `arkforged`. The supervisor generates the pairing secret
-in memory and passes it through an inherited anonymous pipe; the secret is never
-an argv, environment variable or plaintext file. Controller handshake exposes
+in memory and passes exactly 32 bytes through an inherited anonymous pipe, then
+retains the write end as an authority-liveness capability. EOF makes the paired
+daemon exit rather than remain as an orphan holding old authority. The secret is
+never an argv, environment variable or plaintext file. Controller handshake exposes
 the paired authority namespace and epoch, but never the secret. Later `arkforge`
 commands authenticate to the supervisor's owner-only socket and never receive the
 pairing secret.
@@ -307,12 +309,12 @@ An ArkDeck-owned runtime returns:
 
 The CLI must not offer a takeover flag.
 
-If the supervisor restarts, it rotates the pairing epoch and must coordinate a
-safe `arkforged` restart because the old daemon still holds the old in-memory
-secret. It first reads public durable job status. It never kills an in-flight
-action to regain controller access; an interrupted dispatch follows the existing
-unknown-outcome classification. Old-epoch permits that were stored but never
-consumed remain audit evidence and can never be first-consumed after restart.
+The supervisor atomically advances an owner-only durable epoch before pairing a
+daemon. If it dies, the liveness pipe closes and the old daemon exits; reopening
+the durable job registry classifies a pre-intent action as cancelled-safe and an
+unsettled intent as outcome-unknown. It never kills an in-flight action merely to
+regain controller access. Old-epoch permits remain audit evidence in an epoch-
+scoped journal and can never be first-consumed after restart.
 
 ### 5.2 Local target binding
 
@@ -350,6 +352,12 @@ Across a supervisor restart, the epoch changes: a pending safe step receives a n
 admission/attempt and a new permit, while an action with an uncertain dispatch is
 never retried.
 
+`flash apply` re-evaluates the current authority build, exact HDC digest, campaign
+and sealed mechanics key before job creation. The authority journal also records
+the daemon toolchain identity returned during materialization and apply rejects a
+different running toolchain. A rebuilt CLI, replaced HDC, renamed campaign or
+rebuilt mechanics daemon therefore requires a new plan; none inherits an old gate.
+
 The authority-side signing module and supervisor live outside `arkforged`; the
 existing architecture guard that prevents daemon permit minting remains mandatory.
 
@@ -364,6 +372,7 @@ AuthoritySupportKey
   authority namespace
   authority implementation version + digest
   managed-control mapping digest
+  exact managed-control HDC executable digest
   permit codec/version digest
   mechanics MaturityKey digest
   host platform
@@ -499,6 +508,7 @@ background supervision differs:
 arkforge daemon run|start
   [--profile-file <file>]...
   [--hdc <absolute-path> --expect-hdc-sha256 <sha256>]
+  [--hardware-campaign <campaign-id>]
   [--require-release-signing]
 ~~~
 
@@ -512,11 +522,27 @@ unhashed executable is allowed. HDC belongs to the authority supervisor and is n
 passed into `arkforged`. Without a usable HDC binding the runtime remains available
 for inspect/assessment and Loader diagnostics, but normal `flash plan` reports an
 authority-support blocker because enter-Loader and postflight cannot be completed.
+Every HDC invocation clears the inherited environment, runs in the owner-only
+runtime directory and uses one of the closed argument arrays documented by the
+managed-control mapping. It re-hashes the executable immediately before every
+call and refuses replacement bytes; no caller argv, shell, endpoint or connect
+key is emitted.
+
+`--hardware-campaign` is the explicit bootstrap for controlled real-device
+acceptance. The same name opens separate mechanics and `arkforge.cli` authority
+`HardwareCampaign` states, both are sealed into the plan, and all resulting
+receipts remain campaign evidence. The option never writes or implies a production
+support record. Without it, only an exact maintainer-reviewed `AuthoritySupportKey`
+can permit production execution; the unpublished registry is intentionally empty.
 
 `daemon status` reports both processes, public/controller protocol versions,
 mechanics readiness, authority support, tool bindings, active jobs and typed
 blockers. `daemon stop` refuses while an action is in flight. There is no force-stop
 flag; an operator can request `job cancel` and stop after a safe terminal state.
+
+The macOS package contains exactly the sibling `arkforge`/`arkforged` pair. Both
+are independently signed and inspected; the CLI resolves only the daemon beside
+its own executable. Old wrappers and vendor device executables are not packaged.
 
 ## 9. Help manifest for Agents
 
@@ -551,6 +577,9 @@ or daemon access. Every leaf includes:
 Each option entry declares type, required/repeatable, enum values, sensitive,
 effect relevance and conflicts/requires. Operation-dependent rescue arguments are
 represented as JSON Schema-style `oneOf`; an Agent never has to infer them from prose.
+Artifact inputs are typed SHA-256 values; profile, observation, job, plan,
+partition and acknowledgement inputs have semantic validators. Help placeholders,
+ellipses and firmware paths cannot parse as identifiers.
 
 ### 9.2 Result and error envelopes
 
@@ -577,6 +606,9 @@ Non-streaming JSON output is exactly one document on stdout:
 Streaming JSONL emits an initial metadata record, ordered event records, and one
 terminal record. `stream_sequence` is monotonic. A missing terminal record means
 the client stream ended, not that the device operation failed or succeeded.
+Every success document uses the same top-level `schema` field. Structured results
+and retries omit host paths, HDC paths, endpoints, connect keys and pairing/permit
+secrets; file inputs are represented by content digests where identity is needed.
 
 ### 9.3 Exit codes
 
@@ -608,7 +640,7 @@ directly by canonical command handlers, one complete behavior vertical at a time
 | `... jobs` | `job list` | No semantic change |
 | `... job J` | `job show --job J` | No semantic change |
 | `... recovery-guide J` | `job recovery guide --job J` | No semantic change |
-| `arkforge-inspect --archive F --store D --profile P` | `artifact import --file F`, then `artifact inspect --artifact A --profile P` | Two explicit resource operations replace the old composed path |
+| `arkforge-inspect --archive F --store D --profile P` | `artifact import --file F`, then `artifact inspect --artifact A --profile-file P` | Two explicit resource operations replace the old composed path |
 | `arkforge-signing F` | `signing verify --file F --mode development` | Mode is explicit in canonical help |
 | `arkforge-signing F --release` | `signing verify --file F --mode release` | No semantic change |
 

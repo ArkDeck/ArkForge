@@ -13,16 +13,18 @@ use arkforge_artifact::{dayu200, pac};
 use arkforge_authority_api::{
     ControllerPairingSecret, CurrentFacts, EffectSetCompleteness, PossibleEffectSet, StepPermit,
 };
-use arkforge_core::digest::{Domain, digest_canonical};
-use arkforge_core::identity::{HostPlatform, ToolchainIdentity, ToolchainKind, Version};
+use arkforge_core::digest::{Domain, digest_canonical, sha256};
+use arkforge_core::identity::{
+    HostPlatform, MaturityKey, ToolchainIdentity, ToolchainKind, Version,
+};
 use arkforge_core::ids::{OpaqueId, PlanId};
 use arkforge_core::outcome::ActionDisposition;
 use arkforge_core::plan::RecoveryContractRef;
 use arkforge_core::plan::{ExecutionPurpose, PlanMaterialization};
 use arkforge_core::profile::{DeviceProfile, RecoveryDeclaration};
 use arkforge_core::{
-    AuthorityBindingRef, AuthorityNamespace, DeviceMode, PersistentEffect, Sha256Digest,
-    TransientEffect,
+    AuthorityBindingRef, AuthorityNamespace, AuthoritySupportBinding, AuthoritySupportState,
+    DeviceMode, PersistentEffect, Sha256Digest, TransientEffect,
 };
 use arkforge_engine::superseding::{
     RecoveryBlocker, SupersedingRecoveryAssessment, assess_superseding_recovery,
@@ -1237,10 +1239,37 @@ impl Service {
 
     fn cancel_job(&mut self, request: &Request) -> Response {
         let job_id = first_string_field(&request.payload, 1).unwrap_or_default();
+        let Some(expected_sequence) = first_u64_field(&request.payload, 2) else {
+            return self.refuse(
+                request,
+                Status::InvalidArgument,
+                "EXPECTED_SEQUENCE_REQUIRED",
+                "cancelJob requires the caller's last observed journal sequence",
+            );
+        };
+        let Some(job) = self.jobs.job(&job_id) else {
+            return self.refuse(
+                request,
+                Status::NotFound,
+                "UNKNOWN_JOB",
+                &format!("no job {job_id}"),
+            );
+        };
+        if job.last_sequence() != expected_sequence {
+            return self.refuse(
+                request,
+                Status::Refused,
+                "STALE_JOB_SEQUENCE",
+                &format!(
+                    "job {job_id} is at sequence {}, not caller expectation {expected_sequence}",
+                    job.last_sequence()
+                ),
+            );
+        }
         match self.jobs.cancel(&job_id, self.clock.now_epoch_ms()) {
-            Ok(state) => {
+            Ok(disposition) => {
                 let mut payload = Vec::new();
-                arkforge_ipc::wire::write_string(&mut payload, 1, state.as_str());
+                arkforge_ipc::wire::write_string(&mut payload, 1, disposition.as_str());
                 self.ok(request, payload)
             }
             // "No such job" and "cancelling this job would hide an unresolved
@@ -1442,6 +1471,9 @@ impl Service {
         let binding_revision = first_u64_field(&request.payload, 8).unwrap_or_default();
         let stable_identity = first_bytes_field(&request.payload, 9).unwrap_or_default();
         let execution_purpose = first_string_field(&request.payload, 10).unwrap_or_default();
+        let authority_support_key = first_bytes_field(&request.payload, 11).unwrap_or_default();
+        let authority_support_state = first_string_field(&request.payload, 12).unwrap_or_default();
+        let authority_support_detail = first_string_field(&request.payload, 13).unwrap_or_default();
 
         if intent != FlashIntent::FullRestore.as_str() {
             return self.refuse(
@@ -1468,14 +1500,39 @@ impl Service {
             execution_purpose
         };
 
-        let Some(manifest) = self.manifests.get(&artifact_id).cloned() else {
-            return self.refuse(
-                request,
-                Status::NotFound,
-                "ARTIFACT_NOT_INSPECTED",
-                "materializePlan requires an inspected artifact",
-            );
-        };
+        if !self.manifests.contains_key(&artifact_id) {
+            let Ok(digest) = Sha256Digest::parse_hex(&artifact_id) else {
+                return self.refuse(
+                    request,
+                    Status::InvalidArgument,
+                    "MALFORMED_ARTIFACT_ID",
+                    "materializePlan requires a 64-hex content-addressed artifact id",
+                );
+            };
+            let object = match self.store.open_object(&digest) {
+                Ok(object) => object,
+                Err(error) => {
+                    return self.refuse(
+                        request,
+                        Status::NotFound,
+                        "ARTIFACT_NOT_FOUND",
+                        &error.to_string(),
+                    );
+                }
+            };
+            let manifest = match inspect_container(object) {
+                Ok(manifest) => manifest,
+                Err(error) => {
+                    return self.refuse(request, Status::Refused, "ARTIFACT_REJECTED", &error);
+                }
+            };
+            self.manifests.insert(artifact_id.clone(), manifest);
+        }
+        let manifest = self
+            .manifests
+            .get(&artifact_id)
+            .cloned()
+            .expect("inserted or already present");
         let Some(profile) = self.profiles.get(&profile_id).cloned() else {
             return self.refuse(
                 request,
@@ -1606,8 +1663,58 @@ impl Service {
             }
         };
 
+        let authority_support = if session == SessionKind::Public {
+            AuthoritySupportBinding {
+                key_digest: sha256(b"public-assessment-has-no-authority-support"),
+                state: AuthoritySupportState::HardwareGated {
+                    blocker: "public sessions cannot publish authority support".into(),
+                },
+            }
+        } else {
+            let Some(key_digest) = digest_from_bytes(&authority_support_key) else {
+                return self.refuse(
+                    request,
+                    Status::InvalidArgument,
+                    "BAD_AUTHORITY_SUPPORT_KEY",
+                    "authoritySupportKeySha256 must contain exactly 32 bytes",
+                );
+            };
+            let state = match authority_support_state.as_str() {
+                "productionVerified" => AuthoritySupportState::ProductionVerified,
+                "hardwareCampaign" if !authority_support_detail.is_empty() => {
+                    AuthoritySupportState::HardwareCampaign {
+                        campaign: authority_support_detail,
+                    }
+                }
+                "hardwareGated" if !authority_support_detail.is_empty() => {
+                    AuthoritySupportState::HardwareGated {
+                        blocker: authority_support_detail,
+                    }
+                }
+                _ => {
+                    return self.refuse(
+                        request,
+                        Status::InvalidArgument,
+                        "BAD_AUTHORITY_SUPPORT_STATE",
+                        "authoritySupportState must be productionVerified, or hardwareCampaign/hardwareGated with a non-empty detail",
+                    );
+                }
+            };
+            AuthoritySupportBinding { key_digest, state }
+        };
+
+        let created_at_epoch_ms = self.clock.now_epoch_ms();
+        let mut plan_identity = Vec::new();
+        plan_identity.extend_from_slice(artifact_id.as_bytes());
+        plan_identity.push(0);
+        plan_identity.extend_from_slice(execution_purpose.as_str().as_bytes());
+        plan_identity.push(0);
+        plan_identity.extend_from_slice(authority_binding.binding_id.as_str().as_bytes());
+        plan_identity.extend_from_slice(&created_at_epoch_ms.to_be_bytes());
+        let plan_suffix = sha256(&plan_identity).to_hex();
+
         let materialize = MaterializeRequest {
-            plan_id: PlanId::new(format!("PLAN-{}", &artifact_id[..12]))
+            plan_id: PlanId::new(format!("PLAN-{}", &plan_suffix[..24]))
                 .unwrap_or_else(|_| PlanId::new("PLAN-UNNAMED").expect("literal")),
             execution_purpose,
             intent: FlashIntent::FullRestore,
@@ -1617,6 +1724,7 @@ impl Service {
             profile: &profile,
             probe: &probe,
             authority_binding,
+            authority_support: authority_support.clone(),
             // The native implementation this daemon actually bound, not a
             // source-revision constant. A plan materialized for one build and
             // started on another is refused because the executable digest is
@@ -1625,7 +1733,7 @@ impl Service {
             host_platform: HostPlatform::current(),
             driver_facts_digest: driver_facts_digest(),
             evidence_set_digest: evidence_set_digest(),
-            created_at_epoch_ms: self.clock.now_epoch_ms(),
+            created_at_epoch_ms,
             plan_lifetime_ms: 3_600_000,
         };
 
@@ -1639,6 +1747,37 @@ impl Service {
         } else {
             &self.maturity
         };
+        let mechanics_key = MaturityKey {
+            provider: provider.descriptor().identity,
+            profile: match profile.identity() {
+                Ok(identity) => identity,
+                Err(error) => {
+                    return self.refuse(
+                        request,
+                        Status::Internal,
+                        "PROFILE_IDENTITY_INVALID",
+                        &error.to_string(),
+                    );
+                }
+            },
+            artifact_format: provider.descriptor().artifact_formats[0].clone(),
+            toolchain: materialize.toolchain.clone(),
+            host_platform: materialize.host_platform.clone(),
+            driver_facts_digest: materialize.driver_facts_digest,
+            evidence_set_digest: materialize.evidence_set_digest,
+        };
+        let mechanics_key_digest = match mechanics_key.digest() {
+            Ok(digest) => digest,
+            Err(error) => {
+                return self.refuse(
+                    request,
+                    Status::Internal,
+                    "MATURITY_KEY_NOT_ENCODABLE",
+                    &error.to_string(),
+                );
+            }
+        };
+        let mechanics_state = maturity.lookup(&mechanics_key);
         let materialized = match provider.materialize_with_private_plan(&materialize, maturity) {
             Ok(materialized) => materialized,
             Err(error) => {
@@ -1718,12 +1857,36 @@ impl Service {
                     message.known_persistent_effects.push(encode_effect(effect));
                 }
                 message.data_impact = encode_data_impact(&assessment.known_effects.data_impact);
+                message.mechanics_maturity_key_sha256 = mechanics_key_digest.to_hex();
+                message.mechanics_maturity_state = mechanics_state.as_str().to_string();
+                message.authority_support_key_sha256 = authority_support.key_digest.to_hex();
+                message.authority_support_state = authority_support.state.as_str().to_string();
                 self.ok(
                     request,
                     MaterializePlanResponse::Assessment(message).encode(),
                 )
             }
             Ok(PlanMaterialization::Executable(envelope)) => {
+                let maturity_key = arkforge_core::identity::MaturityKey {
+                    provider: envelope.provider.clone(),
+                    profile: envelope.profile.clone(),
+                    artifact_format: provider.descriptor().artifact_formats[0].clone(),
+                    toolchain: envelope.toolchain.clone(),
+                    host_platform: HostPlatform::current(),
+                    driver_facts_digest: driver_facts_digest(),
+                    evidence_set_digest: evidence_set_digest(),
+                };
+                let mechanics_maturity_key_sha256 = match maturity_key.digest() {
+                    Ok(digest) => digest.to_hex(),
+                    Err(error) => {
+                        return self.refuse(
+                            request,
+                            Status::Internal,
+                            "MATURITY_KEY_NOT_ENCODABLE",
+                            &error.to_string(),
+                        );
+                    }
+                };
                 let mut plan = ExecutablePlan {
                     plan_id: envelope.plan_id.to_string(),
                     plan_sha256: envelope.plan_digest.to_hex(),
@@ -1733,6 +1896,21 @@ impl Service {
                     public_projection_sha256: envelope.public_projection_digest.to_hex(),
                     expires_at_epoch_ms: envelope.expires_at_epoch_ms,
                     execution_purpose: envelope.execution_purpose.as_str().to_string(),
+                    mechanics_maturity_key_sha256,
+                    mechanics_maturity_state: envelope.maturity.as_str().to_string(),
+                    mechanics_maturity_campaign: envelope
+                        .maturity
+                        .campaign()
+                        .unwrap_or_default()
+                        .to_string(),
+                    authority_support_key_sha256: envelope.authority_support.key_digest.to_hex(),
+                    authority_support_state: envelope.authority_support.state.as_str().to_string(),
+                    authority_support_campaign: envelope
+                        .authority_support
+                        .state
+                        .campaign()
+                        .unwrap_or_default()
+                        .to_string(),
                     ..ExecutablePlan::default()
                 };
                 for step in &envelope.public_steps {
@@ -1998,6 +2176,24 @@ fn encode_observation(observation: &DeviceObservation) -> Vec<u8> {
             .encode(),
         );
     }
+    arkforge_ipc::wire::write_string(
+        &mut out,
+        9,
+        &observation
+            .serial_evidence
+            .digest()
+            .map(|digest| digest.to_hex())
+            .unwrap_or_default(),
+    );
+    arkforge_ipc::wire::write_string(
+        &mut out,
+        10,
+        match observation.serial_evidence {
+            arkforge_transport::SerialEvidence::Absent => "absent",
+            arkforge_transport::SerialEvidence::Descriptor { .. } => "descriptor",
+            arkforge_transport::SerialEvidence::ProtocolUnique { .. } => "protocolUnique",
+        },
+    );
     out
 }
 
