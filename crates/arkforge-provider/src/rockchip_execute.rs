@@ -110,6 +110,12 @@ impl fmt::Display for RockUsbPortFailure {
 pub trait RockUsbPort: fmt::Debug {
     fn discover(&self) -> Result<RockUsbObservation<Vec<RockUsbDevice>>, RockUsbPortFailure>;
 
+    fn capacity_sectors(&self) -> Result<RockUsbObservation<u64>, RockUsbPortFailure> {
+        Err(RockUsbPortFailure::BeforeIo(
+            "this RockUSB port does not implement READ_FLASH_INFO".into(),
+        ))
+    }
+
     fn read_partition_table(
         &self,
     ) -> Result<RockUsbObservation<PartitionTableFact>, RockUsbPortFailure>;
@@ -973,6 +979,18 @@ fn check_conformance(
     Ok(())
 }
 
+/// Applies the same profile/device layout gate used by normal execution.
+///
+/// Native rescue must not grow a second, weaker interpretation of the device's
+/// GPT. It can plan a write only when every allowed target and every protected
+/// target is understood by the shipped profile.
+pub fn validate_partition_table_for_profile(
+    observed: &PartitionTableFact,
+    profile: &DeviceProfile,
+) -> Result<(), ExecutionError> {
+    check_conformance(observed, profile)
+}
+
 /// The Profile's own declared layout, hashed the way the Provider hashed it
 /// when it built the plan. Recomputed here so a plan that drifted from the
 /// Profile it names is caught before the device is touched.
@@ -1011,6 +1029,11 @@ fn layout_digest_of(table: &PartitionTableFact) -> Sha256Digest {
         hasher.update(b"\n");
     }
     hasher.finalize()
+}
+
+/// Stable evidence digest for the exact name/offset table observed on-device.
+pub fn observed_layout_digest(table: &PartitionTableFact) -> Sha256Digest {
+    layout_digest_of(table)
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

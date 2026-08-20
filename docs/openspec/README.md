@@ -1,15 +1,16 @@
-# 待贴进 ArkDeck 的 OpenSpec change
+# OpenSpec change 草案
 
-本目录里的东西**不属于本仓的治理流程**。它们是写好、可以整个目录复制进
-`ArkDeck/openspec/changes/` 的提案草稿，因为它们描述的变更发生在 ArkDeck 仓里，
-按 ArkDeck `AGENTS.md` 的控制平面条款必须走 OpenSpec + 维护者 PR review/merge。
+本目录保存尚待维护者 review 的跨边界 change。草案不等于批准，更不开放新的
+设备写入能力。当前既包含要复制进 ArkDeck 治理流程的跨仓提案，也包含 ArkForge
+本仓能力设计；以各 change 的 front matter 和 proposal 边界为准。
 
-放在这里而不是直接开 ArkDeck 的 PR，是因为提案的**依据**在本仓：
+跨仓提案放在这里而不是直接开 ArkDeck 的 PR，是因为提案的**依据**在本仓：
 真机实测、读域证据、permit 编码。提案与依据不该分居两地。
 
 | 目录 | 内容 | 状态 |
 |---|---|---|
 | `chg-arkdeck-arkforge-authority/` | ArkDeck 保留 authority，把 Rockchip lowering 交给 ArkForge | **已复制进 ArkDeck**（2026-08-15），落在 `openspec/changes/chg-2026-059-arkdeck-arkforge-authority/`；四份稿件 2026-08-19 起带 **NRU-004 超越声明**——fixed-tool 执行面已退役，照抄启动契约会失败 |
+| `chg-agent-native-cli/` | ArkForge 统一 Agent-native CLI、独立 CLI authority 与原生 RockUSB 救援面 | **implementing**（2026-08-20）；救援面复用 NativeRockUsbPort，不依赖 rkdeveloptool；normal direct-flash authority 仍按任务分阶段落地 |
 
 > 本目录留的是**草稿正本**；ArkDeck 里那份是按它的约定改过的落地版。
 > 两处若要再改，改 ArkDeck 那份——它已经进了那个仓的治理流程，

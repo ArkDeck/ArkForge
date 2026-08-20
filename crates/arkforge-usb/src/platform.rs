@@ -216,6 +216,31 @@ pub fn open_unique(
     }
 }
 
+pub fn open_exact(
+    selector: UsbInterfaceSelector,
+    expected: &UsbInterfaceDescriptor,
+    timeout_ms: u32,
+) -> Result<Box<dyn BulkInterface>, UsbError> {
+    let mut matches: Vec<ServiceRecord> = collect_services()?
+        .into_iter()
+        .filter(|service| selector.matches(&service.descriptor) && service.descriptor == *expected)
+        .collect();
+    match matches.len() {
+        0 => Err(UsbError::NoExactInterface(expected.clone())),
+        1 => {
+            let service = matches.pop().expect("one exact interface");
+            let handle = InterfaceHandle::from_service(service.service.0, service.descriptor)?;
+            Ok(Box::new(handle.open(timeout_ms)?))
+        }
+        _ => Err(UsbError::AmbiguousInterfaces(
+            matches
+                .iter()
+                .map(|service| service.descriptor.clone())
+                .collect(),
+        )),
+    }
+}
+
 fn collect_services() -> Result<Vec<ServiceRecord>, UsbError> {
     let class_name = CString::new("IOUSBHostInterface").expect("literal has no NUL");
     // IOServiceMatching returns a consumed dictionary.  Passing main port 0 is

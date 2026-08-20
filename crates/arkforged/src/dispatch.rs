@@ -287,6 +287,7 @@ fn classify(error: ExecutionError) -> DispatchFailure {
 pub struct NativeRockUsbPort {
     usb: arkforge_usb::NativeUsb,
     selector: arkforge_usb::UsbInterfaceSelector,
+    target: Option<arkforge_usb::UsbInterfaceDescriptor>,
     next_tag: AtomicU32,
 }
 
@@ -301,11 +302,30 @@ impl NativeRockUsbPort {
         Self {
             usb: arkforge_usb::NativeUsb::new(30_000),
             selector: arkforge_usb::UsbInterfaceSelector::dayu200_loader(),
+            target: None,
             next_tag: AtomicU32::new(1),
         }
     }
 
-    fn matching_descriptors(
+    pub(crate) fn for_descriptor(
+        descriptor: arkforge_usb::UsbInterfaceDescriptor,
+    ) -> Result<Self, RockUsbPortFailure> {
+        let selector = arkforge_usb::UsbInterfaceSelector::dayu200_loader();
+        if !selector.matches(&descriptor) {
+            return Err(RockUsbPortFailure::BeforeIo(format!(
+                "the selected USB interface is not an allowed DAYU200 Loader: {:04x}:{:04x} at {:08x}",
+                descriptor.vendor_id, descriptor.product_id, descriptor.location_id
+            )));
+        }
+        Ok(Self {
+            usb: arkforge_usb::NativeUsb::new(30_000),
+            selector,
+            target: Some(descriptor),
+            next_tag: AtomicU32::new(1),
+        })
+    }
+
+    pub(crate) fn matching_descriptors(
         &self,
     ) -> Result<Vec<arkforge_usb::UsbInterfaceDescriptor>, RockUsbPortFailure> {
         self.usb
@@ -313,20 +333,37 @@ impl NativeRockUsbPort {
             .map(|records| {
                 records
                     .into_iter()
-                    .filter(|record| self.selector.matches(record))
+                    .filter(|record| {
+                        self.selector.matches(record)
+                            && self
+                                .target
+                                .as_ref()
+                                .map(|target| target == record)
+                                .unwrap_or(true)
+                    })
                     .collect()
             })
             .map_err(|error| RockUsbPortFailure::BeforeIo(error.to_string()))
+    }
+
+    fn open_interface(&self) -> Result<Box<dyn arkforge_usb::BulkInterface>, RockUsbPortFailure> {
+        match &self.target {
+            Some(target) => self
+                .usb
+                .open_exact(self.selector, target)
+                .map_err(|error| RockUsbPortFailure::BeforeIo(error.to_string())),
+            None => self
+                .usb
+                .open_unique(self.selector)
+                .map_err(|error| RockUsbPortFailure::BeforeIo(error.to_string())),
+        }
     }
 
     fn with_protocol<T>(
         &self,
         operation: impl FnOnce(&mut RockUsbProtocol<'_>) -> Result<T, String>,
     ) -> Result<T, RockUsbPortFailure> {
-        let interface = self
-            .usb
-            .open_unique(self.selector)
-            .map_err(|error| RockUsbPortFailure::BeforeIo(error.to_string()))?;
+        let interface = self.open_interface()?;
         let mut io = NativeBulkIo { interface };
         let first_tag = self.next_tag.fetch_add(0x100, Ordering::Relaxed);
         let mut protocol = RockUsbProtocol::new(&mut io, first_tag);
@@ -382,6 +419,22 @@ impl RockUsbBulkIo for NativeBulkIo {
     }
 }
 
+pub(crate) fn device_from_descriptor(
+    descriptor: arkforge_usb::UsbInterfaceDescriptor,
+) -> RockUsbDevice {
+    RockUsbDevice {
+        vendor_id: descriptor.vendor_id,
+        product_id: descriptor.product_id,
+        usb_specification: Some(descriptor.usb_specification),
+        location: RockUsbLocation::IokitTopology(descriptor.location_id),
+        mode: "loader".into(),
+        serial: descriptor.serial,
+        product_name: descriptor.product_name,
+        vendor_name: descriptor.vendor_name,
+        device_release: Some(descriptor.device_release),
+    }
+}
+
 impl RockUsbPort for NativeRockUsbPort {
     fn discover(&self) -> Result<RockUsbObservation<Vec<RockUsbDevice>>, RockUsbPortFailure> {
         let descriptors = self.matching_descriptors()?;
@@ -396,17 +449,7 @@ impl RockUsbPort for NativeRockUsbPort {
         self.with_protocol(|_| Ok(()))?;
         let devices: Vec<RockUsbDevice> = descriptors
             .into_iter()
-            .map(|descriptor| RockUsbDevice {
-                vendor_id: descriptor.vendor_id,
-                product_id: descriptor.product_id,
-                usb_specification: Some(descriptor.usb_specification),
-                location: RockUsbLocation::IokitTopology(descriptor.location_id),
-                mode: "loader".into(),
-                serial: descriptor.serial,
-                product_name: descriptor.product_name,
-                vendor_name: descriptor.vendor_name,
-                device_release: Some(descriptor.device_release),
-            })
+            .map(device_from_descriptor)
             .collect();
         let mut evidence = Vec::new();
         for device in &devices {
@@ -418,6 +461,14 @@ impl RockUsbPort for NativeRockUsbPort {
         Ok(RockUsbObservation {
             value: devices,
             evidence_digest: arkforge_core::digest::sha256(&evidence),
+        })
+    }
+
+    fn capacity_sectors(&self) -> Result<RockUsbObservation<u64>, RockUsbPortFailure> {
+        let sectors = self.read_capacity_sectors()?;
+        Ok(RockUsbObservation {
+            value: sectors,
+            evidence_digest: arkforge_core::digest::sha256(&sectors.to_be_bytes()),
         })
     }
 
@@ -504,10 +555,7 @@ impl RockUsbPort for NativeRockUsbPort {
             )));
         }
 
-        let interface = self
-            .usb
-            .open_unique(self.selector)
-            .map_err(|error| RockUsbPortFailure::BeforeIo(error.to_string()))?;
+        let interface = self.open_interface()?;
         let mut io = NativeBulkIo { interface };
         let first_tag = self.next_tag.fetch_add(0x100, Ordering::Relaxed);
         let mut protocol = RockUsbProtocol::new(&mut io, first_tag);
@@ -597,10 +645,7 @@ impl RockUsbPort for NativeRockUsbPort {
     }
 
     fn reset_device(&self) -> Result<RockUsbMutationReceipt, RockUsbPortFailure> {
-        let interface = self
-            .usb
-            .open_unique(self.selector)
-            .map_err(|error| RockUsbPortFailure::BeforeIo(error.to_string()))?;
+        let interface = self.open_interface()?;
         let mut io = NativeBulkIo { interface };
         let first_tag = self.next_tag.fetch_add(0x100, Ordering::Relaxed);
         let mut protocol = RockUsbProtocol::new(&mut io, first_tag);

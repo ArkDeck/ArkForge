@@ -37,6 +37,8 @@ pub enum Domain {
     JournalRecord,
     Transcript,
     RecoveryCoverage,
+    RescuePlan,
+    RescueReceipt,
 }
 
 impl Domain {
@@ -63,6 +65,8 @@ impl Domain {
             Domain::JournalRecord => b"arkforge/v1/journal-record\0",
             Domain::Transcript => b"arkforge/v1/transcript\0",
             Domain::RecoveryCoverage => b"arkforge/v1/recovery-coverage\0",
+            Domain::RescuePlan => b"arkforge/v1/rescue-plan\0",
+            Domain::RescueReceipt => b"arkforge/v1/rescue-receipt\0",
         }
     }
 }
@@ -130,6 +134,8 @@ mod tests {
             Domain::JournalRecord,
             Domain::Transcript,
             Domain::RecoveryCoverage,
+            Domain::RescuePlan,
+            Domain::RescueReceipt,
         ];
         let mut seen = std::collections::BTreeSet::new();
         for domain in all {

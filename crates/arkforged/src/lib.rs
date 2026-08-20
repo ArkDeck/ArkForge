@@ -11,6 +11,7 @@
 pub mod dispatch;
 pub mod jobs;
 pub mod packaging;
+pub mod rescue;
 pub mod service;
 
 pub use service::{Clock, Service};

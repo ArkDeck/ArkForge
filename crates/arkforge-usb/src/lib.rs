@@ -91,6 +91,7 @@ pub enum UsbError {
     UnsupportedPlatform,
     Enumeration(String),
     NoMatchingInterface(UsbInterfaceSelector),
+    NoExactInterface(UsbInterfaceDescriptor),
     AmbiguousInterfaces(Vec<UsbInterfaceDescriptor>),
     Claim(String),
     MissingBulkPipe { direction: &'static str },
@@ -119,6 +120,11 @@ impl fmt::Display for UsbError {
                 } else {
                     ""
                 }
+            ),
+            UsbError::NoExactInterface(descriptor) => write!(
+                f,
+                "the exact USB interface {:04x}:{:04x} at location {:08x} is no longer present",
+                descriptor.vendor_id, descriptor.product_id, descriptor.location_id
             ),
             UsbError::AmbiguousInterfaces(records) => write!(
                 f,
@@ -165,6 +171,20 @@ impl NativeUsb {
     ) -> Result<Box<dyn BulkInterface>, UsbError> {
         platform::open_unique(selector, self.timeout_ms)
     }
+
+    /// Claims the exact descriptor previously observed by the caller.
+    ///
+    /// A rescue plan may be created while several Loader devices are attached.
+    /// Reopening by a broad VID/PID selector would let apply migrate to another
+    /// board, so every descriptor fact is matched again before the interface is
+    /// claimed.
+    pub fn open_exact(
+        &self,
+        selector: UsbInterfaceSelector,
+        expected: &UsbInterfaceDescriptor,
+    ) -> Result<Box<dyn BulkInterface>, UsbError> {
+        platform::open_exact(selector, expected, self.timeout_ms)
+    }
 }
 
 #[cfg(target_os = "macos")]
@@ -180,6 +200,14 @@ mod platform {
 
     pub fn open_unique(
         _selector: UsbInterfaceSelector,
+        _timeout_ms: u32,
+    ) -> Result<Box<dyn BulkInterface>, UsbError> {
+        Err(UsbError::UnsupportedPlatform)
+    }
+
+    pub fn open_exact(
+        _selector: UsbInterfaceSelector,
+        _expected: &UsbInterfaceDescriptor,
         _timeout_ms: u32,
     ) -> Result<Box<dyn BulkInterface>, UsbError> {
         Err(UsbError::UnsupportedPlatform)
