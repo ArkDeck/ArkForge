@@ -94,7 +94,10 @@ fn every_writable_target_exists_on_the_device() {
             .iter()
             .find(|(name, _)| name == target.partition.as_str())
             .unwrap_or_else(|| {
-                panic!("{} is writable but the device has no such partition", target.partition)
+                panic!(
+                    "{} is writable but the device has no such partition",
+                    target.partition
+                )
             });
         assert_eq!(
             found.1, target.offset_sectors,

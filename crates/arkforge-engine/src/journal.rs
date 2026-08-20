@@ -7,11 +7,11 @@
 //! The file-backed side lives in [`crate::durable`]; what is here is the record
 //! model and the chain check it writes and replays.
 
+use arkforge_core::Sha256Digest;
 use arkforge_core::digest::{
-    decode_canonical, digest_canonical, CanonicalCbor, CborError, CborValue, Domain,
+    CanonicalCbor, CborError, CborValue, Domain, decode_canonical, digest_canonical,
 };
 use arkforge_core::ids::OpaqueId;
-use arkforge_core::Sha256Digest;
 use core::fmt;
 
 pub const SCHEMA_VERSION: u32 = 1;
@@ -267,12 +267,12 @@ impl JournalRecord {
 
         let schema_version = u32::try_from(unsigned("schemaVersion")?)
             .map_err(|_| JournalError::RecordMalformed("schemaVersion"))?;
-        let kind = JournalRecordKind::parse(text("kind")?)
-            .ok_or(JournalError::RecordMalformed("kind"))?;
+        let kind =
+            JournalRecordKind::parse(text("kind")?).ok_or(JournalError::RecordMalformed("kind"))?;
         let fsync_policy = FsyncPolicy::parse(text("fsyncPolicy")?)
             .ok_or(JournalError::RecordMalformed("fsyncPolicy"))?;
-        let subject =
-            OpaqueId::new(text("subject")?).map_err(|_| JournalError::RecordMalformed("subject"))?;
+        let subject = OpaqueId::new(text("subject")?)
+            .map_err(|_| JournalError::RecordMalformed("subject"))?;
         let facts = match field("facts") {
             Some(CborValue::Map(pairs)) => pairs
                 .iter()
@@ -545,7 +545,10 @@ mod tests {
         let journal = journal_with_three();
         journal.verify().unwrap();
         assert_eq!(journal.len(), 3);
-        assert_eq!(journal.records()[1].previous_digest, journal.records()[0].record_digest);
+        assert_eq!(
+            journal.records()[1].previous_digest,
+            journal.records()[0].record_digest
+        );
     }
 
     #[test]
@@ -655,7 +658,10 @@ mod tests {
         let journal = journal_with_three();
         for record in journal.records() {
             let bytes = record.to_canonical_bytes().unwrap();
-            assert_eq!(&JournalRecord::from_canonical_bytes(&bytes).unwrap(), record);
+            assert_eq!(
+                &JournalRecord::from_canonical_bytes(&bytes).unwrap(),
+                record
+            );
         }
     }
 

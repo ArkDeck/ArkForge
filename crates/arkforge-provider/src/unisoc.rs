@@ -117,10 +117,11 @@ impl UnisocProvider {
         //    the eighteen gates of architecture.md 17.5 and a maintainer review.
         blockers.push(ExecutionUnknown {
             id: OpaqueId::new("UNI-G01").expect("literal identifier"),
-            summary: "the eighteen DAYU600 evidence gates of architecture.md 17.5 have not passed; \
+            summary:
+                "the eighteen DAYU600 evidence gates of architecture.md 17.5 have not passed; \
                       until they do there is no executable plan for this device, and no flag, \
                       configuration or caller argument creates one"
-                .to_string(),
+                    .to_string(),
         });
 
         blockers
@@ -207,10 +208,7 @@ impl FlashProvider for UnisocProvider {
         if artifact.format.id != format_id {
             report.violation(
                 "UNI-V01",
-                format!(
-                    "artifact format {} is not {format_id}",
-                    artifact.format.id
-                ),
+                format!("artifact format {} is not {format_id}", artifact.format.id),
             );
         }
         if !profile.artifact_formats.contains(&artifact.format.id) {

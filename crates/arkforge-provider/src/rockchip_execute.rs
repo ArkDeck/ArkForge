@@ -5,7 +5,8 @@
 //! calling the native [`RockUsbPort`]; there is no subprocess or argv surface.
 
 use arkforge_artifact::manifest::PartitionTableFact;
-use arkforge_core::digest::{sha256, CborValue, Sha256};
+use arkforge_core::Sha256Digest;
+use arkforge_core::digest::{CborValue, Sha256, sha256};
 use arkforge_core::effect::ByteRange;
 use arkforge_core::ids::{ActionId, OpaqueId, StepId};
 use arkforge_core::outcome::ActionDisposition;
@@ -14,7 +15,6 @@ use arkforge_core::projection::PrivateActionRecord;
 use arkforge_core::verification::{
     FailureClassification, TypedSkipReason, VerificationOutcome, VerificationStrength,
 };
-use arkforge_core::Sha256Digest;
 use core::fmt;
 use std::collections::BTreeMap;
 use std::io::Read;
@@ -22,12 +22,11 @@ use std::path::{Path, PathBuf};
 
 /// `a / b` rounded up. `u64::div_ceil` is unstable on this toolchain.
 fn ceil_div(numerator: u64, denominator: u64) -> u64 {
-    numerator / denominator + u64::from(numerator % denominator != 0)
+    numerator / denominator + u64::from(!numerator.is_multiple_of(denominator))
 }
 
 /// Logical sector size used by the native RockUSB protocol.
 pub const ROCKUSB_SECTOR_BYTES: u64 = 512;
-
 
 /// One device returned by the typed RockUSB port.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -254,7 +253,9 @@ impl StoredAction {
     /// instruction against a device.
     pub fn decode(record: &PrivateActionRecord) -> Result<StoredAction, ExecutionError> {
         let CborValue::Map(entries) = &record.body else {
-            return Err(ExecutionError::ActionUndecodable("body is not a map".into()));
+            return Err(ExecutionError::ActionUndecodable(
+                "body is not a map".into(),
+            ));
         };
         let field = |name: &str| -> Option<&CborValue> {
             entries
@@ -313,7 +314,7 @@ impl StoredAction {
                     _ => {
                         return Err(ExecutionError::ActionUndecodable(
                             "verify-hdc-postflight carries no expect map".into(),
-                        ))
+                        ));
                     }
                 },
             }),
@@ -336,7 +337,7 @@ impl StoredAction {
                     _ => {
                         return Err(ExecutionError::ActionUndecodable(
                             "erasedMediumFiller is neither a byte nor null".into(),
-                        ))
+                        ));
                     }
                 },
             }),
@@ -445,11 +446,11 @@ pub fn execute_action(
     scratch: &Path,
 ) -> Result<ActionOutcome, ExecutionError> {
     match action {
-        StoredAction::ManagedControl {
-            control_action, ..
-        } => Err(ExecutionError::RequiresAuthority {
-            control_action: control_action.clone(),
-        }),
+        StoredAction::ManagedControl { control_action, .. } => {
+            Err(ExecutionError::RequiresAuthority {
+                control_action: control_action.clone(),
+            })
+        }
         StoredAction::ProbeLoader => {
             let receipt = port
                 .discover()
@@ -675,14 +676,14 @@ fn write_partition(
     //    refusal, not an addressing step: a write that would cross into the
     //    next partition is refused before external I/O begins.
     let image_sectors = ceil_div(image.size_bytes, ROCKUSB_SECTOR_BYTES);
-    if let Some(size_sectors) = entry.size_sectors {
-        if image_sectors > size_sectors {
-            return Err(ExecutionError::ImageOverrunsPartition {
-                partition: partition.to_string(),
-                image_sectors,
-                partition_sectors: size_sectors,
-            });
-        }
+    if let Some(size_sectors) = entry.size_sectors
+        && image_sectors > size_sectors
+    {
+        return Err(ExecutionError::ImageOverrunsPartition {
+            partition: partition.to_string(),
+            image_sectors,
+            partition_sectors: size_sectors,
+        });
     }
 
     // 5. Only now, the write. Address the native transfer from the observed
@@ -693,19 +694,16 @@ fn write_partition(
     let receipt = port
         .write_partition(partition, entry.offset_sectors, &image)
         .map_err(|error| port_error("writePartition", error))?;
-    if let Some(progress) = &receipt.progress {
-        if progress.payload_bytes != image.size_bytes || progress.payload_digest != image.sha256 {
-            return Err(ExecutionError::ExternalIo {
-                operation: "writePartition".into(),
-                message: format!(
-                    "native WRITE_LBA sent {} bytes hashing to {}; staged image is {} bytes hashing to {}",
-                    progress.payload_bytes,
-                    progress.payload_digest,
-                    image.size_bytes,
-                    image.sha256
-                ),
-            });
-        }
+    if let Some(progress) = &receipt.progress
+        && (progress.payload_bytes != image.size_bytes || progress.payload_digest != image.sha256)
+    {
+        return Err(ExecutionError::ExternalIo {
+            operation: "writePartition".into(),
+            message: format!(
+                "native WRITE_LBA sent {} bytes hashing to {}; staged image is {} bytes hashing to {}",
+                progress.payload_bytes, progress.payload_digest, image.size_bytes, image.sha256
+            ),
+        });
     }
     let disposition = if receipt.semantic_success {
         ActionDisposition::SemanticSuccess
@@ -723,10 +721,16 @@ fn write_partition(
         fact("beginSector", begin_sector.to_string()),
     ];
     if let Some(progress) = &receipt.progress {
-        facts.push(fact("writePayloadBytes", progress.payload_bytes.to_string()));
+        facts.push(fact(
+            "writePayloadBytes",
+            progress.payload_bytes.to_string(),
+        ));
         facts.push(fact("writeWireSectors", progress.wire_sectors.to_string()));
         facts.push(fact("writeChunks", progress.chunks.to_string()));
-        facts.push(fact("writePayloadSha256", progress.payload_digest.to_string()));
+        facts.push(fact(
+            "writePayloadSha256",
+            progress.payload_digest.to_string(),
+        ));
     }
     if disposition != ActionDisposition::SemanticSuccess {
         // The receipt text itself is digested, not stored, so an unexplained
@@ -927,10 +931,7 @@ fn outcome(
 }
 
 fn fact(key: &str, value: impl Into<String>) -> (OpaqueId, String) {
-    (
-        OpaqueId::new(key).expect("literal fact key"),
-        value.into(),
-    )
+    (OpaqueId::new(key).expect("literal fact key"), value.into())
 }
 
 fn check_conformance(
@@ -976,7 +977,7 @@ fn check_conformance(
 /// when it built the plan. Recomputed here so a plan that drifted from the
 /// Profile it names is caught before the device is touched.
 fn profile_layout_digest(profile: &DeviceProfile) -> Sha256Digest {
-    use arkforge_core::digest::{digest_in_domain, Domain};
+    use arkforge_core::digest::{Domain, digest_in_domain};
     let mut ordered: Vec<_> = profile.allowed_targets.iter().collect();
     ordered.sort_by_key(|target| target.write_order);
     let value = CborValue::array(
@@ -1015,13 +1016,18 @@ fn layout_digest_of(table: &PartitionTableFact) -> Sha256Digest {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ExecutionError {
     /// The action belongs to the authority's control port.
-    RequiresAuthority { control_action: String },
+    RequiresAuthority {
+        control_action: String,
+    },
     ActionUndecodable(String),
     PortRefused {
         operation: String,
         message: String,
     },
-    ExternalIo { operation: String, message: String },
+    ExternalIo {
+        operation: String,
+        message: String,
+    },
     LayoutMismatch {
         expected: Sha256Digest,
         observed: Sha256Digest,
@@ -1069,7 +1075,10 @@ impl fmt::Display for ExecutionError {
                 write!(f, "{operation} was refused before I/O: {message}")
             }
             ExecutionError::ExternalIo { operation, message } => {
-                write!(f, "{operation} failed after native USB I/O began: {message}")
+                write!(
+                    f,
+                    "{operation} failed after native USB I/O began: {message}"
+                )
             }
             ExecutionError::LayoutMismatch { expected, observed } => write!(
                 f,
@@ -1094,10 +1103,9 @@ impl fmt::Display for ExecutionError {
             ExecutionError::NoTableAtLba1 => f.write_str(
                 "LBA 1 carries no table; the name-addressed write has nothing to resolve against",
             ),
-            ExecutionError::TargetNotAllowed(partition) => write!(
-                f,
-                "the profile does not allow writing {partition}"
-            ),
+            ExecutionError::TargetNotAllowed(partition) => {
+                write!(f, "the profile does not allow writing {partition}")
+            }
             ExecutionError::PartitionNotOnDevice(partition) => write!(
                 f,
                 "the device's own table declares no partition named {partition}"
@@ -1221,8 +1229,7 @@ mod tests {
                 .find(|entry| entry.name == target.partition.as_str())
                 .unwrap_or_else(|| panic!("device has no {}", target.partition));
             assert_eq!(
-                entry.offset_sectors,
-                target.offset_sectors,
+                entry.offset_sectors, target.offset_sectors,
                 "{} start",
                 target.partition
             );
@@ -1233,14 +1240,16 @@ mod tests {
     #[test]
     fn a_device_partition_the_profile_never_named_is_refused() {
         let mut device = device_table();
-        device.entries.push(arkforge_artifact::manifest::PartitionEntryFact {
-            index: 15,
-            name: "somebody-elses-partition".into(),
-            offset_sectors: 30_000_000,
-            size_sectors: None,
-            attribute: None,
-            grammar_branch: arkforge_artifact::manifest::GrammarBranch::RemainderGrow,
-        });
+        device
+            .entries
+            .push(arkforge_artifact::manifest::PartitionEntryFact {
+                index: 15,
+                name: "somebody-elses-partition".into(),
+                offset_sectors: 30_000_000,
+                size_sectors: None,
+                attribute: None,
+                grammar_branch: arkforge_artifact::manifest::GrammarBranch::RemainderGrow,
+            });
         assert_eq!(
             check_conformance(&device, &profile()),
             Err(ExecutionError::DeviceDeclaresUnknownPartitions(vec![
@@ -1400,9 +1409,7 @@ mod tests {
     }
 
     impl RockUsbPort for NativeRecordingPort {
-        fn discover(
-            &self,
-        ) -> Result<RockUsbObservation<Vec<RockUsbDevice>>, RockUsbPortFailure> {
+        fn discover(&self) -> Result<RockUsbObservation<Vec<RockUsbDevice>>, RockUsbPortFailure> {
             Err(RockUsbPortFailure::BeforeIo("not used by this test".into()))
         }
 

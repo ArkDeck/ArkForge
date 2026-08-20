@@ -4,7 +4,7 @@
 //! the schema so the contract is complete, but this build answers those calls
 //! with `STATUS_UNAVAILABLE` and never needs to decode their bodies.
 
-use crate::wire::{self, decode_enum, Reader, WireError};
+use crate::wire::{self, Reader, WireError, decode_enum};
 use crate::{Api, SessionKind, Status};
 
 /// The handshake a peer opens with.
@@ -416,12 +416,18 @@ impl InspectArtifactResponse {
                 1 => response.format_id = value.as_str(1)?.to_string(),
                 2 => response.content_sha256 = value.as_str(2)?.to_string(),
                 3 => response.size_bytes = value.as_u64()?,
-                4 => response.members.push(ArchiveMember::decode(value.as_bytes()?)?),
+                4 => response
+                    .members
+                    .push(ArchiveMember::decode(value.as_bytes()?)?),
                 5 => response
                     .partitions
                     .push(PartitionEntry::decode(value.as_bytes()?)?),
-                6 => response.build_facts.push(KeyValue::decode(value.as_bytes()?)?),
-                7 => response.unclassified_members.push(value.as_str(7)?.to_string()),
+                6 => response
+                    .build_facts
+                    .push(KeyValue::decode(value.as_bytes()?)?),
+                7 => response
+                    .unclassified_members
+                    .push(value.as_str(7)?.to_string()),
                 8 => response
                     .execution_relevant_unknowns
                     .push(KeyValue::decode(value.as_bytes()?)?),
@@ -452,6 +458,7 @@ pub struct ExecutablePlan {
     pub transient_effects: Vec<Effect>,
     pub data_impact: Vec<KeyValue>,
     pub expires_at_epoch_ms: u64,
+    pub execution_purpose: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
@@ -574,6 +581,7 @@ impl ExecutablePlan {
             wire::write_message(&mut out, 8, &impact.encode());
         }
         wire::write_uint64(&mut out, 9, self.expires_at_epoch_ms);
+        wire::write_string(&mut out, 10, &self.execution_purpose);
         out
     }
 
@@ -586,11 +594,18 @@ impl ExecutablePlan {
                 2 => plan.plan_sha256 = value.as_str(2)?.to_string(),
                 3 => plan.provider_execution_plan_sha256 = value.as_str(3)?.to_string(),
                 4 => plan.public_projection_sha256 = value.as_str(4)?.to_string(),
-                5 => plan.public_steps.push(PublicStep::decode(value.as_bytes()?)?),
-                6 => plan.persistent_effects.push(Effect::decode(value.as_bytes()?)?),
-                7 => plan.transient_effects.push(Effect::decode(value.as_bytes()?)?),
+                5 => plan
+                    .public_steps
+                    .push(PublicStep::decode(value.as_bytes()?)?),
+                6 => plan
+                    .persistent_effects
+                    .push(Effect::decode(value.as_bytes()?)?),
+                7 => plan
+                    .transient_effects
+                    .push(Effect::decode(value.as_bytes()?)?),
                 8 => plan.data_impact.push(KeyValue::decode(value.as_bytes()?)?),
                 9 => plan.expires_at_epoch_ms = value.as_u64()?,
+                10 => plan.execution_purpose = value.as_str(10)?.to_string(),
                 _ => {}
             }
         }
@@ -632,13 +647,17 @@ impl Assessment {
                 2 => assessment
                     .known_persistent_effects
                     .push(Effect::decode(value.as_bytes()?)?),
-                3 => assessment.unknowns.push(KeyValue::decode(value.as_bytes()?)?),
+                3 => assessment
+                    .unknowns
+                    .push(KeyValue::decode(value.as_bytes()?)?),
                 4 => assessment
                     .evidence_requirements
                     .push(KeyValue::decode(value.as_bytes()?)?),
                 5 => assessment.availability = value.as_str(5)?.to_string(),
                 6 => assessment.unavailable_reason = value.as_str(6)?.to_string(),
-                7 => assessment.data_impact.push(KeyValue::decode(value.as_bytes()?)?),
+                7 => assessment
+                    .data_impact
+                    .push(KeyValue::decode(value.as_bytes()?)?),
                 _ => {}
             }
         }
@@ -698,6 +717,59 @@ impl MaterializePlanResponse {
 pub struct WatchJobRequest {
     pub job_id: String,
     pub from_sequence: u64,
+}
+
+/// Durable point-in-time status, separate from the incremental event stream.
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct JobSummary {
+    pub job_id: String,
+    pub plan_id: String,
+    pub plan_sha256: Vec<u8>,
+    pub state: String,
+    pub terminal: bool,
+    pub current_step_id: String,
+    pub completed_steps: u64,
+    pub total_steps: u64,
+    pub last_sequence: u64,
+    pub stopped_reason: String,
+}
+
+impl JobSummary {
+    pub fn encode(&self) -> Vec<u8> {
+        let mut out = Vec::new();
+        wire::write_string(&mut out, 1, &self.job_id);
+        wire::write_string(&mut out, 2, &self.plan_id);
+        wire::write_bytes(&mut out, 3, &self.plan_sha256);
+        wire::write_string(&mut out, 4, &self.state);
+        wire::write_bool(&mut out, 5, self.terminal);
+        wire::write_string(&mut out, 6, &self.current_step_id);
+        wire::write_uint64(&mut out, 7, self.completed_steps);
+        wire::write_uint64(&mut out, 8, self.total_steps);
+        wire::write_uint64(&mut out, 9, self.last_sequence);
+        wire::write_string(&mut out, 10, &self.stopped_reason);
+        out
+    }
+
+    pub fn decode(input: &[u8]) -> Result<Self, WireError> {
+        let mut summary = JobSummary::default();
+        let mut reader = Reader::new(input);
+        while let Some((field, value)) = reader.next_field()? {
+            match field {
+                1 => summary.job_id = value.as_str(1)?.to_string(),
+                2 => summary.plan_id = value.as_str(2)?.to_string(),
+                3 => summary.plan_sha256 = value.as_bytes()?.to_vec(),
+                4 => summary.state = value.as_str(4)?.to_string(),
+                5 => summary.terminal = value.as_bool()?,
+                6 => summary.current_step_id = value.as_str(6)?.to_string(),
+                7 => summary.completed_steps = value.as_u64()?,
+                8 => summary.total_steps = value.as_u64()?,
+                9 => summary.last_sequence = value.as_u64()?,
+                10 => summary.stopped_reason = value.as_str(10)?.to_string(),
+                _ => {}
+            }
+        }
+        Ok(summary)
+    }
 }
 
 impl WatchJobRequest {
@@ -801,6 +873,14 @@ pub struct StepAdmissionSnapshot {
     pub observed_at_epoch_ms: u64,
     pub snapshot_lifetime_ms: u64,
     pub request_id: String,
+    pub topology_sha256: Vec<u8>,
+    pub descriptor_sha256: Vec<u8>,
+    pub serial_sha256: Vec<u8>,
+    pub serial_evidence_kind: String,
+    pub protocol_identity: Vec<KeyValue>,
+    pub identity_strength: String,
+    pub malformed_descriptor: bool,
+    pub transport_session_sha256: Vec<u8>,
 }
 
 impl StepAdmissionSnapshot {
@@ -819,6 +899,16 @@ impl StepAdmissionSnapshot {
         wire::write_uint64(&mut out, 11, self.observed_at_epoch_ms);
         wire::write_uint64(&mut out, 12, self.snapshot_lifetime_ms);
         wire::write_string(&mut out, 13, &self.request_id);
+        wire::write_bytes(&mut out, 14, &self.topology_sha256);
+        wire::write_bytes(&mut out, 15, &self.descriptor_sha256);
+        wire::write_bytes(&mut out, 16, &self.serial_sha256);
+        wire::write_string(&mut out, 17, &self.serial_evidence_kind);
+        for fact in &self.protocol_identity {
+            wire::write_message(&mut out, 18, &fact.encode());
+        }
+        wire::write_string(&mut out, 19, &self.identity_strength);
+        wire::write_bool(&mut out, 20, self.malformed_descriptor);
+        wire::write_bytes(&mut out, 21, &self.transport_session_sha256);
         out
     }
 
@@ -840,6 +930,16 @@ impl StepAdmissionSnapshot {
                 11 => snapshot.observed_at_epoch_ms = value.as_u64()?,
                 12 => snapshot.snapshot_lifetime_ms = value.as_u64()?,
                 13 => snapshot.request_id = value.as_str(13)?.to_string(),
+                14 => snapshot.topology_sha256 = value.as_bytes()?.to_vec(),
+                15 => snapshot.descriptor_sha256 = value.as_bytes()?.to_vec(),
+                16 => snapshot.serial_sha256 = value.as_bytes()?.to_vec(),
+                17 => snapshot.serial_evidence_kind = value.as_str(17)?.to_string(),
+                18 => snapshot
+                    .protocol_identity
+                    .push(KeyValue::decode(value.as_bytes()?)?),
+                19 => snapshot.identity_strength = value.as_str(19)?.to_string(),
+                20 => snapshot.malformed_descriptor = value.as_bool()?,
+                21 => snapshot.transport_session_sha256 = value.as_bytes()?.to_vec(),
                 _ => {}
             }
         }
@@ -852,7 +952,10 @@ impl StepAdmissionSnapshot {
     /// a late permit (architecture.md 8.3): the device facts the authority
     /// checked are no longer the facts in front of it.
     pub fn is_fresh_at(&self, now_epoch_ms: u64) -> bool {
-        match self.observed_at_epoch_ms.checked_add(self.snapshot_lifetime_ms) {
+        match self
+            .observed_at_epoch_ms
+            .checked_add(self.snapshot_lifetime_ms)
+        {
             Some(expiry) => now_epoch_ms < expiry,
             // An overflowing lifetime is not "forever"; it is a malformed
             // snapshot, and a malformed snapshot is never fresh.
@@ -955,11 +1058,12 @@ impl ManagedControlRequest {
                 2 => request.step_id = value.as_str(2)?.to_string(),
                 3 => request.request_id = value.as_str(3)?.to_string(),
                 4 => {
-                    request.action =
-                        wire::decode_enum(4, &value, ManagedControlAction::from_wire)?
+                    request.action = wire::decode_enum(4, &value, ManagedControlAction::from_wire)?
                 }
                 5 => request.permit_id = value.as_str(5)?.to_string(),
-                6 => request.expected_facts.push(KeyValue::decode(value.as_bytes()?)?),
+                6 => request
+                    .expected_facts
+                    .push(KeyValue::decode(value.as_bytes()?)?),
                 7 => request.deadline_epoch_ms = value.as_u64()?,
                 _ => {}
             }
@@ -1116,12 +1220,9 @@ impl JobEvent {
                 4 => event.at_epoch_ms = value.as_u64()?,
                 5 => event.journal_record_sha256 = value.as_bytes()?.to_vec(),
                 6 => event.job_state = value.as_str(6)?.to_string(),
-                7 => {
-                    event.admission = Some(StepAdmissionSnapshot::decode(value.as_bytes()?)?)
-                }
+                7 => event.admission = Some(StepAdmissionSnapshot::decode(value.as_bytes()?)?),
                 8 => {
-                    event.control_request =
-                        Some(ManagedControlRequest::decode(value.as_bytes()?)?)
+                    event.control_request = Some(ManagedControlRequest::decode(value.as_bytes()?)?)
                 }
                 9 => event.receipt = Some(ActionReceiptSummary::decode(value.as_bytes()?)?),
                 10 => event.facts.push(KeyValue::decode(value.as_bytes()?)?),
@@ -1297,8 +1398,7 @@ impl SubmitManagedControlReceiptRequest {
                 1 => request.job_id = value.as_str(1)?.to_string(),
                 2 => request.request_id = value.as_str(2)?.to_string(),
                 3 => {
-                    request.action =
-                        wire::decode_enum(3, &value, ManagedControlAction::from_wire)?
+                    request.action = wire::decode_enum(3, &value, ManagedControlAction::from_wire)?
                 }
                 4 => request.accepted = value.as_bool()?,
                 5 => request.facts.push(KeyValue::decode(value.as_bytes()?)?),
@@ -1442,6 +1542,7 @@ mod tests {
         let plan = MaterializePlanResponse::Plan(ExecutablePlan {
             plan_id: "PLAN-1".into(),
             plan_sha256: "d".repeat(64),
+            execution_purpose: "supersedingRecovery".into(),
             public_steps: vec![PublicStep {
                 step_id: "STEP-001".into(),
                 kind: "writeTarget".into(),
@@ -1449,7 +1550,10 @@ mod tests {
             }],
             ..ExecutablePlan::default()
         });
-        assert_eq!(MaterializePlanResponse::decode(&plan.encode()).unwrap(), plan);
+        assert_eq!(
+            MaterializePlanResponse::decode(&plan.encode()).unwrap(),
+            plan
+        );
 
         let assessment = MaterializePlanResponse::Assessment(Assessment {
             availability: "unavailable".into(),
@@ -1515,6 +1619,14 @@ mod tests {
             observed_at_epoch_ms: 1_770_000_000_000,
             snapshot_lifetime_ms: 60_000,
             request_id: "REQ-1".into(),
+            topology_sha256: vec![0x66; 32],
+            descriptor_sha256: vec![0x77; 32],
+            serial_sha256: vec![0x88; 32],
+            serial_evidence_kind: "descriptor".into(),
+            protocol_identity: vec![key_value("usb.identity", "0x2207:0x350a")],
+            identity_strength: "serialAndTopology".into(),
+            malformed_descriptor: false,
+            transport_session_sha256: vec![0x99; 32],
         }
     }
 
@@ -1575,7 +1687,10 @@ mod tests {
                     request_id: "REQ-2".into(),
                     action: ManagedControlAction::EnterUpdater,
                     permit_id: "PERMIT-1".into(),
-                    expected_facts: vec![key_value("example.build.fullname", "example-build-1.0.0")],
+                    expected_facts: vec![key_value(
+                        "example.build.fullname",
+                        "example-build-1.0.0",
+                    )],
                     deadline_epoch_ms: 1_770_000_120_000,
                 }),
                 ..base.clone()
@@ -1603,7 +1718,12 @@ mod tests {
             },
         ] {
             let encoded = event.encode();
-            assert_eq!(JobEvent::decode(&encoded).unwrap(), event, "{:?}", event.kind);
+            assert_eq!(
+                JobEvent::decode(&encoded).unwrap(),
+                event,
+                "{:?}",
+                event.kind
+            );
         }
     }
 
@@ -1614,7 +1734,10 @@ mod tests {
             assert!(!kind.as_str().is_empty());
         }
         for action in ManagedControlAction::ALL {
-            assert_eq!(ManagedControlAction::from_wire(action.wire_value()), Some(action));
+            assert_eq!(
+                ManagedControlAction::from_wire(action.wire_value()),
+                Some(action)
+            );
         }
         // An unknown enum value is a hard error, never a default
         // (architecture.md 15.2).
@@ -1668,17 +1791,21 @@ mod tests {
         assert!(refusal.is_well_formed());
 
         // Both would leave the daemon choosing which one the authority meant.
-        assert!(!SubmitStepPermitRequest {
-            refusal: "declined".into(),
-            ..permit.clone()
-        }
-        .is_well_formed());
+        assert!(
+            !SubmitStepPermitRequest {
+                refusal: "declined".into(),
+                ..permit.clone()
+            }
+            .is_well_formed()
+        );
         // Neither is silence dressed up as an answer.
-        assert!(!SubmitStepPermitRequest {
-            permit_cbor: Vec::new(),
-            ..permit
-        }
-        .is_well_formed());
+        assert!(
+            !SubmitStepPermitRequest {
+                permit_cbor: Vec::new(),
+                ..permit
+            }
+            .is_well_formed()
+        );
     }
 
     /// architecture.md 9.2, on the wire. The daemon refuses the whole receipt
@@ -1735,13 +1862,19 @@ mod tests {
     #[test]
     fn a_submission_outcome_round_trips_and_a_rejection_always_says_why() {
         let accepted = SubmissionOutcome::accepted();
-        assert_eq!(SubmissionOutcome::decode(&accepted.encode()).unwrap(), accepted);
+        assert_eq!(
+            SubmissionOutcome::decode(&accepted.encode()).unwrap(),
+            accepted
+        );
 
         let rejected = SubmissionOutcome::rejected("STALE_SNAPSHOT", "the snapshot expired");
         assert!(!rejected.accepted);
         assert!(!rejected.rejection_code.is_empty());
         assert!(!rejected.rejection_message.is_empty());
-        assert_eq!(SubmissionOutcome::decode(&rejected.encode()).unwrap(), rejected);
+        assert_eq!(
+            SubmissionOutcome::decode(&rejected.encode()).unwrap(),
+            rejected
+        );
     }
 
     /// Readiness travels on the handshake, so it has to survive the codec.

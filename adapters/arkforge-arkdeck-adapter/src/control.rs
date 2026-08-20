@@ -119,8 +119,14 @@ pub enum ArkDeckActionDisposition {
 /// and the test below fails rather than letting it default to "kept".
 pub const ARKDECK_ACTION_DISPOSITIONS: [(&str, ArkDeckActionDisposition); 13] = [
     ("enterLoader", ArkDeckActionDisposition::KeptByAuthority),
-    ("observeHDCNormalUSB", ArkDeckActionDisposition::KeptInternal),
-    ("waitForHDCDisconnect", ArkDeckActionDisposition::KeptInternal),
+    (
+        "observeHDCNormalUSB",
+        ArkDeckActionDisposition::KeptInternal,
+    ),
+    (
+        "waitForHDCDisconnect",
+        ArkDeckActionDisposition::KeptInternal,
+    ),
     ("waitForLoader", ArkDeckActionDisposition::KeptInternal),
     ("rebindLoader", ArkDeckActionDisposition::KeptInternal),
     (
@@ -132,13 +138,19 @@ pub const ARKDECK_ACTION_DISPOSITIONS: [(&str, ArkDeckActionDisposition); 13] = 
         ArkDeckActionDisposition::DelegatedToArkForge,
     ),
     ("rebootToNormal", ArkDeckActionDisposition::KeptByAuthority),
-    ("waitForHDCReconnect", ArkDeckActionDisposition::KeptInternal),
+    (
+        "waitForHDCReconnect",
+        ArkDeckActionDisposition::KeptInternal,
+    ),
     (
         "waitForBoundHDCReconnect",
         ArkDeckActionDisposition::KeptInternal,
     ),
     ("verifyBuild", ArkDeckActionDisposition::KeptInternal),
-    ("verifyBoundBuild", ArkDeckActionDisposition::KeptByAuthority),
+    (
+        "verifyBoundBuild",
+        ArkDeckActionDisposition::KeptByAuthority,
+    ),
     (
         "capturePostFlashDiagnostics",
         ArkDeckActionDisposition::KeptInternal,
@@ -278,7 +290,12 @@ mod tests {
     #[test]
     fn entering_the_loader_requires_the_disconnect_and_the_rebind_too() {
         let binding = control_binding(ManagedDeviceControlAction::EnterUpdater);
-        for required in ["enterLoader", "waitForHDCDisconnect", "waitForLoader", "rebindLoader"] {
+        for required in [
+            "enterLoader",
+            "waitForHDCDisconnect",
+            "waitForLoader",
+            "rebindLoader",
+        ] {
             assert!(
                 binding.arkdeck_actions.contains(&required),
                 "entering the loader must include {required}"

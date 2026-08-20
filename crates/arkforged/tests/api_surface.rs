@@ -10,12 +10,12 @@ use arkforge_core::digest::sha256;
 use arkforge_core::ids::OpaqueId;
 use arkforge_core::profile;
 use arkforge_engine::BoundToolchain;
-use arkforged::{Clock, Service};
 use arkforge_ipc::messages::{
     ErrorBody, InspectArtifactResponse, MaterializePlanResponse, Request, Response,
     SubmitStepPermitRequest,
 };
-use arkforge_ipc::{wire, Api, SessionKind, Status};
+use arkforge_ipc::{Api, SessionKind, Status, wire};
+use arkforged::{Clock, Service};
 use std::path::PathBuf;
 
 const PROFILE_SOURCE: &str = include_str!("../../../profiles/dayu200.yaml");
@@ -71,6 +71,16 @@ fn string_payload(field: u32, value: &str) -> Vec<u8> {
     out
 }
 
+fn complete_materialize_payload(payload: &mut Vec<u8>, toolchain_id: &str) {
+    wire::write_string(payload, 4, "fullRestore");
+    wire::write_string(payload, 5, toolchain_id);
+    wire::write_string(payload, 6, "test-authority");
+    wire::write_string(payload, 7, "BINDING-1");
+    wire::write_uint64(payload, 8, 1);
+    wire::write_bytes(payload, 9, sha256(b"stable-device").as_bytes());
+    wire::write_string(payload, 10, "primaryFlash");
+}
+
 /// Imports the fixture archive and returns its artifact id.
 fn import(service: &mut Service) -> String {
     let archive = fixture::dayu200_archive();
@@ -114,7 +124,11 @@ fn start_execution_reports_every_standing_blocker_at_once() {
     let error = decode_error(&response).unwrap();
     // The code is the first blocker; the message carries them all.
     assert_eq!(error.code, "NO_PAIRED_AUTHORITY");
-    assert!(error.message.contains("NO_PAIRED_AUTHORITY"), "{}", error.message);
+    assert!(
+        error.message.contains("NO_PAIRED_AUTHORITY"),
+        "{}",
+        error.message
+    );
     assert!(error.message.contains("NO_DISPATCHER"), "{}", error.message);
 }
 
@@ -139,7 +153,11 @@ fn a_paired_daemon_with_no_dispatcher_still_refuses_and_says_which_half_is_missi
     assert_eq!(response.status, Status::Unavailable);
     let error = decode_error(&response).unwrap();
     assert_eq!(error.code, "NO_DISPATCHER");
-    assert!(!error.message.contains("NO_PAIRED_AUTHORITY"), "{}", error.message);
+    assert!(
+        !error.message.contains("NO_PAIRED_AUTHORITY"),
+        "{}",
+        error.message
+    );
     assert!(
         error.message.contains("permit would be spent"),
         "the refusal must say why it refuses now rather than later: {}",
@@ -182,7 +200,10 @@ fn start_execution_is_refused_outright_on_the_public_socket() {
         None,
     );
     assert_eq!(response.status, Status::Refused);
-    assert_eq!(decode_error(&response).unwrap().code, "SESSION_NOT_PERMITTED");
+    assert_eq!(
+        decode_error(&response).unwrap().code,
+        "SESSION_NOT_PERMITTED"
+    );
 }
 
 #[test]
@@ -197,39 +218,56 @@ fn the_public_socket_cannot_import_an_artifact() {
         Some(&mut stream),
     );
     assert_eq!(response.status, Status::Refused);
-    assert_eq!(decode_error(&response).unwrap().code, "SESSION_NOT_PERMITTED");
+    assert_eq!(
+        decode_error(&response).unwrap().code,
+        "SESSION_NOT_PERMITTED"
+    );
     // And nothing was stored.
-    assert!(!root.0.join("store/objects").exists() || {
-        std::fs::read_dir(root.0.join("store/objects"))
-            .map(|entries| entries.count() == 0)
-            .unwrap_or(true)
-    });
+    assert!(
+        !root.0.join("store/objects").exists() || {
+            std::fs::read_dir(root.0.join("store/objects"))
+                .map(|entries| entries.count() == 0)
+                .unwrap_or(true)
+        }
+    );
 }
 
-/// Two different answers, because they are two different facts.
-///
-/// `watchJob` and `cancelJob` are implemented; asking them about a job that
-/// does not exist is a not-found, not a missing capability. Reconcile and
-/// superseding recovery genuinely are not here.
+/// Every implemented job surface distinguishes an unknown job from an absent
+/// capability.
 #[test]
-fn an_unknown_job_is_not_found_and_an_absent_capability_is_unavailable() {
+fn an_unknown_job_is_not_found_on_status_and_recovery_surfaces() {
     let root = TempRoot::new("job-surface");
     let mut service = service(&root);
 
-    for api in [Api::WatchJob, Api::CancelJob] {
-        let response = service.handle(SessionKind::Controller, &request(api, Vec::new()), None);
-        assert_eq!(response.status, Status::NotFound, "{api}");
-        assert_eq!(decode_error(&response).unwrap().code, "UNKNOWN_JOB", "{api}");
-    }
-
     for api in [
+        Api::WatchJob,
+        Api::CancelJob,
+        Api::GetJob,
         Api::ReconcileJob,
         Api::PlanSupersedingRecovery,
         Api::GetRecoveryGuide,
     ] {
         let response = service.handle(SessionKind::Controller, &request(api, Vec::new()), None);
-        assert_eq!(response.status, Status::Unavailable, "{api}");
+        assert_eq!(response.status, Status::NotFound, "{api}");
+        assert_eq!(
+            decode_error(&response).unwrap().code,
+            "UNKNOWN_JOB",
+            "{api}"
+        );
     }
+}
+
+#[test]
+fn durable_job_status_listing_is_read_only_on_the_public_socket() {
+    let root = TempRoot::new("job-list");
+    let mut service = service(&root);
+    let response = service.handle(
+        SessionKind::Public,
+        &request(Api::ListJobs, Vec::new()),
+        None,
+    );
+    assert_eq!(response.status, Status::Ok);
+    assert!(response.payload.is_empty());
 }
 
 /// Answering an admission is minting authority. A public caller that could do
@@ -274,7 +312,11 @@ fn an_unpaired_daemon_accepts_no_permit() {
     assert_eq!(response.status, Status::Unavailable);
     let error = decode_error(&response).unwrap();
     assert_eq!(error.code, "NO_PAIRED_AUTHORITY");
-    assert!(error.message.contains("no authority is paired"), "{}", error.message);
+    assert!(
+        error.message.contains("no authority is paired"),
+        "{}",
+        error.message
+    );
 }
 
 #[test]
@@ -307,10 +349,12 @@ fn the_read_only_vertical_runs_over_the_api() {
         None,
         "the remainder partition stays a remainder across the wire"
     );
-    assert!(manifest
-        .build_facts
-        .iter()
-        .any(|fact| fact.key == "const.ohos.fullname"));
+    assert!(
+        manifest
+            .build_facts
+            .iter()
+            .any(|fact| fact.key == "const.ohos.fullname")
+    );
 
     // discover
     let response = service.handle(
@@ -356,6 +400,7 @@ fn the_read_only_vertical_runs_over_the_api() {
     let mut payload = string_payload(1, &artifact_id);
     wire::write_string(&mut payload, 2, "org.openharmony.dayu200");
     wire::write_string(&mut payload, 3, &observation_id);
+    complete_materialize_payload(&mut payload, "arkforged-native-rockusb");
     let response = service.handle(
         SessionKind::Public,
         &request(Api::MaterializePlan, payload),
@@ -365,16 +410,20 @@ fn the_read_only_vertical_runs_over_the_api() {
     match MaterializePlanResponse::decode(&response.payload).unwrap() {
         MaterializePlanResponse::Assessment(assessment) => {
             assert_eq!(assessment.availability, "unavailable");
-            assert!(assessment
-                .unknowns
-                .iter()
-                .any(|unknown| unknown.value.contains("AF-V2")));
+            assert!(
+                assessment
+                    .unknowns
+                    .iter()
+                    .any(|unknown| unknown.value.contains("AF-V2"))
+            );
             // The assessment still shows the full data impact, so an operator
             // can see that userdata would be overwritten.
-            assert!(assessment
-                .data_impact
-                .iter()
-                .any(|impact| impact.key == "userdata" && impact.value == "overwritten"));
+            assert!(
+                assessment
+                    .data_impact
+                    .iter()
+                    .any(|impact| impact.key == "userdata" && impact.value == "overwritten")
+            );
             assert_eq!(assessment.known_persistent_effects.len(), 9);
         }
         MaterializePlanResponse::Plan(plan) => {
@@ -422,10 +471,7 @@ fn an_import_whose_digest_does_not_match_is_refused() {
         Some(&mut stream),
     );
     assert_eq!(response.status, Status::Refused);
-    assert!(decode_error(&response)
-        .unwrap()
-        .message
-        .contains("hash to"));
+    assert!(decode_error(&response).unwrap().message.contains("hash to"));
 }
 
 #[test]
@@ -436,6 +482,7 @@ fn materialize_requires_an_inspected_artifact() {
     let mut payload = string_payload(1, &artifact_id);
     wire::write_string(&mut payload, 2, "org.openharmony.dayu200");
     wire::write_string(&mut payload, 3, "OBS-PREFLIGHT");
+    complete_materialize_payload(&mut payload, "arkforged-native-rockusb");
     let response = service.handle(
         SessionKind::Public,
         &request(Api::MaterializePlan, payload),

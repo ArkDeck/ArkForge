@@ -50,14 +50,15 @@ fn run(arguments: &[String]) -> Result<(), String> {
                 return Ok(());
             }
             other if other.starts_with('-') => {
-                return Err(format!("unknown argument {other:?}\n\n{}", usage()))
+                return Err(format!("unknown argument {other:?}\n\n{}", usage()));
             }
             other => path = Some(PathBuf::from(other)),
         }
     }
     let path = path.ok_or_else(usage)?;
 
-    let code = packaging::read_file(&path).map_err(|error| format!("{}: {error}", path.display()))?;
+    let code =
+        packaging::read_file(&path).map_err(|error| format!("{}: {error}", path.display()))?;
     println!("{}", path.display());
     println!("  {}", code.summary());
 

@@ -5,7 +5,7 @@
 //! same Unisoc provider can be ProductionVerified for one SoC and PlanOnly for
 //! DAYU600, so the state is keyed by the whole combination.
 
-use crate::digest::{digest_canonical, CanonicalCbor, CborError, CborValue, Domain, Sha256Digest};
+use crate::digest::{CanonicalCbor, CborError, CborValue, Domain, Sha256Digest, digest_canonical};
 use crate::ids::{IdError, OpaqueId};
 use core::fmt;
 
@@ -71,10 +71,7 @@ impl CanonicalCbor for ProviderIdentity {
         CborValue::map(vec![
             ("id", self.id.to_cbor()),
             ("version", self.version.to_cbor()),
-            (
-                "implementationDigest",
-                self.implementation_digest.to_cbor(),
-            ),
+            ("implementationDigest", self.implementation_digest.to_cbor()),
         ])
     }
 }
@@ -245,7 +242,10 @@ impl HostPlatform {
 
 impl CanonicalCbor for HostPlatform {
     fn to_cbor(&self) -> CborValue {
-        CborValue::map(vec![("os", self.os.to_cbor()), ("arch", self.arch.to_cbor())])
+        CborValue::map(vec![
+            ("os", self.os.to_cbor()),
+            ("arch", self.arch.to_cbor()),
+        ])
     }
 }
 
@@ -305,14 +305,24 @@ pub enum MaturityState {
     /// receipts of a campaign run cannot later be read as a production pass:
     /// the authority's permit binds the plan digest, and the plan digest
     /// covers this state.
-    HardwareCampaign { campaign: String },
+    HardwareCampaign {
+        campaign: String,
+    },
     /// Implementation complete, awaiting the hardware campaign.
-    HardwareGated { blocker: String },
+    HardwareGated {
+        blocker: String,
+    },
     /// Can materialize an assessment only; no executable plan.
-    PlanOnly { blocker: String },
+    PlanOnly {
+        blocker: String,
+    },
     /// Parsing and inspection only.
-    ResearchOnly { blocker: String },
-    Unavailable { reason: String },
+    ResearchOnly {
+        blocker: String,
+    },
+    Unavailable {
+        reason: String,
+    },
 }
 
 impl MaturityState {

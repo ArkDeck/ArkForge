@@ -248,10 +248,7 @@ impl fmt::Display for ContractViolation {
                     keys.len()
                 )?;
                 for key in keys {
-                    match FORBIDDEN_ENTITLEMENTS
-                        .iter()
-                        .find(|(name, _)| name == key)
-                    {
+                    match FORBIDDEN_ENTITLEMENTS.iter().find(|(name, _)| name == key) {
                         Some((_, why)) => write!(f, "\n    {key}: {why}")?,
                         None => write!(f, "\n    {key}")?,
                     }
@@ -470,7 +467,9 @@ fn read_thin(bytes: &[u8], start: usize, end: usize) -> Result<Slice, ReadError>
     let cpu_type = le32(image, 4).ok_or(ReadError::Truncated("mach header"))?;
     let command_count = le32(image, 16).ok_or(ReadError::Truncated("mach header"))?;
     if command_count > MAX_LOAD_COMMANDS {
-        return Err(ReadError::Malformed("mach header claims too many load commands"));
+        return Err(ReadError::Malformed(
+            "mach header claims too many load commands",
+        ));
     }
 
     let mut cursor = header_size;
@@ -480,12 +479,14 @@ fn read_thin(bytes: &[u8], start: usize, end: usize) -> Result<Slice, ReadError>
         let size = le32(image, cursor + 4).ok_or(ReadError::Truncated("load command"))? as usize;
         // A zero-size command would loop forever, and an unaligned one is not a
         // command; either way the header is not describing this file.
-        if size < 8 || size % 4 != 0 {
+        if size < 8 || !size.is_multiple_of(4) {
             return Err(ReadError::Malformed("load command size"));
         }
         if command == LC_CODE_SIGNATURE {
-            let offset = le32(image, cursor + 8).ok_or(ReadError::Truncated("LC_CODE_SIGNATURE"))?;
-            let length = le32(image, cursor + 12).ok_or(ReadError::Truncated("LC_CODE_SIGNATURE"))?;
+            let offset =
+                le32(image, cursor + 8).ok_or(ReadError::Truncated("LC_CODE_SIGNATURE"))?;
+            let length =
+                le32(image, cursor + 12).ok_or(ReadError::Truncated("LC_CODE_SIGNATURE"))?;
             signature_region = Some((offset as usize, length as usize));
             break;
         }
@@ -515,7 +516,9 @@ fn read_thin(bytes: &[u8], start: usize, end: usize) -> Result<Slice, ReadError>
 
 fn read_signature(region: &[u8]) -> Result<Signature, ReadError> {
     if be32(region, 0) != Some(CSMAGIC_EMBEDDED_SIGNATURE) {
-        return Err(ReadError::Malformed("code signature is not an embedded SuperBlob"));
+        return Err(ReadError::Malformed(
+            "code signature is not an embedded SuperBlob",
+        ));
     }
     let count = be32(region, 8).ok_or(ReadError::Truncated("SuperBlob header"))?;
     if count > MAX_SLICES * 8 {
@@ -528,7 +531,8 @@ fn read_signature(region: &[u8]) -> Result<Signature, ReadError> {
     for index in 0..count as usize {
         let entry = 12 + index * 8;
         let slot = be32(region, entry).ok_or(ReadError::Truncated("SuperBlob index"))?;
-        let offset = be32(region, entry + 4).ok_or(ReadError::Truncated("SuperBlob index"))? as usize;
+        let offset =
+            be32(region, entry + 4).ok_or(ReadError::Truncated("SuperBlob index"))? as usize;
         let magic = be32(region, offset).ok_or(ReadError::Truncated("blob header"))?;
         let length = be32(region, offset + 4).ok_or(ReadError::Truncated("blob header"))? as usize;
         if length < 8 {
@@ -690,19 +694,13 @@ fn c_string(blob: &[u8], offset: usize) -> Result<String, ReadError> {
 }
 
 fn le32(bytes: &[u8], at: usize) -> Option<u32> {
-    Some(u32::from_le_bytes(
-        bytes.get(at..at + 4)?.try_into().ok()?,
-    ))
+    Some(u32::from_le_bytes(bytes.get(at..at + 4)?.try_into().ok()?))
 }
 
 fn be32(bytes: &[u8], at: usize) -> Option<u32> {
-    Some(u32::from_be_bytes(
-        bytes.get(at..at + 4)?.try_into().ok()?,
-    ))
+    Some(u32::from_be_bytes(bytes.get(at..at + 4)?.try_into().ok()?))
 }
 
 fn be64(bytes: &[u8], at: usize) -> Option<u64> {
-    Some(u64::from_be_bytes(
-        bytes.get(at..at + 8)?.try_into().ok()?,
-    ))
+    Some(u64::from_be_bytes(bytes.get(at..at + 8)?.try_into().ok()?))
 }

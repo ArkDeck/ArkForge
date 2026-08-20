@@ -14,7 +14,9 @@ use arkforge_authority_api::{
     ControllerPairingSecret, PairingEpoch, PermitIntegrityTag, StepPermit,
 };
 use arkforge_core::digest::sha256;
-use arkforge_core::ids::{AttemptId, ControllerSessionId, JobId, OpaqueId, PermitId, PlanId, StepId};
+use arkforge_core::ids::{
+    AttemptId, ControllerSessionId, JobId, OpaqueId, PermitId, PlanId, StepId,
+};
 use arkforge_core::{AuthorityBindingRef, AuthorityNamespace};
 
 /// The secret every vector uses. A published test vector's key is published by

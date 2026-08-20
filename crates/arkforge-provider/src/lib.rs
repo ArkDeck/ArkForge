@@ -22,7 +22,7 @@ use arkforge_core::identity::{
     ProviderIdentity, ToolchainIdentity,
 };
 use arkforge_core::ids::OpaqueId;
-use arkforge_core::plan::PlanMaterialization;
+use arkforge_core::plan::{ExecutionPurpose, PlanMaterialization};
 use arkforge_core::profile::DeviceProfile;
 use arkforge_core::projection::StoredProviderPlan;
 use arkforge_core::{AuthorityBindingRef, PlanId, Sha256Digest};
@@ -109,6 +109,9 @@ impl FlashIntent {
 #[derive(Debug)]
 pub struct MaterializeRequest<'a> {
     pub plan_id: PlanId,
+    /// Why this new immutable plan exists. Recovery is a new plan, never a
+    /// replay of the primary plan whose outcome may be unknown.
+    pub execution_purpose: ExecutionPurpose,
     pub intent: FlashIntent,
     pub artifact: &'a ArtifactManifest,
     pub artifact_id: OpaqueId,
@@ -156,8 +159,9 @@ impl MaturityRegistry {
             .find(|(existing, _)| *existing == digest)
             .map(|(_, state)| state.clone())
             .unwrap_or(MaturityState::Unavailable {
-                reason: "this provider/profile/artifact/toolchain/platform combination is not published"
-                    .into(),
+                reason:
+                    "this provider/profile/artifact/toolchain/platform combination is not published"
+                        .into(),
             })
     }
 }

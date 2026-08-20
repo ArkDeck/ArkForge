@@ -23,13 +23,13 @@
 
 use crate::durable::{DurableJournal, DurableJournalError};
 use crate::journal::JournalRecordKind;
-use crate::recovery::{fact, PermitDisposition, PermitLedger};
-use arkforge_authority_api::{
-    verify_permit, DispatchIntent, PermitVerificationError, StepPermit, VerifiedStepPermit,
-};
+use crate::recovery::{PermitDisposition, PermitLedger, fact};
 use arkforge_authority_api::ControllerPairingSecret;
-use arkforge_core::ids::OpaqueId;
+use arkforge_authority_api::{
+    DispatchIntent, PermitVerificationError, StepPermit, VerifiedStepPermit, verify_permit,
+};
 use arkforge_core::Sha256Digest;
+use arkforge_core::ids::OpaqueId;
 use core::fmt;
 
 /// A step whose permit verified and whose intent is on stable storage.
@@ -119,16 +119,16 @@ pub fn admit_step(
             return Err(StepError::AlreadyConsumed {
                 permit_id,
                 receipt_digest,
-            })
+            });
         }
         PermitDisposition::ConsumingOutcomeUnknown => {
-            return Err(StepError::OutcomeUnknown { permit_id })
+            return Err(StepError::OutcomeUnknown { permit_id });
         }
         PermitDisposition::IntentDurable | PermitDisposition::AcceptedIntentNotDurable => {
             // architecture.md 13.3: an intent already exists for this permit
             // id. Re-admitting would create a second intent for one permit,
             // which is the thing the row forbids by name.
-            return Err(StepError::IntentAlreadyRecorded { permit_id })
+            return Err(StepError::IntentAlreadyRecorded { permit_id });
         }
     }
 
@@ -312,9 +312,13 @@ pub enum StepError {
         receipt_digest: String,
     },
     /// Consumption started and never finished. Reconcile; never replay.
-    OutcomeUnknown { permit_id: String },
+    OutcomeUnknown {
+        permit_id: String,
+    },
     /// An intent already exists for this permit id.
-    IntentAlreadyRecorded { permit_id: String },
+    IntentAlreadyRecorded {
+        permit_id: String,
+    },
     Verification(PermitVerificationError),
     Journal(DurableJournalError),
     UnusableIdentifier(String),
@@ -371,10 +375,8 @@ mod tests {
 
     impl TempDir {
         fn new(label: &str) -> Self {
-            let path = std::env::temp_dir().join(format!(
-                "arkforge-step-{label}-{}",
-                std::process::id()
-            ));
+            let path =
+                std::env::temp_dir().join(format!("arkforge-step-{label}-{}", std::process::id()));
             let _ = std::fs::remove_dir_all(&path);
             std::fs::create_dir_all(&path).unwrap();
             TempDir(path)
@@ -432,9 +434,19 @@ mod tests {
     }
 
     fn intent() -> DispatchIntent {
+        let permit = permit(&secret());
         DispatchIntent {
+            controller_session_id: permit.controller_session_id,
+            job_id: permit.job_id,
+            plan_id: permit.plan_id,
             plan_digest: sha256(b"plan"),
+            step_id: permit.step_id,
+            attempt_id: permit.attempt_id,
+            public_step_digest: permit.public_step_digest,
             private_action_digest: sha256(b"action"),
+            effect_set_digest: permit.effect_set_digest,
+            authority_binding: permit.authority_binding,
+            admitted_device_facts_digest: permit.admitted_device_facts_digest,
             now_epoch_ms: 2_000,
         }
     }

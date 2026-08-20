@@ -67,9 +67,9 @@ impl Huffman {
         // Reject over-subscribed code sets. An incomplete set is legal only in
         // the single-symbol distance-tree case, which callers handle.
         let mut left = 1i32;
-        for length in 1..=MAX_BITS {
+        for &count in counts.iter().take(MAX_BITS + 1).skip(1) {
             left <<= 1;
-            left -= counts[length] as i32;
+            left -= count as i32;
             if left < 0 {
                 return Err(invalid("over-subscribed huffman code set"));
             }
@@ -102,8 +102,8 @@ impl Huffman {
         let mut fast = vec![u16::MAX; 1 << FAST_BITS];
         let mut symbol_index = 0usize;
         let mut canonical = 0u32;
-        for length in 1..=MAX_BITS {
-            for _ in 0..counts[length] {
+        for (length, &count) in counts.iter().enumerate().take(MAX_BITS + 1).skip(1) {
+            for _ in 0..count {
                 if length <= FAST_BITS {
                     // DEFLATE feeds Huffman codes MSB-first, so the table is
                     // indexed by the bit-reversed code plus every combination
@@ -254,14 +254,14 @@ impl<R: Read> BitReader<R> {
         let entry = table.fast[window as usize];
         if entry != u16::MAX {
             let length = (entry & 0xf) as u32;
-            if length as u32 <= self.bit_count {
+            if length <= self.bit_count {
                 self.consume(length);
                 return Ok(entry >> 4);
             }
         }
 
         // Slow path: walk the canonical code from FAST_BITS + 1 upward.
-        let mut code = reverse_bits(window, FAST_BITS) as u32;
+        let mut code = reverse_bits(window, FAST_BITS);
         let mut consumed = FAST_BITS as u32;
         self.need(consumed)?;
         self.consume(consumed);
@@ -307,8 +307,13 @@ fn truncated() -> io::Error {
 #[derive(Debug)]
 enum BlockState {
     None,
-    Stored { remaining: u32 },
-    Huffman { literal: Huffman, distance: Huffman },
+    Stored {
+        remaining: u32,
+    },
+    Huffman {
+        literal: Box<Huffman>,
+        distance: Box<Huffman>,
+    },
 }
 
 /// A streaming raw-DEFLATE reader.
@@ -391,8 +396,8 @@ impl<R: Read> InflateReader<R> {
                 }
                 let distance_lengths = [5u8; 30];
                 self.block = BlockState::Huffman {
-                    literal: Huffman::new(&literal_lengths)?,
-                    distance: Huffman::new(&distance_lengths)?,
+                    literal: Box::new(Huffman::new(&literal_lengths)?),
+                    distance: Box::new(Huffman::new(&distance_lengths)?),
                 };
             }
             2 => {
@@ -450,7 +455,10 @@ impl<R: Read> InflateReader<R> {
                 }
                 let literal = Huffman::new(&lengths[..literal_count])?;
                 let distance = Huffman::new(&lengths[literal_count..])?;
-                self.block = BlockState::Huffman { literal, distance };
+                self.block = BlockState::Huffman {
+                    literal: Box::new(literal),
+                    distance: Box::new(distance),
+                };
             }
             _ => return Err(invalid("reserved DEFLATE block type")),
         }
@@ -517,8 +525,8 @@ impl<R: Read> InflateReader<R> {
                 }
                 257..=285 => {
                     let index = (symbol - 257) as usize;
-                    let length =
-                        LENGTH_BASE[index] as usize + self.bits.take(LENGTH_EXTRA[index] as u32)? as usize;
+                    let length = LENGTH_BASE[index] as usize
+                        + self.bits.take(LENGTH_EXTRA[index] as u32)? as usize;
                     let distance_symbol = self.bits.decode(distance)? as usize;
                     if distance_symbol >= DISTANCE_BASE.len() {
                         return Err(invalid("invalid distance symbol"));
@@ -528,11 +536,10 @@ impl<R: Read> InflateReader<R> {
                     if back > self.output.len() {
                         return Err(invalid("back-reference before start of stream"));
                     }
-                    let mut source = self.output.len() - back;
-                    for _ in 0..length {
+                    let source = self.output.len() - back;
+                    for source in (source..).take(length) {
                         let byte = self.output[source];
                         self.output.push(byte);
-                        source += 1;
                     }
                     self.total_out += length as u64;
                 }
@@ -638,7 +645,9 @@ impl std::fmt::Display for GzipError {
             GzipError::UnsupportedCompressionMethod(method) => {
                 write!(f, "unsupported gzip compression method {method}")
             }
-            GzipError::ReservedFlags(flags) => write!(f, "reserved gzip flag bits set: {flags:#04x}"),
+            GzipError::ReservedFlags(flags) => {
+                write!(f, "reserved gzip flag bits set: {flags:#04x}")
+            }
             GzipError::HeaderChecksum { expected, observed } => write!(
                 f,
                 "gzip header CRC16 mismatch: expected {expected:#06x}, observed {observed:#06x}"
@@ -744,7 +753,8 @@ impl<R: Read> GzipReader<R> {
             return Err(GzipError::Truncated.into());
         }
         let expected_crc = u32::from_le_bytes([trailing[0], trailing[1], trailing[2], trailing[3]]);
-        let expected_size = u32::from_le_bytes([trailing[4], trailing[5], trailing[6], trailing[7]]);
+        let expected_size =
+            u32::from_le_bytes([trailing[4], trailing[5], trailing[6], trailing[7]]);
         if expected_crc != observed_crc {
             return Err(GzipError::CrcMismatch {
                 expected: expected_crc,
@@ -874,8 +884,9 @@ mod tests {
                     continue;
                 };
                 ran += 1;
-                let decoded = inflate_gzip(&compressed)
-                    .unwrap_or_else(|error| panic!("level {level}, {} bytes: {error}", corpus.len()));
+                let decoded = inflate_gzip(&compressed).unwrap_or_else(|error| {
+                    panic!("level {level}, {} bytes: {error}", corpus.len())
+                });
                 assert_eq!(decoded.len(), corpus.len(), "level {level}");
                 assert_eq!(&decoded, corpus, "level {level}");
             }
@@ -941,7 +952,10 @@ mod tests {
         };
         compressed.extend_from_slice(b"garbage");
         let error = inflate_gzip(&compressed).unwrap_err();
-        assert!(error.to_string().contains("after the gzip trailer"), "{error}");
+        assert!(
+            error.to_string().contains("after the gzip trailer"),
+            "{error}"
+        );
     }
 
     #[test]

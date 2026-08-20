@@ -51,7 +51,11 @@ fn gate_rows() -> Vec<(u32, String, String)> {
 #[test]
 fn the_ledger_lists_all_eighteen_gates() {
     let rows = gate_rows();
-    assert_eq!(rows.len(), 18, "architecture.md 17.5 defines eighteen gates");
+    assert_eq!(
+        rows.len(),
+        18,
+        "architecture.md 17.5 defines eighteen gates"
+    );
     for (index, (number, _, _)) in rows.iter().enumerate() {
         assert_eq!(*number, index as u32 + 1, "gates are numbered 1..18");
     }
@@ -237,11 +241,15 @@ fn the_entitlement_deadlock_stays_closed_by_something_that_exists() {
         .find(|line| line.starts_with("| AD-007 |"))
         .expect("AD-007 is the entitlement deadlock entry");
     assert!(row.contains("resolved"), "{row}");
-    assert!(row.contains("AFD-0003"), "AD-007 must name what closed it: {row}");
+    assert!(
+        row.contains("AFD-0003"),
+        "AD-007 must name what closed it: {row}"
+    );
 
     // The native daemon is the only release input after NRU-004. The same
     // Mach-O reader remains the fail-closed check at native bind.
-    for source in [arkforged::packaging::ARKFORGED_ENTITLEMENTS] {
+    {
+        let source = arkforged::packaging::ARKFORGED_ENTITLEMENTS;
         assert!(
             arkforged::packaging::plist_keys(source).is_empty(),
             "an entitlement key appeared in a file AD-007 says is empty"
@@ -324,7 +332,10 @@ fn the_af_v2_flash_claim_is_bound_to_recorded_evidence() {
         // Both runs verified the same flashed build.
         "OpenHarmony-7.0.0.37",
     ] {
-        assert!(GREEN_RUN.contains(pinned), "the run record must pin {pinned}");
+        assert!(
+            GREEN_RUN.contains(pinned),
+            "the run record must pin {pinned}"
+        );
     }
     // The record must keep the backend attribution honest in both directions.
     assert!(

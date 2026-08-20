@@ -79,7 +79,10 @@ impl TarArchiveBuilder {
     pub fn add_file(mut self, path: &str, body: &[u8]) -> Self {
         let mut header = [0u8; BLOCK];
         let name = path.as_bytes();
-        assert!(name.len() <= 100, "fixture paths stay inside the ustar name field");
+        assert!(
+            name.len() <= 100,
+            "fixture paths stay inside the ustar name field"
+        );
         header[..name.len()].copy_from_slice(name);
         write_octal(&mut header[100..108], 0o644);
         write_octal(&mut header[108..116], 0);
@@ -149,9 +152,9 @@ pub fn gzip_stored(data: &[u8]) -> Vec<u8> {
 /// Distinct per member so a manifest that mixed two members up would fail on
 /// the hashes, not just on the names.
 pub fn fixture_body(name: &str, length: usize) -> Vec<u8> {
-    let seed = name
-        .bytes()
-        .fold(0x811c_9dc5u32, |acc, byte| (acc ^ byte as u32).wrapping_mul(16_777_619));
+    let seed = name.bytes().fold(0x811c_9dc5u32, |acc, byte| {
+        (acc ^ byte as u32).wrapping_mul(16_777_619)
+    });
     let mut state = seed;
     (0..length)
         .map(|_| {
@@ -218,7 +221,10 @@ mod tests {
             .write_all(&compressed)
             .unwrap();
         let output = child.wait_with_output().unwrap();
-        assert!(output.status.success(), "system gunzip rejected the fixture");
+        assert!(
+            output.status.success(),
+            "system gunzip rejected the fixture"
+        );
         assert_eq!(output.stdout, payload);
     }
 
@@ -235,6 +241,9 @@ mod tests {
 
     #[test]
     fn fixture_bodies_differ_between_members() {
-        assert_ne!(fixture_body("system.img", 64), fixture_body("vendor.img", 64));
+        assert_ne!(
+            fixture_body("system.img", 64),
+            fixture_body("vendor.img", 64)
+        );
     }
 }

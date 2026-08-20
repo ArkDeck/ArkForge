@@ -26,7 +26,7 @@ use arkforge_core::identity::{
 };
 use arkforge_core::ids::OpaqueId;
 use arkforge_core::profile::{self, DeviceProfile};
-use arkforge_provider::rockchip::{publish_dayu200_maturity, RockchipProvider};
+use arkforge_provider::rockchip::{RockchipProvider, publish_dayu200_maturity};
 use arkforge_provider::{FlashProvider, MaturityRegistry};
 
 const PROFILE_SOURCE: &str = include_str!("../../../profiles/dayu200.yaml");

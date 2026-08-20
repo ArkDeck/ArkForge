@@ -5,33 +5,47 @@
 //! "startExecution is unavailable" without opening a socket — the properties
 //! belong to the service, not to the plumbing.
 
+use crate::jobs::{AdmissionFacts, JobRegistry};
 use arkforge_artifact::cas::{CasQuota, ContentAddressedStore};
 use arkforge_artifact::manifest::ArtifactManifest;
 use arkforge_artifact::{dayu200, pac};
+use arkforge_authority_api::{
+    ControllerPairingSecret, CurrentFacts, EffectSetCompleteness, PossibleEffectSet, StepPermit,
+};
+use arkforge_core::digest::{Domain, digest_canonical};
 use arkforge_core::identity::{HostPlatform, ToolchainIdentity, ToolchainKind, Version};
 use arkforge_core::ids::{OpaqueId, PlanId};
-use arkforge_core::plan::PlanMaterialization;
-use arkforge_core::profile::DeviceProfile;
-use arkforge_core::{AuthorityBindingRef, AuthorityNamespace, PersistentEffect, Sha256Digest, TransientEffect};
-use crate::jobs::JobRegistry;
-use arkforge_authority_api::{ControllerPairingSecret, StepPermit};
+use arkforge_core::outcome::ActionDisposition;
+use arkforge_core::plan::RecoveryContractRef;
+use arkforge_core::plan::{ExecutionPurpose, PlanMaterialization};
+use arkforge_core::profile::{DeviceProfile, RecoveryDeclaration};
+use arkforge_core::{
+    AuthorityBindingRef, AuthorityNamespace, DeviceMode, PersistentEffect, Sha256Digest,
+    TransientEffect,
+};
+use arkforge_engine::superseding::{
+    RecoveryBlocker, SupersedingRecoveryAssessment, assess_superseding_recovery,
+    possible_effects as assess_possible_effects,
+};
 use arkforge_engine::{BoundToolchain, Engine, ExecutionReadiness, StoredPlan};
 use arkforge_ipc::messages::{
     ArchiveMember, Assessment, Effect, ErrorBody, ExecutablePlan, InspectArtifactResponse,
-    KeyValue, MaterializePlanResponse, PartitionEntry, PublicStep, Request, Response,
+    JobSummary, KeyValue, MaterializePlanResponse, PartitionEntry, PublicStep, Request, Response,
     SubmissionOutcome, SubmitManagedControlReceiptRequest, SubmitStepPermitRequest,
     WatchJobRequest,
 };
 use arkforge_ipc::{Api, SessionKind, Status};
-use arkforge_provider::rockchip::{publish_dayu200_maturity, RockchipProvider};
-use arkforge_provider::unisoc::{publish_af_v3_maturity, UnisocProvider};
+use arkforge_provider::rockchip::{RockchipProvider, publish_dayu200_maturity};
+use arkforge_provider::unisoc::{UnisocProvider, publish_af_v3_maturity};
 use arkforge_provider::{
     FlashIntent, FlashProvider, MaterializeRequest, MaturityRegistry, ProbeContext,
 };
 use arkforge_transport::replay::TranscriptTransport;
 use arkforge_transport::usb::UsbTransport;
-use arkforge_transport::{transcript, DeviceObservation, DeviceTransport, TypedDiscoveryFilter};
-use std::collections::BTreeMap;
+use arkforge_transport::{
+    DeviceObservation, DeviceTransport, TransportSession, TypedDiscoveryFilter, transcript,
+};
+use std::collections::{BTreeMap, BTreeSet};
 use std::io::Read;
 use std::path::Path;
 
@@ -84,6 +98,20 @@ pub struct Service {
     /// observation before probing, could therefore never reach a real device
     /// (AD-027).
     transports: Vec<Box<dyn DeviceTransport>>,
+    /// Exact observation/transport used when each executable plan was sealed.
+    /// Starting a plan re-opens this observation; it never performs a fresh
+    /// unqualified "first matching device" selection.
+    plan_observations: BTreeMap<String, PlanObservationContext>,
+    /// Open continuity session for every running job.
+    job_sessions: BTreeMap<String, JobObservationSession>,
+    /// Jobs with a proven mode transition: either the authority accepted its
+    /// own managed-control receipt, or ArkForge durably recorded semantic
+    /// success for a sealed native step whose expected mode changed.
+    ///
+    /// Only those jobs may replace a detached session with the single device
+    /// observed in the next expected mode. A periodic sweep must never turn an
+    /// unexplained detach into permission to select a new device.
+    authorized_rebinds: BTreeSet<String>,
     clock: Clock,
     jobs: JobRegistry,
     /// The secret the authority handed this daemon at startup. Held here and
@@ -104,6 +132,25 @@ pub struct Service {
     /// campaign the construction did — a binding that silently dropped it
     /// would turn an authorized campaign back into `hardwareGated`.
     campaign: Option<String>,
+}
+
+#[derive(Debug, Clone)]
+struct PlanObservationContext {
+    transport_index: usize,
+    observation: DeviceObservation,
+}
+
+#[derive(Debug, Clone)]
+struct RecoverySurfaceContext {
+    possible: PossibleEffectSet,
+    declaration: RecoveryDeclaration,
+    contract: Option<RecoveryContractRef>,
+}
+
+#[derive(Debug)]
+struct JobObservationSession {
+    transport_index: usize,
+    session: Box<dyn TransportSession>,
 }
 
 impl Service {
@@ -139,7 +186,10 @@ impl Service {
                 .iter()
                 .any(|format| format.as_str() == dayu200::FORMAT_ID)
             {
-                for toolchain in [unbound_native_toolchain_identity(), replay_toolchain_identity()] {
+                for toolchain in [
+                    unbound_native_toolchain_identity(),
+                    replay_toolchain_identity(),
+                ] {
                     publish_dayu200_maturity(
                         &mut maturity,
                         &rockchip,
@@ -195,8 +245,11 @@ impl Service {
             profiles: profile_map,
             manifests: BTreeMap::new(),
             transports: loaded,
+            plan_observations: BTreeMap::new(),
+            job_sessions: BTreeMap::new(),
+            authorized_rebinds: BTreeSet::new(),
             clock,
-            jobs: JobRegistry::new(store_root.join("jobs")),
+            jobs: JobRegistry::open(store_root.join("jobs")).map_err(|error| error.to_string())?,
             pairing: None,
             readiness: ExecutionReadiness::default(),
             rockchip_toolchain: None,
@@ -235,11 +288,7 @@ impl Service {
         self.bind_rockchip_dispatcher(toolchain, identity);
     }
 
-    fn bind_rockchip_dispatcher(
-        &mut self,
-        toolchain: BoundToolchain,
-        identity: ToolchainIdentity,
-    ) {
+    fn bind_rockchip_dispatcher(&mut self, toolchain: BoundToolchain, identity: ToolchainIdentity) {
         self.readiness.dispatcher = Some(toolchain);
         self.rockchip_toolchain = Some(identity.clone());
         for profile in self.profiles.values() {
@@ -308,6 +357,15 @@ impl Service {
         self.jobs.expire_stale_controls(self.clock.now_epoch_ms())
     }
 
+    /// Retries only jobs parked before admission. A missing device leaves the
+    /// job parked; ambiguity or an identity/mode mismatch never chooses one.
+    pub fn refresh_pending_admissions(&mut self) {
+        for job_id in self.jobs.jobs_needing_admission() {
+            let allow_unique_rebind = self.authorized_rebinds.contains(&job_id);
+            let _ = self.publish_live_admission(&job_id, allow_unique_rebind);
+        }
+    }
+
     /// Records what a dispatcher observed.
     pub fn complete_dispatch(
         &mut self,
@@ -317,6 +375,23 @@ impl Service {
         let stored = self
             .stored_plan_for_job(job_id)
             .ok_or_else(|| format!("no job {job_id}"))?;
+        let completed_step_id = self
+            .jobs
+            .job(job_id)
+            .map(crate::jobs::Job::current_step_id)
+            .ok_or_else(|| format!("no job {job_id}"))?;
+        let opens_exact_rebind = stored
+            .envelope
+            .public_steps
+            .iter()
+            .find(|step| step.step_id.as_str() == completed_step_id)
+            .is_some_and(|step| {
+                successful_dispatch_requires_rebind(
+                    outcome.disposition,
+                    step.expected_mode_before.as_ref(),
+                    step.expected_mode_after.as_ref(),
+                )
+            });
         self.jobs
             .complete_dispatch(
                 job_id,
@@ -325,7 +400,162 @@ impl Service {
                 &stored.private_plan,
                 self.clock.now_epoch_ms(),
             )
-            .map_err(|error| error.to_string())
+            .map_err(|error| error.to_string())?;
+        if opens_exact_rebind
+            && self
+                .jobs
+                .job(job_id)
+                .is_some_and(crate::jobs::Job::needs_admission)
+        {
+            // DEVICE_RESET has a durable semantic receipt at this point. Its
+            // sealed mode transition is therefore as real as an accepted
+            // managed-control transition, and the old Loader session must not
+            // be reused for the normal-mode postflight. Grant exactly one
+            // expected-mode rebind; discovery ambiguity still refuses.
+            self.job_sessions.remove(job_id);
+            self.authorized_rebinds.insert(job_id.to_string());
+        }
+        // Same-mode steps reuse and re-read the open session. A proven mode
+        // transition instead waits for the one authorized exact rebind; the
+        // dispatcher sweep retries while the device is still booting.
+        let allow_unique_rebind = self.authorized_rebinds.contains(job_id);
+        let _ = self.publish_live_admission(job_id, allow_unique_rebind);
+        Ok(())
+    }
+
+    fn publish_live_admission(
+        &mut self,
+        job_id: &str,
+        allow_unique_rebind: bool,
+    ) -> Result<(), String> {
+        let stored = self
+            .stored_plan_for_job(job_id)
+            .ok_or_else(|| format!("no job {job_id}"))?;
+        if !self
+            .jobs
+            .job(job_id)
+            .is_some_and(crate::jobs::Job::needs_admission)
+        {
+            return Ok(());
+        }
+
+        let now = self.clock.now_epoch_ms();
+        let existing = if let Some(context) = self.job_sessions.get_mut(job_id) {
+            match context.session.reread_identity() {
+                Ok(mut observation) => {
+                    observation.observed_at_epoch_ms = now;
+                    Some((
+                        observation,
+                        context.session.session_digest(),
+                        context.transport_index,
+                    ))
+                }
+                Err(_) => None,
+            }
+        } else {
+            None
+        };
+
+        let (observation, session_digest, transport_index) = match existing {
+            Some(facts) => facts,
+            None if allow_unique_rebind => {
+                let plan_context = self
+                    .plan_observations
+                    .get(&stored.envelope.plan_digest.to_hex())
+                    .cloned()
+                    .ok_or_else(|| "the plan has no sealed observation context".to_string())?;
+                let expected_mode = next_expected_mode(&stored, self.jobs.job(job_id))?;
+                let transport = self
+                    .transports
+                    .get(plan_context.transport_index)
+                    .ok_or_else(|| "the plan transport is no longer loaded".to_string())?;
+                let mut observations = transport
+                    .discover(
+                        &TypedDiscoveryFilter {
+                            modes: expected_mode.into_iter().collect(),
+                            ..TypedDiscoveryFilter::default()
+                        },
+                        now,
+                    )
+                    .map_err(|error| error.to_string())?;
+                if observations.len() != 1 {
+                    return Err(format!(
+                        "expected exactly one device for rebind, observed {}",
+                        observations.len()
+                    ));
+                }
+                let mut observation = observations.remove(0);
+                observation.observed_at_epoch_ms = now;
+                let mut session = transport
+                    .open_exact(&observation)
+                    .map_err(|error| error.to_string())?;
+                let mut reread = session
+                    .reread_identity()
+                    .map_err(|error| error.to_string())?;
+                reread.observed_at_epoch_ms = now;
+                let digest = session.session_digest();
+                self.job_sessions.insert(
+                    job_id.to_string(),
+                    JobObservationSession {
+                        transport_index: plan_context.transport_index,
+                        session,
+                    },
+                );
+                // The one authorization granted by an accepted managed
+                // control receipt is consumed by opening this exact session.
+                self.authorized_rebinds.remove(job_id);
+                (reread, digest, plan_context.transport_index)
+            }
+            None => return Err("the exact admission session no longer observes the device".into()),
+        };
+
+        let admission = admission_facts(&stored.envelope, observation, session_digest)?;
+        self.jobs
+            .request_next_admission(
+                job_id,
+                &stored.envelope,
+                &stored.private_plan,
+                &admission,
+                now,
+            )
+            .map_err(|error| error.to_string())?;
+        if let Some(context) = self.job_sessions.get_mut(job_id) {
+            context.transport_index = transport_index;
+        }
+        Ok(())
+    }
+
+    fn current_facts_for_job(&mut self, job_id: &str) -> Result<CurrentFacts, String> {
+        let stored = self
+            .stored_plan_for_job(job_id)
+            .ok_or_else(|| format!("no job {job_id}"))?;
+        let now = self.clock.now_epoch_ms();
+        let context = self
+            .job_sessions
+            .get_mut(job_id)
+            .ok_or_else(|| "the job has no open admission session".to_string())?;
+        let mut observation = context
+            .session
+            .reread_identity()
+            .map_err(|error| error.to_string())?;
+        observation.observed_at_epoch_ms = now;
+        let admission = admission_facts(
+            &stored.envelope,
+            observation,
+            context.session.session_digest(),
+        )?;
+        Ok(CurrentFacts {
+            now_epoch_ms: now,
+            device_facts_digest: admission
+                .observation
+                .admission_facts_digest()
+                .map_err(|error| error.to_string())?,
+            transport_session_digest: Some(admission.transport_session_digest),
+            saw_detach_since_snapshot: context.session.saw_detach(),
+            provider_facts_digest: admission.provider_facts_digest,
+            toolchain_facts_digest: admission.toolchain_facts_digest,
+            artifact_facts_digest: admission.artifact_facts_digest,
+        })
     }
 
     /// Dispatches one request.
@@ -359,18 +589,14 @@ impl Service {
             Api::MaterializePlan => self.materialize_plan(request),
             Api::StartExecution => self.start_execution(request),
             Api::WatchJob => self.watch_job(request),
+            Api::GetJob => self.get_job(request),
+            Api::ListJobs => self.list_jobs(request),
             Api::CancelJob => self.cancel_job(request),
             Api::SubmitStepPermit => self.submit_step_permit(request),
             Api::SubmitManagedControlReceipt => self.submit_control_receipt(request),
-            Api::ReconcileJob | Api::PlanSupersedingRecovery | Api::GetRecoveryGuide => self
-                .refuse(
-                    request,
-                    Status::Unavailable,
-                    "RECONCILE_SURFACE_UNAVAILABLE",
-                    "reconcile and superseding recovery need read-only device observation of a \
-                     job that dispatched; this build has the assessment half only \
-                     (arkforge_engine::superseding)",
-                ),
+            Api::ReconcileJob => self.reconcile_job(request),
+            Api::PlanSupersedingRecovery => self.plan_superseding_recovery(request),
+            Api::GetRecoveryGuide => self.get_recovery_guide(request),
         }
     }
 
@@ -416,7 +642,12 @@ impl Service {
         let payload = match decode_import_request(&request.payload) {
             Ok(payload) => payload,
             Err(message) => {
-                return self.refuse(request, Status::InvalidArgument, "MALFORMED_REQUEST", &message)
+                return self.refuse(
+                    request,
+                    Status::InvalidArgument,
+                    "MALFORMED_REQUEST",
+                    &message,
+                );
             }
         };
         let expected_digest = match payload.expected_sha256.as_deref() {
@@ -429,7 +660,7 @@ impl Service {
                         Status::InvalidArgument,
                         "MALFORMED_DIGEST",
                         &error.to_string(),
-                    )
+                    );
                 }
             },
         };
@@ -464,7 +695,7 @@ impl Service {
                     Status::InvalidArgument,
                     "MISSING_ARTIFACT_ID",
                     "inspectArtifact requires an artifact id",
-                )
+                );
             }
         };
         let digest = match Sha256Digest::parse_hex(&artifact_id) {
@@ -475,7 +706,7 @@ impl Service {
                     Status::InvalidArgument,
                     "MALFORMED_ARTIFACT_ID",
                     &error.to_string(),
-                )
+                );
             }
         };
 
@@ -490,7 +721,7 @@ impl Service {
                             Status::NotFound,
                             "ARTIFACT_NOT_FOUND",
                             &error.to_string(),
-                        )
+                        );
                     }
                 };
                 match inspect_container(object) {
@@ -499,12 +730,7 @@ impl Service {
                         manifest
                     }
                     Err(error) => {
-                        return self.refuse(
-                            request,
-                            Status::Refused,
-                            "ARTIFACT_REJECTED",
-                            &error,
-                        )
+                        return self.refuse(request, Status::Refused, "ARTIFACT_REJECTED", &error);
                     }
                 }
             }
@@ -525,7 +751,7 @@ impl Service {
                         Status::Internal,
                         "DISCOVERY_FAILED",
                         &error.to_string(),
-                    )
+                    );
                 }
             };
             for observation in observations {
@@ -548,7 +774,8 @@ impl Service {
         };
 
         for transport in &self.transports {
-            let Ok(observations) = transport.discover(&TypedDiscoveryFilter::default(), self.clock.now_epoch_ms())
+            let Ok(observations) =
+                transport.discover(&TypedDiscoveryFilter::default(), self.clock.now_epoch_ms())
             else {
                 continue;
             };
@@ -614,7 +841,6 @@ impl Service {
         )
     }
 
-
     // -----------------------------------------------------------------------
     // The controller execution/admission surface (architecture.md 8, 13, 15.3)
     // -----------------------------------------------------------------------
@@ -641,6 +867,8 @@ impl Service {
         }
         let plan_id = first_string_field(&request.payload, 1).unwrap_or_default();
         let plan_sha256 = first_string_field(&request.payload, 2).unwrap_or_default();
+        let execution_purpose = first_string_field(&request.payload, 3).unwrap_or_default();
+        let controller_session_id = first_string_field(&request.payload, 4).unwrap_or_default();
 
         let Ok(plan_id) = PlanId::new(&plan_id) else {
             return self.refuse(
@@ -658,6 +886,16 @@ impl Service {
                 "planSha256 is not 64 hex characters",
             );
         };
+        let Ok(controller_session_id) =
+            arkforge_core::ids::ControllerSessionId::new(&controller_session_id)
+        else {
+            return self.refuse(
+                request,
+                Status::InvalidArgument,
+                "BAD_CONTROLLER_SESSION_ID",
+                "controllerSessionId is not a usable identifier",
+            );
+        };
 
         let readiness = self.readiness.clone();
         let stored = match self.engine.start_execution(&plan_id, expected, &readiness) {
@@ -667,12 +905,7 @@ impl Service {
                     .first()
                     .map(|blocker| blocker.code())
                     .unwrap_or("EXECUTION_DISABLED");
-                return self.refuse(
-                    request,
-                    Status::Unavailable,
-                    code,
-                    &blocker_list(&blockers),
-                );
+                return self.refuse(request, Status::Unavailable, code, &blocker_list(&blockers));
             }
             Err(error) => {
                 return self.refuse(
@@ -680,25 +913,95 @@ impl Service {
                     Status::NotFound,
                     "PLAN_NOT_STARTABLE",
                     &error.to_string(),
-                )
+                );
             }
         };
+        if execution_purpose != stored.envelope.execution_purpose.as_str() {
+            return self.refuse(
+                request,
+                Status::Refused,
+                "EXECUTION_PURPOSE_MISMATCH",
+                "executionPurpose does not match the sealed plan",
+            );
+        }
 
-        match self
-            .jobs
-            .start(&stored.envelope, &stored.private_plan, self.clock.now_epoch_ms())
-        {
+        let Some(observation_context) = self
+            .plan_observations
+            .get(&stored.envelope.plan_digest.to_hex())
+            .cloned()
+        else {
+            return self.refuse(
+                request,
+                Status::Unavailable,
+                "PLAN_OBSERVATION_UNAVAILABLE",
+                "the executable plan has no sealed device observation context",
+            );
+        };
+        let Some(transport) = self.transports.get(observation_context.transport_index) else {
+            return self.refuse(
+                request,
+                Status::Unavailable,
+                "PLAN_TRANSPORT_UNAVAILABLE",
+                "the transport used to materialize this plan is no longer loaded",
+            );
+        };
+        let mut session = match transport.open_exact(&observation_context.observation) {
+            Ok(session) => session,
+            Err(error) => {
+                return self.refuse(
+                    request,
+                    Status::Unavailable,
+                    "EXACT_DEVICE_UNAVAILABLE",
+                    &error.to_string(),
+                );
+            }
+        };
+        let now = self.clock.now_epoch_ms();
+        let mut observation = match session.reread_identity() {
+            Ok(observation) => observation,
+            Err(error) => {
+                return self.refuse(
+                    request,
+                    Status::Unavailable,
+                    "DEVICE_REREAD_FAILED",
+                    &error.to_string(),
+                );
+            }
+        };
+        observation.observed_at_epoch_ms = now;
+        let admission =
+            match admission_facts(&stored.envelope, observation, session.session_digest()) {
+                Ok(admission) => admission,
+                Err(error) => {
+                    return self.refuse(
+                        request,
+                        Status::Internal,
+                        "ADMISSION_FACTS_FAILED",
+                        &error,
+                    );
+                }
+            };
+
+        match self.jobs.start(
+            &stored.envelope,
+            &stored.private_plan,
+            controller_session_id,
+            &admission,
+            now,
+        ) {
             Ok(job_id) => {
+                self.job_sessions.insert(
+                    job_id.clone(),
+                    JobObservationSession {
+                        transport_index: observation_context.transport_index,
+                        session,
+                    },
+                );
                 let mut payload = Vec::new();
                 arkforge_ipc::wire::write_string(&mut payload, 1, &job_id);
                 self.ok(request, payload)
             }
-            Err(error) => self.refuse(
-                request,
-                Status::Internal,
-                error.code(),
-                &error.to_string(),
-            ),
+            Err(error) => self.refuse(request, Status::Internal, error.code(), &error.to_string()),
         }
     }
 
@@ -732,6 +1035,194 @@ impl Service {
         self.ok(request, payload)
     }
 
+    fn get_job(&self, request: &Request) -> Response {
+        let job_id = first_string_field(&request.payload, 1).unwrap_or_default();
+        let Some(job) = self.jobs.job(&job_id) else {
+            return self.refuse(
+                request,
+                Status::NotFound,
+                "UNKNOWN_JOB",
+                &format!("no job {job_id}"),
+            );
+        };
+        let mut payload = Vec::new();
+        arkforge_ipc::wire::write_message(&mut payload, 1, &encode_job_summary(job).encode());
+        self.ok(request, payload)
+    }
+
+    fn list_jobs(&self, request: &Request) -> Response {
+        let mut payload = Vec::new();
+        for job in self.jobs.all_jobs() {
+            arkforge_ipc::wire::write_message(&mut payload, 1, &encode_job_summary(job).encode());
+        }
+        self.ok(request, payload)
+    }
+
+    /// Returns the strongest read-only conclusion currently supported.
+    ///
+    /// DAYU200's measured RockUSB read face does not cover most writable
+    /// partitions, so an unresolved write normally remains unknown. Returning
+    /// that typed verdict is still materially different from replaying it or
+    /// pretending the recovery API does not exist.
+    fn reconcile_job(&self, request: &Request) -> Response {
+        let job_id = first_string_field(&request.payload, 1).unwrap_or_default();
+        let Some(job) = self.jobs.job(&job_id) else {
+            return self.refuse(
+                request,
+                Status::NotFound,
+                "UNKNOWN_JOB",
+                &format!("no job {job_id}"),
+            );
+        };
+        let state = job.state().as_str();
+        let context = self.recovery_surface_context(&job_id);
+        let mut payload = Vec::new();
+        arkforge_ipc::wire::write_string(&mut payload, 1, &job_id);
+        if state == "outcomeUnknown" {
+            arkforge_ipc::wire::write_string(&mut payload, 2, "stillUnknown");
+            arkforge_ipc::wire::write_string(
+                &mut payload,
+                3,
+                if context.is_some() {
+                    "the safe read-only face cannot establish every possible persistent effect; \
+                     the original outcome remains immutable"
+                } else {
+                    "the durable job was recovered without its private plan, so its possible \
+                     effects cannot be bounded in this daemon process"
+                },
+            );
+        } else {
+            arkforge_ipc::wire::write_string(&mut payload, 2, "nothingToReconcile");
+            arkforge_ipc::wire::write_string(&mut payload, 3, "the job has no unresolved outcome");
+        }
+        arkforge_ipc::wire::write_string(
+            &mut payload,
+            4,
+            context
+                .as_ref()
+                .map(|context| completeness_name(context.possible.completeness))
+                .unwrap_or("unbounded"),
+        );
+        if let Some(context) = &context {
+            for effect in &context.possible.effects.persistent {
+                arkforge_ipc::wire::write_string(&mut payload, 5, &persistent_effect_name(effect));
+            }
+        }
+        arkforge_ipc::wire::write_string(&mut payload, 6, state);
+        self.ok(request, payload)
+    }
+
+    /// Assesses whether a distinct complete-overwrite plan may supersede an
+    /// unknown outcome. This never starts or replays either plan.
+    fn plan_superseding_recovery(&self, request: &Request) -> Response {
+        let job_id = first_string_field(&request.payload, 1).unwrap_or_default();
+        let Some(job) = self.jobs.job(&job_id) else {
+            return self.refuse(
+                request,
+                Status::NotFound,
+                "UNKNOWN_JOB",
+                &format!("no job {job_id}"),
+            );
+        };
+        let mut payload = Vec::new();
+        arkforge_ipc::wire::write_string(&mut payload, 1, &job_id);
+        let context = self.recovery_surface_context(&job_id);
+        let assessment = if job.state().as_str() != "outcomeUnknown" {
+            SupersedingRecoveryAssessment::Ineligible(RecoveryBlocker::NothingToRecover)
+        } else if let Some(context) = &context {
+            assess_superseding_recovery(&context.possible, &context.declaration)
+        } else {
+            SupersedingRecoveryAssessment::Ineligible(RecoveryBlocker::EffectsUnbounded)
+        };
+        match &assessment {
+            SupersedingRecoveryAssessment::Eligible { covers } => {
+                arkforge_ipc::wire::write_bool(&mut payload, 2, true);
+                for effect in covers {
+                    arkforge_ipc::wire::write_string(
+                        &mut payload,
+                        5,
+                        &persistent_effect_name(effect),
+                    );
+                }
+            }
+            SupersedingRecoveryAssessment::Ineligible(blocker) => {
+                arkforge_ipc::wire::write_bool(&mut payload, 2, false);
+                arkforge_ipc::wire::write_string(&mut payload, 3, recovery_blocker_code(blocker));
+                arkforge_ipc::wire::write_string(&mut payload, 4, &blocker.to_string());
+            }
+        }
+        if let Some(context) = context
+            && let Some(contract) = context.contract
+        {
+            arkforge_ipc::wire::write_string(&mut payload, 6, contract.id.as_str());
+            arkforge_ipc::wire::write_string(&mut payload, 7, &contract.version.to_string());
+            arkforge_ipc::wire::write_string(&mut payload, 8, &contract.digest.to_hex());
+        }
+        self.ok(request, payload)
+    }
+
+    /// A typed operator/agent guide available on the public read-only socket.
+    fn get_recovery_guide(&self, request: &Request) -> Response {
+        let job_id = first_string_field(&request.payload, 1).unwrap_or_default();
+        let Some(job) = self.jobs.job(&job_id) else {
+            return self.refuse(
+                request,
+                Status::NotFound,
+                "UNKNOWN_JOB",
+                &format!("no job {job_id}"),
+            );
+        };
+        let context = self.recovery_surface_context(&job_id);
+        let mut payload = Vec::new();
+        arkforge_ipc::wire::write_string(&mut payload, 1, &job_id);
+        arkforge_ipc::wire::write_string(&mut payload, 2, job.state().as_str());
+        arkforge_ipc::wire::write_bool(&mut payload, 3, true);
+        arkforge_ipc::wire::write_bool(&mut payload, 4, true);
+        arkforge_ipc::wire::write_string(
+            &mut payload,
+            5,
+            "do not replay the original intent or reuse its permit",
+        );
+        arkforge_ipc::wire::write_string(
+            &mut payload,
+            5,
+            "ask the paired authority to validate the same target, artifact, toolchain and \
+             uncertain-effect set",
+        );
+        arkforge_ipc::wire::write_string(
+            &mut payload,
+            5,
+            "if eligible, materialize and authorize a distinct complete-overwrite execution",
+        );
+        let supported = context
+            .as_ref()
+            .is_some_and(|context| context.declaration.supports_complete_overwrite);
+        arkforge_ipc::wire::write_bool(&mut payload, 6, supported);
+        if let Some(context) = context
+            && let Some(contract) = context.contract
+        {
+            arkforge_ipc::wire::write_string(&mut payload, 7, contract.id.as_str());
+            arkforge_ipc::wire::write_string(&mut payload, 8, &contract.version.to_string());
+            arkforge_ipc::wire::write_string(&mut payload, 9, &contract.digest.to_hex());
+        }
+        self.ok(request, payload)
+    }
+
+    fn recovery_surface_context(&self, job_id: &str) -> Option<RecoverySurfaceContext> {
+        let stored = self.stored_plan_for_job(job_id)?;
+        let profile = self.profiles.get(stored.envelope.profile.id.as_str())?;
+        let job = self.jobs.job(job_id)?;
+        Some(RecoverySurfaceContext {
+            possible: assess_possible_effects(
+                job.journal(),
+                &stored.private_plan,
+                &profile.data_impact,
+            ),
+            declaration: profile.recovery.clone(),
+            contract: stored.envelope.recovery_contract,
+        })
+    }
+
     fn cancel_job(&mut self, request: &Request) -> Response {
         let job_id = first_string_field(&request.payload, 1).unwrap_or_default();
         match self.jobs.cancel(&job_id, self.clock.now_epoch_ms()) {
@@ -749,12 +1240,7 @@ impl Service {
                 "UNKNOWN_JOB",
                 &format!("no job {job_id}"),
             ),
-            Err(error) => self.refuse(
-                request,
-                Status::Refused,
-                error.code(),
-                &error.to_string(),
-            ),
+            Err(error) => self.refuse(request, Status::Refused, error.code(), &error.to_string()),
         }
     }
 
@@ -808,12 +1294,16 @@ impl Service {
                         Status::InvalidArgument,
                         "PERMIT_NOT_DECODABLE",
                         &error.to_string(),
-                    )
+                    );
                 }
             }
         };
 
-        let Some(profile) = self.profiles.get(stored.envelope.profile.id.as_str()).cloned() else {
+        let Some(profile) = self
+            .profiles
+            .get(stored.envelope.profile.id.as_str())
+            .cloned()
+        else {
             return self.refuse(
                 request,
                 Status::NotFound,
@@ -824,7 +1314,20 @@ impl Service {
                 ),
             );
         };
-        let outcome = match self.jobs.submit_permit(
+        let current_facts = if permit.is_some() {
+            match self.current_facts_for_job(&submission.job_id) {
+                Ok(facts) => Some(facts),
+                Err(error) => {
+                    return self.ok(
+                        request,
+                        SubmissionOutcome::rejected("CURRENT_FACTS_UNAVAILABLE", error).encode(),
+                    );
+                }
+            }
+        } else {
+            None
+        };
+        let result = self.jobs.submit_permit(
             &submission.job_id,
             &submission.request_id,
             permit,
@@ -833,8 +1336,17 @@ impl Service {
             &stored.envelope,
             &stored.private_plan,
             &profile,
+            current_facts,
             self.clock.now_epoch_ms(),
+        );
+        if matches!(
+            result,
+            Err(crate::jobs::JobError::SnapshotExpired)
+                | Err(crate::jobs::JobError::ContinuityBroken(_))
         ) {
+            let _ = self.publish_live_admission(&submission.job_id, false);
+        }
+        let outcome = match result {
             Ok(()) => SubmissionOutcome::accepted(),
             Err(error) => SubmissionOutcome::rejected(error.code(), error.to_string()),
         };
@@ -867,12 +1379,22 @@ impl Service {
                 &format!("no job {}", receipt.job_id),
             );
         };
-        let outcome = match self.jobs.submit_control_receipt(
+        let result = self.jobs.submit_control_receipt(
             &receipt,
             &stored.envelope,
             &stored.private_plan,
             self.clock.now_epoch_ms(),
-        ) {
+        );
+        if result.is_ok() && receipt.accepted {
+            // A successful managed control action is the authority's proof of
+            // the mode transition. The old session must not be reused across
+            // its detach/re-enumeration; the next admission opens a unique new
+            // observation and the authority checks its raw identity facts.
+            self.job_sessions.remove(&receipt.job_id);
+            self.authorized_rebinds.insert(receipt.job_id.clone());
+            let _ = self.publish_live_admission(&receipt.job_id, true);
+        }
+        let outcome = match result {
             Ok(()) => SubmissionOutcome::accepted(),
             Err(error) => SubmissionOutcome::rejected(error.code(), error.to_string()),
         };
@@ -898,6 +1420,30 @@ impl Service {
         let artifact_id = first_string_field(&request.payload, 1).unwrap_or_default();
         let profile_id = first_string_field(&request.payload, 2).unwrap_or_default();
         let observation_id = first_string_field(&request.payload, 3).unwrap_or_default();
+        let intent = first_string_field(&request.payload, 4).unwrap_or_default();
+        let requested_toolchain_id = first_string_field(&request.payload, 5).unwrap_or_default();
+        let authority_namespace = first_string_field(&request.payload, 6).unwrap_or_default();
+        let binding_id = first_string_field(&request.payload, 7).unwrap_or_default();
+        let binding_revision = first_u64_field(&request.payload, 8).unwrap_or_default();
+        let stable_identity = first_bytes_field(&request.payload, 9).unwrap_or_default();
+        let execution_purpose = first_string_field(&request.payload, 10).unwrap_or_default();
+
+        if intent != FlashIntent::FullRestore.as_str() {
+            return self.refuse(
+                request,
+                Status::InvalidArgument,
+                "UNSUPPORTED_FLASH_INTENT",
+                "materializePlan currently requires intent=fullRestore",
+            );
+        }
+        let Some(execution_purpose) = ExecutionPurpose::parse(&execution_purpose) else {
+            return self.refuse(
+                request,
+                Status::InvalidArgument,
+                "UNSUPPORTED_EXECUTION_PURPOSE",
+                "materializePlan requires executionPurpose=primaryFlash or supersedingRecovery",
+            );
+        };
 
         let Some(manifest) = self.manifests.get(&artifact_id).cloned() else {
             return self.refuse(
@@ -915,6 +1461,68 @@ impl Service {
                 &format!("no loaded profile {profile_id}"),
             );
         };
+        if execution_purpose == ExecutionPurpose::SupersedingRecovery
+            && !profile.recovery.supports_complete_overwrite
+        {
+            return self.refuse(
+                request,
+                Status::Refused,
+                "RECOVERY_CONTRACT_UNAVAILABLE",
+                "the selected profile publishes no complete-overwrite recovery contract",
+            );
+        }
+        let toolchain = if profile
+            .artifact_formats
+            .iter()
+            .any(|format| format.as_str() == pac::FORMAT_ID)
+        {
+            research_toolchain_identity()
+        } else {
+            self.bound_rockchip_toolchain_identity()
+        };
+        if requested_toolchain_id != toolchain.id.as_str() {
+            return self.refuse(
+                request,
+                Status::Refused,
+                "TOOLCHAIN_ID_MISMATCH",
+                &format!(
+                    "materializePlan requested toolchain {requested_toolchain_id}; this daemon binds {}",
+                    toolchain.id
+                ),
+            );
+        }
+        let Ok(authority_namespace) = AuthorityNamespace::new(authority_namespace) else {
+            return self.refuse(
+                request,
+                Status::InvalidArgument,
+                "BAD_AUTHORITY_NAMESPACE",
+                "authorityNamespace is not a usable identifier",
+            );
+        };
+        let Ok(binding_id) = OpaqueId::new(binding_id) else {
+            return self.refuse(
+                request,
+                Status::InvalidArgument,
+                "BAD_BINDING_ID",
+                "bindingId is not a usable identifier",
+            );
+        };
+        let Some(stable_identity_digest) = digest_from_bytes(&stable_identity) else {
+            return self.refuse(
+                request,
+                Status::InvalidArgument,
+                "BAD_STABLE_IDENTITY_DIGEST",
+                "stableIdentitySha256 must contain exactly 32 bytes",
+            );
+        };
+        if binding_revision == 0 {
+            return self.refuse(
+                request,
+                Status::InvalidArgument,
+                "BAD_BINDING_REVISION",
+                "bindingRevision must be greater than zero",
+            );
+        }
 
         let Some(provider) = provider_for(&profile, &self.rockchip, &self.unisoc) else {
             return self.refuse(
@@ -928,9 +1536,10 @@ impl Service {
             );
         };
 
-        let mut probe = None;
-        for transport in &self.transports {
-            let Ok(observations) = transport.discover(&TypedDiscoveryFilter::default(), self.clock.now_epoch_ms())
+        let mut probed = None;
+        for (transport_index, transport) in self.transports.iter().enumerate() {
+            let Ok(observations) =
+                transport.discover(&TypedDiscoveryFilter::default(), self.clock.now_epoch_ms())
             else {
                 continue;
             };
@@ -938,17 +1547,18 @@ impl Service {
                 .iter()
                 .find(|candidate| candidate.observation_id.as_str() == observation_id)
             {
-                probe = provider
+                probed = provider
                     .probe(&ProbeContext {
                         transport: transport.as_ref(),
                         observation,
                         profile: &profile,
                     })
-                    .ok();
+                    .ok()
+                    .map(|probe| (probe, transport_index, observation.clone()));
                 break;
             }
         }
-        let Some(probe) = probe else {
+        let Some((probe, transport_index, plan_observation)) = probed else {
             return self.refuse(
                 request,
                 Status::NotFound,
@@ -960,36 +1570,24 @@ impl Service {
         let materialize = MaterializeRequest {
             plan_id: PlanId::new(format!("PLAN-{}", &artifact_id[..12]))
                 .unwrap_or_else(|_| PlanId::new("PLAN-UNNAMED").expect("literal")),
+            execution_purpose,
             intent: FlashIntent::FullRestore,
             artifact: &manifest,
-            artifact_id: OpaqueId::new(&artifact_id[..32]).unwrap_or_else(|_| {
-                OpaqueId::new("ART-UNNAMED").expect("literal identifier")
-            }),
+            artifact_id: OpaqueId::new(&artifact_id[..32])
+                .unwrap_or_else(|_| OpaqueId::new("ART-UNNAMED").expect("literal identifier")),
             profile: &profile,
             probe: &probe,
             authority_binding: AuthorityBindingRef {
-                // A read-only materialization is not bound to an authority
-                // target: nothing here can be executed, and inventing a binding
-                // would put a target identity into an audit record that no
-                // authority issued.
-                authority_namespace: AuthorityNamespace::new("unbound").expect("literal"),
-                binding_id: OpaqueId::new("UNBOUND").expect("literal identifier"),
-                binding_revision: 0,
-                stable_identity_digest: probe.facts_digest,
+                authority_namespace,
+                binding_id,
+                binding_revision,
+                stable_identity_digest,
             },
             // The native implementation this daemon actually bound, not a
             // source-revision constant. A plan materialized for one build and
             // started on another is refused because the executable digest is
             // part of the maturity combination.
-            toolchain: if profile
-                .artifact_formats
-                .iter()
-                .any(|format| format.as_str() == pac::FORMAT_ID)
-            {
-                research_toolchain_identity()
-            } else {
-                self.bound_rockchip_toolchain_identity()
-            },
+            toolchain,
             host_platform: HostPlatform::current(),
             driver_facts_digest: driver_facts_digest(),
             evidence_set_digest: evidence_set_digest(),
@@ -997,18 +1595,18 @@ impl Service {
             plan_lifetime_ms: 3_600_000,
         };
 
-        let materialized = match provider.materialize_with_private_plan(&materialize, &self.maturity)
-        {
-            Ok(materialized) => materialized,
-            Err(error) => {
-                return self.refuse(
-                    request,
-                    Status::Refused,
-                    "MATERIALIZATION_REFUSED",
-                    &error.to_string(),
-                )
-            }
-        };
+        let materialized =
+            match provider.materialize_with_private_plan(&materialize, &self.maturity) {
+                Ok(materialized) => materialized,
+                Err(error) => {
+                    return self.refuse(
+                        request,
+                        Status::Refused,
+                        "MATERIALIZATION_REFUSED",
+                        &error.to_string(),
+                    );
+                }
+            };
         // Store the executable plan and its private half together. A job can
         // only ever be started against a plan the daemon materialized itself,
         // which is what keeps `startExecution` free of anything a caller could
@@ -1027,6 +1625,13 @@ impl Service {
                     &error.to_string(),
                 );
             }
+            self.plan_observations.insert(
+                envelope.plan_digest.to_hex(),
+                PlanObservationContext {
+                    transport_index,
+                    observation: plan_observation,
+                },
+            );
         }
 
         match Ok::<_, arkforge_provider::ProviderError>(materialized.materialization) {
@@ -1071,6 +1676,7 @@ impl Service {
                         .to_hex(),
                     public_projection_sha256: envelope.public_projection_digest.to_hex(),
                     expires_at_epoch_ms: envelope.expires_at_epoch_ms,
+                    execution_purpose: envelope.execution_purpose.as_str().to_string(),
                     ..ExecutablePlan::default()
                 };
                 for step in &envelope.public_steps {
@@ -1105,6 +1711,64 @@ fn blocker_list(blockers: &[arkforge_engine::ExecutionBlocker]) -> String {
         .map(|blocker| format!("{}: {blocker}", blocker.code()))
         .collect::<Vec<_>>()
         .join("; ")
+}
+
+fn admission_facts(
+    envelope: &arkforge_core::plan::FlashPlanEnvelope,
+    observation: DeviceObservation,
+    transport_session_digest: Sha256Digest,
+) -> Result<AdmissionFacts, String> {
+    Ok(AdmissionFacts {
+        observation,
+        transport_session_digest,
+        provider_facts_digest: digest_canonical(Domain::ProviderFacts, &envelope.provider)
+            .map_err(|error| error.to_string())?,
+        toolchain_facts_digest: digest_canonical(Domain::ToolchainFacts, &envelope.toolchain)
+            .map_err(|error| error.to_string())?,
+        artifact_facts_digest: digest_canonical(Domain::ArtifactFacts, &envelope.artifact)
+            .map_err(|error| error.to_string())?,
+    })
+}
+
+/// Whether a completed native dispatch establishes a sealed mode transition
+/// and therefore authorizes one exact rebind for the next admission.
+///
+/// A declared transition without semantic success proves nothing, and missing
+/// mode facts are not inferred. Same-mode steps retain their open continuity
+/// session.
+fn successful_dispatch_requires_rebind(
+    disposition: ActionDisposition,
+    expected_before: Option<&DeviceMode>,
+    expected_after: Option<&DeviceMode>,
+) -> bool {
+    disposition == ActionDisposition::SemanticSuccess
+        && matches!(
+            (expected_before, expected_after),
+            (Some(before), Some(after)) if before != after
+        )
+}
+
+fn encode_job_summary(job: &crate::jobs::Job) -> JobSummary {
+    JobSummary {
+        job_id: job.job_id().to_string(),
+        plan_id: job.plan_id().to_string(),
+        plan_sha256: job.plan_digest().as_bytes().to_vec(),
+        state: job.state().as_str().to_string(),
+        terminal: job.state().is_terminal() || job.stopped().is_some(),
+        current_step_id: job.current_step_id(),
+        completed_steps: job.completed_steps() as u64,
+        total_steps: job.total_steps() as u64,
+        last_sequence: job.last_sequence(),
+        stopped_reason: job.stopped().map(ToString::to_string).unwrap_or_default(),
+    }
+}
+
+fn next_expected_mode(
+    stored: &StoredPlan,
+    job: Option<&crate::jobs::Job>,
+) -> Result<Option<arkforge_core::DeviceMode>, String> {
+    let job = job.ok_or_else(|| "the job no longer exists".to_string())?;
+    Ok(job.expected_mode(&stored.envelope))
 }
 
 /// Chooses the provider by the artifact formats the *profile* declares.
@@ -1247,6 +1911,35 @@ fn first_string_field(payload: &[u8], wanted: u32) -> Option<String> {
         }
     }
     None
+}
+
+fn first_u64_field(payload: &[u8], wanted: u32) -> Option<u64> {
+    let mut reader = arkforge_ipc::wire::Reader::new(payload);
+    while let Ok(Some((field, value))) = reader.next_field() {
+        if field == wanted {
+            return value.as_u64().ok();
+        }
+    }
+    None
+}
+
+fn first_bytes_field(payload: &[u8], wanted: u32) -> Option<Vec<u8>> {
+    let mut reader = arkforge_ipc::wire::Reader::new(payload);
+    while let Ok(Some((field, value))) = reader.next_field() {
+        if field == wanted {
+            return value.as_bytes().ok().map(ToOwned::to_owned);
+        }
+    }
+    None
+}
+
+fn digest_from_bytes(bytes: &[u8]) -> Option<Sha256Digest> {
+    if bytes.len() != 32 {
+        return None;
+    }
+    let mut digest = [0u8; 32];
+    digest.copy_from_slice(bytes);
+    Some(Sha256Digest::from_bytes(digest))
 }
 
 fn encode_manifest(manifest: &ArtifactManifest) -> InspectArtifactResponse {
@@ -1452,6 +2145,36 @@ fn encode_data_impact(impact: &arkforge_core::DataImpact) -> Vec<KeyValue> {
     ]
 }
 
+fn completeness_name(completeness: EffectSetCompleteness) -> &'static str {
+    match completeness {
+        EffectSetCompleteness::Bounded => "bounded",
+        EffectSetCompleteness::Unbounded => "unbounded",
+    }
+}
+
+fn persistent_effect_name(effect: &PersistentEffect) -> String {
+    match effect {
+        PersistentEffect::WritePartition { partition, .. }
+        | PersistentEffect::ErasePartition { partition, .. } => {
+            format!("partition:{partition}")
+        }
+        PersistentEffect::WriteRawRegion { region, .. } => format!("rawRegion:{region}"),
+        PersistentEffect::ReplacePartitionTable { .. } => "partitionTable".into(),
+        PersistentEffect::ChangeBootMetadata { field, .. } => {
+            format!("bootMetadata:{}", field.as_str())
+        }
+    }
+}
+
+fn recovery_blocker_code(blocker: &RecoveryBlocker) -> &'static str {
+    match blocker {
+        RecoveryBlocker::EffectsUnbounded => "effectsUnbounded",
+        RecoveryBlocker::NoPublishedCoverage { .. } => "noPublishedCoverage",
+        RecoveryBlocker::EffectOutsideCoverage { .. } => "effectOutsideCoverage",
+        RecoveryBlocker::NothingToRecover => "nothingToRecover",
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1485,7 +2208,12 @@ mod tests {
         assert_eq!(toolchain.kind, ToolchainKind::NativeProtocol);
         assert_eq!(toolchain.backend_digest, backend_digest);
         assert_eq!(
-            service.readiness.dispatcher.as_ref().unwrap().backend_digest,
+            service
+                .readiness
+                .dispatcher
+                .as_ref()
+                .unwrap()
+                .backend_digest,
             backend_digest
         );
 
@@ -1520,5 +2248,32 @@ mod tests {
                 campaign: "AFA-AC-7".into()
             }
         );
+    }
+
+    #[test]
+    fn only_semantically_confirmed_native_mode_changes_open_an_exact_rebind() {
+        let loader = DeviceMode::new("rockusb-loader").unwrap();
+        let normal = DeviceMode::new("hdc-normal").unwrap();
+
+        assert!(successful_dispatch_requires_rebind(
+            ActionDisposition::SemanticSuccess,
+            Some(&loader),
+            Some(&normal),
+        ));
+        assert!(!successful_dispatch_requires_rebind(
+            ActionDisposition::SemanticSuccess,
+            Some(&loader),
+            Some(&loader),
+        ));
+        assert!(!successful_dispatch_requires_rebind(
+            ActionDisposition::OutcomeUnknown,
+            Some(&loader),
+            Some(&normal),
+        ));
+        assert!(!successful_dispatch_requires_rebind(
+            ActionDisposition::SemanticSuccess,
+            None,
+            Some(&normal),
+        ));
     }
 }

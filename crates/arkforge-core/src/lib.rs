@@ -37,8 +37,8 @@ pub mod yaml;
 
 pub use authority::{AuthorityBindingRef, AuthorityNamespace};
 pub use digest::{
-    digest_canonical, digest_in_domain, digest_ordered, CanonicalCbor, CborError, CborValue, Domain,
-    Sha256, Sha256Digest,
+    CanonicalCbor, CborError, CborValue, Domain, Sha256, Sha256Digest, digest_canonical,
+    digest_in_domain, digest_ordered,
 };
 pub use effect::{
     AgentStage, BootMetadataField, ByteRange, DataImpact, DataImpactState, DeviceMode, EffectError,
@@ -50,32 +50,32 @@ pub use identity::{
     Version,
 };
 pub use ids::{
-    ActionId, ArtifactId, AttemptId, ControllerSessionId, EvidenceId, IdError, JobId, ObservationId,
-    OpaqueId, PartitionId, PermitId, PlanId, RegionId, RequestId, StepId,
-};
-pub use profile::{
-    load as load_profile, AllowedTarget, DeviceProfile, HardwareRevisionPolicy, ModeDeclaration,
-    IdentityFieldPolicy, ModeTransition, ProfileError, ProfileExecutionBlocker, ProviderCombination,
-    ReadDomainPolicy, RebindTolerance,
-    RecoveryDeclaration, SocIdentity, StorageDeclaration, WriteDomainDeclaration,
+    ActionId, ArtifactId, AttemptId, ControllerSessionId, EvidenceId, IdError, JobId,
+    ObservationId, OpaqueId, PartitionId, PermitId, PlanId, RegionId, RequestId, StepId,
 };
 pub use plan::{
-    ExecutionAvailability, ExecutionPurpose, ExecutionUnknown, EvidenceRequirement,
+    EvidenceRequirement, ExecutionAvailability, ExecutionPurpose, ExecutionUnknown,
     FlashPlanEnvelope, PlanAssessment, PlanError, PlanMaterialization, PlanSchemaVersion,
     PlanSealInput, PostflightPolicy, ProfileCandidate, ProviderCandidate, RecoveryContractRef,
 };
+pub use profile::{
+    AllowedTarget, DeviceProfile, HardwareRevisionPolicy, IdentityFieldPolicy, ModeDeclaration,
+    ModeTransition, ProfileError, ProfileExecutionBlocker, ProviderCombination, ReadDomainPolicy,
+    RebindTolerance, RecoveryDeclaration, SocIdentity, StorageDeclaration, WriteDomainDeclaration,
+    load as load_profile,
+};
 pub use projection::{
-    validate_projection, ActionDigestBinding, PrivateActionRecord, PrivateActionRole,
-    ProjectionDigests, ProjectionError, StoredProviderPlan,
+    ActionDigestBinding, PrivateActionRecord, PrivateActionRole, ProjectionDigests,
+    ProjectionError, StoredProviderPlan, validate_projection,
 };
 pub use step::{
     BindingRequirement, CancellationPolicy, FlashStepKind, PublicFlashStep, SemanticTarget,
     StepError, WorkflowEffect,
 };
 pub use verification::{
-    classify_verification, FailureClassification, MeasuredReadDomain, ReadDomainDeclaration,
-    ReadbackObservation, TargetVerificationDeclaration, TypedSkipReason, VerificationError,
-    VerificationFallback, VerificationOutcome, VerificationStrength,
+    FailureClassification, MeasuredReadDomain, ReadDomainDeclaration, ReadbackObservation,
+    TargetVerificationDeclaration, TypedSkipReason, VerificationError, VerificationFallback,
+    VerificationOutcome, VerificationStrength, classify_verification,
 };
 
 /// The wire/schema version of this Core.

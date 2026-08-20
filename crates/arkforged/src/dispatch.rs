@@ -27,9 +27,9 @@ use arkforge_artifact::dayu200;
 use arkforge_artifact::staging::stage_members;
 use arkforge_core::outcome::ActionDisposition;
 use arkforge_provider::rockchip_execute::{
-    execute_action, ExecutionError, ExecutionSession, RockUsbDevice, RockUsbLocation,
-    RockUsbMutationReceipt, RockUsbObservation, RockUsbPort, RockUsbPortFailure,
-    RockUsbWriteProgress, StagedImage, StoredAction,
+    ExecutionError, ExecutionSession, RockUsbDevice, RockUsbLocation, RockUsbMutationReceipt,
+    RockUsbObservation, RockUsbPort, RockUsbPortFailure, RockUsbWriteProgress, StagedImage,
+    StoredAction, execute_action,
 };
 use arkforge_provider::rockusb_protocol::{RockUsbBulkIo, RockUsbProtocol};
 use core::fmt;
@@ -50,7 +50,11 @@ pub struct Dispatcher<'a> {
 }
 
 impl<'a> Dispatcher<'a> {
-    pub fn new(store_root: impl Into<PathBuf>, work_root: impl Into<PathBuf>, port: &'a dyn RockUsbPort) -> Self {
+    pub fn new(
+        store_root: impl Into<PathBuf>,
+        work_root: impl Into<PathBuf>,
+        port: &'a dyn RockUsbPort,
+    ) -> Self {
         Dispatcher {
             store_root: store_root.into(),
             work_root: work_root.into(),
@@ -114,8 +118,9 @@ impl<'a> Dispatcher<'a> {
         // effect would say nothing about the device.
         let mut last = None;
         for (action, record) in decoded.iter().zip(&work.actions) {
-            let outcome = execute_action(action, record, session, &work.profile, self.port, &scratch)
-                .map_err(classify)?;
+            let outcome =
+                execute_action(action, record, session, &work.profile, self.port, &scratch)
+                    .map_err(classify)?;
             last = Some(outcome);
         }
         let outcome = last.ok_or_else(|| {
@@ -232,7 +237,10 @@ impl fmt::Display for DispatchFailure {
                 write!(f, "refused before external I/O began: {detail}")
             }
             DispatchFailure::AfterExternalIo(detail) => {
-                write!(f, "external I/O began and did not confirm its effect: {detail}")
+                write!(
+                    f,
+                    "external I/O began and did not confirm its effect: {detail}"
+                )
             }
         }
     }
@@ -264,9 +272,7 @@ fn classify(error: ExecutionError) -> DispatchFailure {
         | ExecutionError::ImageOverrunsPartition { .. }
         | ExecutionError::StagingChanged(_)
         | ExecutionError::VerificationRangeMissing
-        | ExecutionError::ScratchUnusable(_) => {
-            DispatchFailure::BeforeAnyEffect(error.to_string())
-        }
+        | ExecutionError::ScratchUnusable(_) => DispatchFailure::BeforeAnyEffect(error.to_string()),
         // The port was reached, so a native USB request may have run.
         ExecutionError::ExternalIo { .. } | ExecutionError::ReadFailed { .. } => {
             DispatchFailure::AfterExternalIo(error.to_string())
@@ -488,7 +494,7 @@ impl RockUsbPort for NativeRockUsbPort {
                 image.path.display()
             )));
         }
-        let total_sectors = total_bytes / 512 + u64::from(total_bytes % 512 != 0);
+        let total_sectors = total_bytes / 512 + u64::from(!total_bytes.is_multiple_of(512));
         let end_sector = begin_sector.checked_add(total_sectors).ok_or_else(|| {
             RockUsbPortFailure::BeforeIo("native WRITE_LBA sector range overflows".into())
         })?;
@@ -552,11 +558,9 @@ impl RockUsbPort for NativeRockUsbPort {
             chunks += progress.chunks;
         }
         let mut extra = [0u8; 1];
-        let extra_read = file
-            .read(&mut extra)
-            .map_err(|error| {
-                RockUsbPortFailure::AfterIo(format!("{}: {error}", image.path.display()))
-            })?;
+        let extra_read = file.read(&mut extra).map_err(|error| {
+            RockUsbPortFailure::AfterIo(format!("{}: {error}", image.path.display()))
+        })?;
         if extra_read != 0 {
             return Err(RockUsbPortFailure::AfterIo(format!(
                 "{} grew while native WRITE_LBA was reading it",

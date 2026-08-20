@@ -5,30 +5,31 @@
 //! step naming a partition and a digest that binds it to exactly one private
 //! action (architecture.md 6).
 //!
-//! AF-V1 implements probe, validate and materialize. Execution is AF-V2 and the
-//! SPI's default refusal stands.
+//! The daemon executes the sealed private plan through the native RockUSB
+//! dispatcher; the provider itself remains responsible for lowering and the
+//! published recovery coverage reference.
 
 use crate::{
     FlashIntent, FlashProvider, MaterializeRequest, MaterializedPlan, MaturityRegistry,
     ProbeContext, ProviderDescriptor, ProviderError, ProviderProbe, ValidationReport,
 };
 use arkforge_artifact::manifest::ArtifactManifest;
-use arkforge_core::digest::{digest_in_domain, sha256, CanonicalCbor, CborValue, Domain};
-use arkforge_core::effect::{
-    ByteRange, DeviceMode, EffectSet, PersistentEffect, TransientEffect,
+use arkforge_core::digest::{
+    CanonicalCbor, CborValue, Domain, digest_canonical, digest_in_domain, sha256,
 };
+use arkforge_core::effect::{ByteRange, DeviceMode, EffectSet, PersistentEffect, TransientEffect};
 use arkforge_core::identity::{
     ArtifactFormat, ArtifactIdentity, MaturityKey, MaturityState, ProviderIdentity, Version,
 };
 use arkforge_core::ids::{ActionId, OpaqueId, StepId};
 use arkforge_core::plan::{
-    EvidenceRequirement, ExecutionAvailability, ExecutionPurpose, ExecutionUnknown,
-    FlashPlanEnvelope, PlanAssessment, PlanMaterialization, PlanSchemaVersion, PlanSealInput,
-    PostflightPolicy, ProfileCandidate, ProviderCandidate,
+    EvidenceRequirement, ExecutionAvailability, ExecutionUnknown, FlashPlanEnvelope,
+    PlanAssessment, PlanMaterialization, PlanSchemaVersion, PlanSealInput, PostflightPolicy,
+    ProfileCandidate, ProviderCandidate, RecoveryContractRef,
 };
 use arkforge_core::profile::{AllowedTarget, DeviceProfile};
 use arkforge_core::projection::{
-    validate_projection, PrivateActionRecord, PrivateActionRole, StoredProviderPlan,
+    PrivateActionRecord, PrivateActionRole, StoredProviderPlan, validate_projection,
 };
 use arkforge_core::step::{
     BindingRequirement, CancellationPolicy, FlashStepKind, PublicFlashStep, SemanticTarget,
@@ -178,8 +179,9 @@ impl RockchipProvider {
             });
         }
 
-        let projection = validate_projection(&built.public_steps, &built.private_plan, &built.effect_set)
-            .map_err(|error| ProviderError::Core(error.to_string()))?;
+        let projection =
+            validate_projection(&built.public_steps, &built.private_plan, &built.effect_set)
+                .map_err(|error| ProviderError::Core(error.to_string()))?;
 
         let artifact_identity = ArtifactIdentity {
             artifact_id: request.artifact_id.clone(),
@@ -191,10 +193,24 @@ impl RockchipProvider {
                 .map_err(|error| ProviderError::Core(error.to_string()))?,
         };
 
+        let recovery_contract = profile
+            .recovery
+            .supports_complete_overwrite
+            .then(|| {
+                Ok(RecoveryContractRef {
+                    id: OpaqueId::new("arkforge.rockchip.complete-overwrite")
+                        .expect("literal recovery contract id"),
+                    version: profile.recovery.version,
+                    digest: digest_canonical(Domain::RecoveryCoverage, &profile.recovery)
+                        .map_err(|error| ProviderError::Core(error.to_string()))?,
+                })
+            })
+            .transpose()?;
+
         let envelope = FlashPlanEnvelope::seal(PlanSealInput {
             schema_version: PlanSchemaVersion::CURRENT,
             plan_id: request.plan_id.clone(),
-            execution_purpose: ExecutionPurpose::PrimaryFlash,
+            execution_purpose: request.execution_purpose,
             authority_binding: request.authority_binding.clone(),
             provider: self.identity.clone(),
             profile: profile_identity,
@@ -209,7 +225,7 @@ impl RockchipProvider {
             public_steps: built.public_steps,
             effect_set: built.effect_set,
             projection,
-            recovery_contract: None,
+            recovery_contract,
             postflight: built.postflight,
             created_at_epoch_ms: request.created_at_epoch_ms,
             expires_at_epoch_ms: request.created_at_epoch_ms + request.plan_lifetime_ms,
@@ -234,24 +250,30 @@ impl RockchipProvider {
 
         let normal = mode(NORMAL_MODE)?;
         let loader = mode(LOADER_MODE)?;
+        let starts_in_loader = request.probe.observation.mode == loader;
 
         let mut public_steps: Vec<PublicFlashStep> = Vec::new();
         let mut actions: Vec<PrivateActionRecord> = Vec::new();
         let mut persistent: Vec<PersistentEffect> = Vec::new();
-        let transient = vec![
-            TransientEffect::EnterMode {
+        let mut transient = Vec::new();
+        if !starts_in_loader {
+            transient.push(TransientEffect::EnterMode {
                 from: normal.clone(),
                 to: loader.clone(),
-            },
-            TransientEffect::Reboot {
-                target_mode: normal.clone(),
-            },
-        ];
+            });
+        }
+        transient.push(TransientEffect::Reboot {
+            target_mode: normal.clone(),
+        });
 
         let mut sequence = 0u32;
 
-        // 1. Enter the loader through the authority's managed control port.
-        {
+        // Enter the loader through the authority's managed control port when
+        // materialization observed HDC-normal. If the exact sealed observation
+        // is already Loader, the first step is the Loader identity probe below:
+        // retaining a normal-only EnsureMode step would make StartExecution
+        // reject the plan before ArkDeck can prove the idempotent postcondition.
+        if !starts_in_loader {
             let (step_id, action_id) = next_ids(&mut sequence, "ACT");
             let action = private_action(
                 action_id,
@@ -330,7 +352,10 @@ impl RockchipProvider {
                 None,
                 CborValue::map(vec![
                     ("action", CborValue::text("validate-partition-table")),
-                    ("expectedLayoutDigest", CborValue::Bytes(layout_digest.as_bytes().to_vec())),
+                    (
+                        "expectedLayoutDigest",
+                        CborValue::Bytes(layout_digest.as_bytes().to_vec()),
+                    ),
                 ]),
             );
             public_steps.push(PublicFlashStep {
@@ -424,11 +449,8 @@ impl RockchipProvider {
             let member_name = target.source_member.as_deref().expect("checked above");
             let member = artifact.member(member_name).expect("checked above");
             let block_size = block_size(profile)?;
-            let range = ByteRange::new(
-                target.offset_sectors * block_size,
-                member.size_bytes,
-            )
-            .map_err(|error| ProviderError::FactsInsufficient(error.to_string()))?;
+            let range = ByteRange::new(target.offset_sectors * block_size, member.size_bytes)
+                .map_err(|error| ProviderError::FactsInsufficient(error.to_string()))?;
 
             let (step_id, action_id) = next_ids(&mut sequence, "ACT");
             let readback = private_action(
@@ -467,10 +489,7 @@ impl RockchipProvider {
                 CborValue::map(vec![
                     ("action", CborValue::text("characterize-read-domain")),
                     ("probe", CborValue::text("primary-and-backup-gpt")),
-                    (
-                        "policy",
-                        CborValue::text(profile.read_domain.read.as_str()),
-                    ),
+                    ("policy", CborValue::text(profile.read_domain.read.as_str())),
                 ]),
             );
             public_steps.push(PublicFlashStep {
@@ -531,10 +550,7 @@ impl RockchipProvider {
             .build_facts
             .iter()
             .filter(|(key, _)| {
-                matches!(
-                    key.as_str(),
-                    "const.ohos.fullname" | "const.product.model"
-                )
+                matches!(key.as_str(), "const.ohos.fullname" | "const.product.model")
             })
             .cloned()
             .collect();
@@ -557,9 +573,7 @@ impl RockchipProvider {
                         CborValue::Map(
                             build_facts
                                 .iter()
-                                .map(|(key, value)| {
-                                    (key.to_cbor(), CborValue::text(value.clone()))
-                                })
+                                .map(|(key, value)| (key.to_cbor(), CborValue::text(value.clone())))
                                 .collect(),
                         ),
                     ),
@@ -674,10 +688,7 @@ fn layout_digest(profile: &DeviceProfile) -> Sha256Digest {
             .map(|target| {
                 CborValue::map(vec![
                     ("partition", CborValue::text(target.partition.as_str())),
-                    (
-                        "offsetSectors",
-                        CborValue::Unsigned(target.offset_sectors),
-                    ),
+                    ("offsetSectors", CborValue::Unsigned(target.offset_sectors)),
                 ])
             })
             .collect(),
@@ -736,9 +747,8 @@ fn evidence_requirements(blockers: &[ExecutionUnknown]) -> Vec<EvidenceRequireme
     blockers
         .iter()
         .map(|blocker| EvidenceRequirement {
-            id: EvidenceId::new(format!("EVR-{}", blocker.id)).unwrap_or_else(|_| {
-                EvidenceId::new("EVR-UNNAMED").expect("literal identifier")
-            }),
+            id: EvidenceId::new(format!("EVR-{}", blocker.id))
+                .unwrap_or_else(|_| EvidenceId::new("EVR-UNNAMED").expect("literal identifier")),
             closes: vec![blocker.id.clone()],
             description: blocker.summary.clone(),
             minimum_grade: 'C',
@@ -866,7 +876,10 @@ impl FlashProvider for RockchipProvider {
             let Some(member_name) = target.source_member.as_deref() else {
                 report.violation(
                     "RK-V06",
-                    format!("profile target {} declares no source member", target.partition),
+                    format!(
+                        "profile target {} declares no source member",
+                        target.partition
+                    ),
                 );
                 continue;
             };

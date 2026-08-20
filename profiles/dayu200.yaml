@@ -14,10 +14,10 @@
 #     whole medium while the native READ_LBA face does not, so read reach is
 #     measured at runtime and never assumed here.
 #
-# Maturity note: this profile is the AF-V1 read-only shape. `recovery` declares
-# no complete-overwrite support because the durable engine that would execute it
-# is AF-V2 work; a coverage claim ahead of the code would be a claim the
-# evidence does not carry (architecture.md 12.3, 24.1).
+# The native durable engine executes the same closed nine-partition recipe for
+# primary flash and complete-overwrite recovery. Recovery still requires a new
+# plan/permit epoch from the paired authority; this declaration only publishes
+# what the provider recipe covers.
 
 schemaVersion: arkforge.device-profile/v1
 
@@ -241,10 +241,9 @@ dataImpact:
   secureStorage: preserved
 
 recovery:
-  supportsCompleteOverwrite: false
-  version: 0.1.0
-  coveredEffects: []
-  unsupportedStates:
-    - "complete-overwrite recovery requires the AF-V2 durable engine; AF-V1 is read-only"
+  supportsCompleteOverwrite: true
+  version: 1.0.0
+  coveredEffects: [uboot, resource, boot_linux, ramdisk, system, vendor, updater, chip_ckm, userdata]
+  unsupportedStates: []
 
 evidenceRefs: [AD-003, AD-005, AD-006]

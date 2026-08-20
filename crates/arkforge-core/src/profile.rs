@@ -11,7 +11,7 @@
 //!   improvises them turns a normal re-enumeration into a fatal error
 //!   (architecture.md 11.3).
 
-use crate::digest::{digest_canonical, CanonicalCbor, CborError, CborValue, Domain, Sha256Digest};
+use crate::digest::{CanonicalCbor, CborError, CborValue, Domain, Sha256Digest, digest_canonical};
 use crate::effect::{DataImpact, DataImpactState, DeviceMode};
 use crate::identity::{DeviceProfileIdentity, Version};
 use crate::ids::{OpaqueId, PartitionId};
@@ -441,7 +441,10 @@ pub struct DeviceProfile {
 impl CanonicalCbor for DeviceProfile {
     fn to_cbor(&self) -> CborValue {
         CborValue::map(vec![
-            ("schemaVersion", CborValue::text(self.schema_version.clone())),
+            (
+                "schemaVersion",
+                CborValue::text(self.schema_version.clone()),
+            ),
             ("id", self.id.to_cbor()),
             ("version", self.version.to_cbor()),
             (
@@ -561,10 +564,10 @@ impl DeviceProfile {
         if self.read_domain.erased_medium_filler.is_none() {
             blockers.push(ProfileExecutionBlocker::UnknownErasedMediumFiller);
         }
-        if let HardwareRevisionPolicy::Allow(revisions) = &self.hardware_revisions {
-            if revisions.is_empty() {
-                blockers.push(ProfileExecutionBlocker::NoHardwareRevisionMeasured);
-            }
+        if let HardwareRevisionPolicy::Allow(revisions) = &self.hardware_revisions
+            && revisions.is_empty()
+        {
+            blockers.push(ProfileExecutionBlocker::NoHardwareRevisionMeasured);
         }
         if self.allowed_targets.is_empty() {
             blockers.push(ProfileExecutionBlocker::NoWritableTargets);
@@ -603,10 +606,10 @@ impl DeviceProfile {
 
         // A wildcard revision is a *claim* about untested hardware, so it stays
         // a hard error. An empty list claims nothing and is merely unexecutable.
-        if let HardwareRevisionPolicy::Allow(revisions) = &self.hardware_revisions {
-            if revisions.iter().any(|revision| revision == "*") {
-                return Err(ProfileError::WildcardHardwareRevision);
-            }
+        if let HardwareRevisionPolicy::Allow(revisions) = &self.hardware_revisions
+            && revisions.iter().any(|revision| revision == "*")
+        {
+            return Err(ProfileError::WildcardHardwareRevision);
         }
 
         // Allowed and protected must not intersect: a protected target that a
@@ -654,7 +657,8 @@ impl DeviceProfile {
         for target in &self.allowed_targets {
             let fallback = target.verification.fallback;
             let has_fallback = fallback.write_completion_semantics || fallback.build_postflight;
-            if self.read_domain.read == ReadDomainDeclaration::CharacterizeAtRuntime && !has_fallback
+            if self.read_domain.read == ReadDomainDeclaration::CharacterizeAtRuntime
+                && !has_fallback
             {
                 return Err(ProfileError::VerificationWithoutFallback(
                     target.partition.to_string(),
@@ -930,7 +934,10 @@ fn boolean(value: &YamlValue, key: &str, path: &str) -> Result<bool, ProfileErro
     match value.get(key).and_then(YamlValue::as_scalar) {
         Some("true") => Ok(true),
         Some("false") => Ok(false),
-        Some(other) => Err(bad(path, format!("expected true or false, found {other:?}"))),
+        Some(other) => Err(bad(
+            path,
+            format!("expected true or false, found {other:?}"),
+        )),
         None => Err(missing(path)),
     }
 }
@@ -951,9 +958,12 @@ fn optional_unsigned(
     if text == "unknown" {
         return Ok(None);
     }
-    parse_number(text)
-        .map(Some)
-        .ok_or_else(|| bad(path, format!("expected a number or `unknown`, found {text:?}")))
+    parse_number(text).map(Some).ok_or_else(|| {
+        bad(
+            path,
+            format!("expected a number or `unknown`, found {text:?}"),
+        )
+    })
 }
 
 fn unsigned(value: &YamlValue, key: &str, path: &str) -> Result<u64, ProfileError> {
@@ -1000,13 +1010,14 @@ pub fn load(source: &str) -> Result<DeviceProfile, ProfileError> {
         .ok_or_else(|| missing("schemaVersion"))?
         .to_string();
 
-    let profile_block = document
-        .get("profile")
-        .ok_or_else(|| missing("profile"))?;
+    let profile_block = document.get("profile").ok_or_else(|| missing("profile"))?;
     let id = identifier(profile_block, "id", "profile.id")?;
     let version = Version::parse(scalar(profile_block, "profile.version")?)
         .ok_or_else(|| bad("profile.version", "expected major.minor.patch"))?;
-    let expected_digest = match profile_block.get("expectedDigest").and_then(YamlValue::as_scalar) {
+    let expected_digest = match profile_block
+        .get("expectedDigest")
+        .and_then(YamlValue::as_scalar)
+    {
         Some(text) => Some(
             Sha256Digest::parse_hex(text.strip_prefix("sha256:").unwrap_or(text))
                 .map_err(|error| bad("profile.expectedDigest", error.to_string()))?,
@@ -1025,7 +1036,10 @@ pub fn load(source: &str) -> Result<DeviceProfile, ProfileError> {
         .filter_map(|value| value.as_scalar().map(str::to_string))
         .collect::<Vec<_>>();
     if product_models.is_empty() {
-        return Err(bad("identity.productModels", "must list at least one model"));
+        return Err(bad(
+            "identity.productModels",
+            "must list at least one model",
+        ));
     }
     let soc_block = identity_block
         .get("soc")
@@ -1043,8 +1057,12 @@ pub fn load(source: &str) -> Result<DeviceProfile, ProfileError> {
         .and_then(YamlValue::as_scalar)
     {
         HardwareRevisionPolicy::AnyRevision {
-            evidence_ref: OpaqueId::new(evidence)
-                .map_err(|error| bad("identity.hardwareRevisions.anyRevisionEvidence", error.to_string()))?,
+            evidence_ref: OpaqueId::new(evidence).map_err(|error| {
+                bad(
+                    "identity.hardwareRevisions.anyRevisionEvidence",
+                    error.to_string(),
+                )
+            })?,
         }
     } else {
         let allow = revisions_block
@@ -1085,7 +1103,10 @@ pub fn load(source: &str) -> Result<DeviceProfile, ProfileError> {
         .ok_or_else(|| missing("artifactCompatibility.formats"))?
         .iter()
         .filter_map(|value| value.as_scalar())
-        .map(|text| OpaqueId::new(text).map_err(|error| bad("artifactCompatibility.formats", error.to_string())))
+        .map(|text| {
+            OpaqueId::new(text)
+                .map_err(|error| bad("artifactCompatibility.formats", error.to_string()))
+        })
         .collect::<Result<Vec<_>, _>>()?;
 
     let known_metadata_members = document
@@ -1109,7 +1130,9 @@ pub fn load(source: &str) -> Result<DeviceProfile, ProfileError> {
             Some(items) => items
                 .iter()
                 .filter_map(|value| value.as_scalar())
-                .map(|text| DeviceMode::new(text).map_err(|error| bad("modes[].aliases", error.to_string())))
+                .map(|text| {
+                    DeviceMode::new(text).map_err(|error| bad("modes[].aliases", error.to_string()))
+                })
                 .collect::<Result<Vec<_>, _>>()?,
             None => Vec::new(),
         };
@@ -1151,13 +1174,21 @@ pub fn load(source: &str) -> Result<DeviceProfile, ProfileError> {
                 entry,
                 "modeTransitions[].serialPolicy",
             )?)
-            .ok_or_else(|| bad("modeTransitions[].serialPolicy", "expected must-match or may-change"))?,
+            .ok_or_else(|| {
+                bad(
+                    "modeTransitions[].serialPolicy",
+                    "expected must-match or may-change",
+                )
+            })?,
             topology_policy: IdentityFieldPolicy::parse(scalar(
                 entry,
                 "modeTransitions[].topologyPolicy",
             )?)
             .ok_or_else(|| {
-                bad("modeTransitions[].topologyPolicy", "expected must-match or may-change")
+                bad(
+                    "modeTransitions[].topologyPolicy",
+                    "expected must-match or may-change",
+                )
             })?,
             rebind: RebindTolerance {
                 require_disconnect: boolean(
@@ -1194,10 +1225,22 @@ pub fn load(source: &str) -> Result<DeviceProfile, ProfileError> {
         .get("readDomain")
         .ok_or_else(|| missing("readDomain"))?;
     let read_domain = ReadDomainPolicy {
-        write: WriteDomainDeclaration::parse(scalar(read_block, "readDomain.write")?)
-            .ok_or_else(|| bad("readDomain.write", "expected full-disk or characterize-at-runtime"))?,
-        read: ReadDomainDeclaration::parse(scalar(read_block, "readDomain.read")?)
-            .ok_or_else(|| bad("readDomain.read", "expected full or characterize-at-runtime"))?,
+        write: WriteDomainDeclaration::parse(scalar(read_block, "readDomain.write")?).ok_or_else(
+            || {
+                bad(
+                    "readDomain.write",
+                    "expected full-disk or characterize-at-runtime",
+                )
+            },
+        )?,
+        read: ReadDomainDeclaration::parse(scalar(read_block, "readDomain.read")?).ok_or_else(
+            || {
+                bad(
+                    "readDomain.read",
+                    "expected full or characterize-at-runtime",
+                )
+            },
+        )?,
         erased_medium_filler: optional_unsigned(
             read_block,
             "erasedMediumFiller",
@@ -1260,7 +1303,9 @@ pub fn load(source: &str) -> Result<DeviceProfile, ProfileError> {
         .unwrap_or(&[])
         .iter()
         .filter_map(|value| value.as_scalar())
-        .map(|text| PartitionId::new(text).map_err(|error| bad("protectedTargets", error.to_string())))
+        .map(|text| {
+            PartitionId::new(text).map_err(|error| bad("protectedTargets", error.to_string()))
+        })
         .collect::<Result<Vec<_>, _>>()?;
 
     let impact_block = document
@@ -1271,8 +1316,12 @@ pub fn load(source: &str) -> Result<DeviceProfile, ProfileError> {
             .get(key)
             .and_then(YamlValue::as_scalar)
             .ok_or_else(|| missing(&format!("dataImpact.{key}")))?;
-        data_impact_state(text)
-            .ok_or_else(|| bad(&format!("dataImpact.{key}"), format!("unknown state {text:?}")))
+        data_impact_state(text).ok_or_else(|| {
+            bad(
+                &format!("dataImpact.{key}"),
+                format!("unknown state {text:?}"),
+            )
+        })
     };
     let data_impact = DataImpact {
         userdata: axis("userdata")?,
@@ -1301,7 +1350,10 @@ pub fn load(source: &str) -> Result<DeviceProfile, ProfileError> {
                 .unwrap_or(&[])
                 .iter()
                 .filter_map(|value| value.as_scalar())
-                .map(|text| OpaqueId::new(text).map_err(|error| bad("recovery.coveredEffects", error.to_string())))
+                .map(|text| {
+                    OpaqueId::new(text)
+                        .map_err(|error| bad("recovery.coveredEffects", error.to_string()))
+                })
                 .collect::<Result<Vec<_>, _>>()?,
             unsupported_states: block
                 .get("unsupportedStates")
@@ -1346,7 +1398,9 @@ pub fn load(source: &str) -> Result<DeviceProfile, ProfileError> {
     profile.validate()?;
 
     if let Some(expected) = expected_digest {
-        let computed = profile.digest().map_err(|error| bad("digest", error.to_string()))?;
+        let computed = profile
+            .digest()
+            .map_err(|error| bad("digest", error.to_string()))?;
         if computed != expected {
             return Err(ProfileError::DigestMismatch { expected, computed });
         }
@@ -1456,7 +1510,10 @@ dataImpact:
         let profile = load(MINIMAL).unwrap();
         let pinned = MINIMAL.replace(
             "  version: 1.0.0",
-            &format!("  version: 1.0.0\n  expectedDigest: sha256:{}", profile.digest().unwrap()),
+            &format!(
+                "  version: 1.0.0\n  expectedDigest: sha256:{}",
+                profile.digest().unwrap()
+            ),
         );
         load(&pinned).expect("a correct pin loads");
 
@@ -1530,10 +1587,12 @@ dataImpact:
     fn an_empty_revision_list_loads_but_blocks_while_a_wildcard_never_loads() {
         let empty = MINIMAL.replace("allow: [rev-a]", "allow: []");
         let profile = load(&empty).expect("claiming nothing is honest");
-        assert!(profile
-            .execution_blockers()
-            .iter()
-            .any(|blocker| blocker.id() == "PROF-B04"));
+        assert!(
+            profile
+                .execution_blockers()
+                .iter()
+                .any(|blocker| blocker.id() == "PROF-B04")
+        );
 
         // A wildcard is a claim about hardware nobody tested, so it stays a
         // hard error.
@@ -1556,8 +1615,14 @@ dataImpact:
     #[test]
     fn a_runtime_read_domain_requires_fallback_evidence() {
         let document = MINIMAL
-            .replace("        writeCompletionSemantics: true", "        writeCompletionSemantics: false")
-            .replace("        buildPostflight: true", "        buildPostflight: false");
+            .replace(
+                "        writeCompletionSemantics: true",
+                "        writeCompletionSemantics: false",
+            )
+            .replace(
+                "        buildPostflight: true",
+                "        buildPostflight: false",
+            );
         assert!(matches!(
             load(&document),
             Err(ProfileError::VerificationWithoutFallback(_))
@@ -1575,7 +1640,10 @@ dataImpact:
 
     #[test]
     fn an_alias_claimed_by_two_modes_is_refused() {
-        let document = MINIMAL.replace("  - id: loader", "  - id: loader\n    aliases: [normal-alias]");
+        let document = MINIMAL.replace(
+            "  - id: loader",
+            "  - id: loader\n    aliases: [normal-alias]",
+        );
         assert!(matches!(
             load(&document),
             Err(ProfileError::AmbiguousModeAlias { .. })
@@ -1584,10 +1652,7 @@ dataImpact:
 
     #[test]
     fn an_unknown_schema_version_fails_closed() {
-        let document = MINIMAL.replace(
-            "arkforge.device-profile/v1",
-            "arkforge.device-profile/v2",
-        );
+        let document = MINIMAL.replace("arkforge.device-profile/v1", "arkforge.device-profile/v2");
         assert!(matches!(
             load(&document),
             Err(ProfileError::UnknownSchemaVersion(_))

@@ -136,11 +136,11 @@ fn strip_comment(text: &str) -> &str {
         match byte {
             b'\'' if !in_double => in_single = !in_single,
             b'"' if !in_single => in_double = !in_double,
-            b'#' if !in_single && !in_double => {
+            b'#' if !in_single && !in_double
                 // A `#` only starts a comment at the start or after a space.
-                if index == 0 || bytes[index - 1] == b' ' {
-                    return &text[..index];
-                }
+                && (index == 0 || bytes[index - 1] == b' ') =>
+            {
+                return &text[..index];
             }
             _ => {}
         }
@@ -171,7 +171,10 @@ fn parse_mapping(
             break;
         }
         if line.indent > indent {
-            return Err(error(line.number, "unexpected indentation inside a mapping"));
+            return Err(error(
+                line.number,
+                "unexpected indentation inside a mapping",
+            ));
         }
         if line.content.starts_with("- ") || line.content == "-" {
             return Err(error(
@@ -212,7 +215,10 @@ fn parse_sequence(
             break;
         }
         if line.indent > indent {
-            return Err(error(line.number, "unexpected indentation inside a sequence"));
+            return Err(error(
+                line.number,
+                "unexpected indentation inside a sequence",
+            ));
         }
         if !(line.content.starts_with("- ") || line.content == "-") {
             break;
@@ -278,7 +284,6 @@ fn parse_sequence(
 
 fn split_key(content: &str, line: usize) -> Result<(String, &str), YamlError> {
     try_split_key(content)
-        .map(|(key, rest)| (key, rest))
         .ok_or_else(|| error(line, format!("expected `key: value`, found {content:?}")))
 }
 
@@ -369,7 +374,7 @@ fn split_flow_items(inner: &str, line: usize) -> Result<Vec<&str>, YamlError> {
             b'\'' if !in_double => in_single = !in_single,
             b'"' if !in_single => in_double = !in_double,
             b'[' | b'{' if !in_single && !in_double => {
-                return Err(error(line, "nested flow collections are not permitted"))
+                return Err(error(line, "nested flow collections are not permitted"));
             }
             b',' if !in_single && !in_double => {
                 items.push(&inner[start..index]);
@@ -449,12 +454,14 @@ readDomain:
             Some(">=1.0.0 <2.0.0")
         );
         assert!(providers[1].get("versionRange").is_none());
-        assert!(value
-            .get("allowedTargets")
-            .unwrap()
-            .as_sequence()
-            .unwrap()
-            .is_empty());
+        assert!(
+            value
+                .get("allowedTargets")
+                .unwrap()
+                .as_sequence()
+                .unwrap()
+                .is_empty()
+        );
         assert_eq!(
             value
                 .get("readDomain")

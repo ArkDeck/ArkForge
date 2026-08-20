@@ -15,8 +15,8 @@
 #![forbid(unsafe_code)]
 
 use arkforge_core::digest::{
-    constant_time_eq, decode_canonical, digest_canonical, hmac_sha256, CanonicalCbor, CborError,
-    CborValue, Domain, Sha256Digest,
+    CanonicalCbor, CborError, CborValue, Domain, Sha256Digest, constant_time_eq, decode_canonical,
+    digest_canonical, hmac_sha256,
 };
 use arkforge_core::effect::EffectSet;
 use arkforge_core::ids::{
@@ -394,7 +394,10 @@ fn permit_body(permit: &StepPermit) -> CborValue {
         ("stepId", permit.step_id.to_cbor()),
         ("attemptId", permit.attempt_id.to_cbor()),
         ("publicStepDigest", permit.public_step_digest.to_cbor()),
-        ("privateActionDigest", permit.private_action_digest.to_cbor()),
+        (
+            "privateActionDigest",
+            permit.private_action_digest.to_cbor(),
+        ),
         ("effectSetDigest", permit.effect_set_digest.to_cbor()),
         ("authorityBinding", permit.authority_binding.to_cbor()),
         (
@@ -505,6 +508,12 @@ pub enum PermitVerificationError {
         expected: Sha256Digest,
         found: Sha256Digest,
     },
+    /// A signed field is authentic but does not describe the dispatch that is
+    /// currently about to happen. Authenticity is not authorization for a
+    /// different job, step, attempt, binding, session, effect set, or device.
+    ContextMismatch {
+        field: &'static str,
+    },
     /// The permit was already consumed. Return the original receipt; do not
     /// dispatch again (architecture.md 8.5).
     AlreadyConsumed,
@@ -537,6 +546,9 @@ impl fmt::Display for PermitVerificationError {
             PermitVerificationError::PlanMismatch { expected, found } => {
                 write!(f, "permit is for plan {found}, not {expected}")
             }
+            PermitVerificationError::ContextMismatch { field } => {
+                write!(f, "permit {field} does not match the pending dispatch")
+            }
             PermitVerificationError::AlreadyConsumed => {
                 f.write_str("permit was already consumed; return the original receipt")
             }
@@ -551,10 +563,19 @@ impl fmt::Display for PermitVerificationError {
 impl std::error::Error for PermitVerificationError {}
 
 /// What the daemon is about to do, checked against what the permit allows.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DispatchIntent {
+    pub controller_session_id: ControllerSessionId,
+    pub job_id: JobId,
+    pub plan_id: PlanId,
     pub plan_digest: Sha256Digest,
+    pub step_id: StepId,
+    pub attempt_id: AttemptId,
+    pub public_step_digest: Sha256Digest,
     pub private_action_digest: Sha256Digest,
+    pub effect_set_digest: Sha256Digest,
+    pub authority_binding: AuthorityBindingRef,
+    pub admitted_device_facts_digest: Sha256Digest,
     pub now_epoch_ms: u64,
 }
 
@@ -604,6 +625,41 @@ pub fn verify_permit(
             found: permit.private_action_digest,
         });
     }
+    if permit.authority_namespace != intent.authority_binding.authority_namespace {
+        return Err(PermitVerificationError::ContextMismatch {
+            field: "authorityNamespace",
+        });
+    }
+    for (matches, field) in [
+        (
+            permit.controller_session_id == intent.controller_session_id,
+            "controllerSessionId",
+        ),
+        (permit.job_id == intent.job_id, "jobId"),
+        (permit.plan_id == intent.plan_id, "planId"),
+        (permit.step_id == intent.step_id, "stepId"),
+        (permit.attempt_id == intent.attempt_id, "attemptId"),
+        (
+            permit.public_step_digest == intent.public_step_digest,
+            "publicStepDigest",
+        ),
+        (
+            permit.effect_set_digest == intent.effect_set_digest,
+            "effectSetDigest",
+        ),
+        (
+            permit.authority_binding == intent.authority_binding,
+            "authorityBinding",
+        ),
+        (
+            permit.admitted_device_facts_digest == intent.admitted_device_facts_digest,
+            "admittedDeviceFactsDigest",
+        ),
+    ] {
+        if !matches {
+            return Err(PermitVerificationError::ContextMismatch { field });
+        }
+    }
 
     Ok(VerifiedStepPermit {
         permit: permit.clone(),
@@ -615,9 +671,7 @@ pub fn verify_permit(
 /// `arkforged` must never reference this module: it verifies, it does not mint
 /// (architecture.md 8.6). The architecture guard test enforces that.
 pub mod authority_side {
-    use super::{
-        ControllerPairingSecret, PermitIntegrityTag, StepPermit,
-    };
+    use super::{ControllerPairingSecret, PermitIntegrityTag, StepPermit};
     use arkforge_core::digest::CborError;
 
     /// Mints the integrity tag for a permit the authority has decided to grant.
@@ -780,7 +834,12 @@ impl CanonicalCbor for PossibleEffectSet {
             ),
             (
                 "sourceActionIds",
-                CborValue::array(self.source_action_ids.iter().map(|id| id.to_cbor()).collect()),
+                CborValue::array(
+                    self.source_action_ids
+                        .iter()
+                        .map(|id| id.to_cbor())
+                        .collect(),
+                ),
             ),
         ])
     }
@@ -849,8 +908,17 @@ mod tests {
 
     fn intent(permit: &StepPermit, now: u64) -> DispatchIntent {
         DispatchIntent {
+            controller_session_id: permit.controller_session_id.clone(),
+            job_id: permit.job_id.clone(),
+            plan_id: permit.plan_id.clone(),
             plan_digest: permit.plan_digest,
+            step_id: permit.step_id.clone(),
+            attempt_id: permit.attempt_id.clone(),
+            public_step_digest: permit.public_step_digest,
             private_action_digest: permit.private_action_digest,
+            effect_set_digest: permit.effect_set_digest,
+            authority_binding: permit.authority_binding.clone(),
+            admitted_device_facts_digest: permit.admitted_device_facts_digest,
             now_epoch_ms: now,
         }
     }
@@ -871,7 +939,8 @@ mod tests {
         let secret = secret(1);
         let base = permit(&secret);
         for mutate in [
-            (|p: &mut StepPermit| p.private_action_digest = sha256(b"other action")) as fn(&mut StepPermit),
+            (|p: &mut StepPermit| p.private_action_digest = sha256(b"other action"))
+                as fn(&mut StepPermit),
             |p: &mut StepPermit| p.expires_at_epoch_ms = u64::MAX,
             |p: &mut StepPermit| p.authority_binding.binding_revision = 3,
             |p: &mut StepPermit| p.step_id = StepId::new("STEP-006").unwrap(),
@@ -928,6 +997,61 @@ mod tests {
             verify_permit(&permit, &secret, &wrong, false),
             Err(PermitVerificationError::ActionMismatch { .. })
         ));
+    }
+
+    #[test]
+    fn every_exact_context_field_is_checked_against_the_pending_dispatch() {
+        let secret = secret(1);
+        let permit = permit(&secret);
+        type IntentMutation = fn(&mut DispatchIntent);
+        let cases: [(IntentMutation, &'static str); 9] = [
+            (
+                |intent| {
+                    intent.controller_session_id = ControllerSessionId::new("SESSION-2").unwrap()
+                },
+                "controllerSessionId",
+            ),
+            (
+                |intent| intent.job_id = JobId::new("JOB-2").unwrap(),
+                "jobId",
+            ),
+            (
+                |intent| intent.plan_id = PlanId::new("PLAN-2").unwrap(),
+                "planId",
+            ),
+            (
+                |intent| intent.step_id = StepId::new("STEP-006").unwrap(),
+                "stepId",
+            ),
+            (
+                |intent| intent.attempt_id = AttemptId::new("ATTEMPT-2").unwrap(),
+                "attemptId",
+            ),
+            (
+                |intent| intent.public_step_digest = sha256(b"other public step"),
+                "publicStepDigest",
+            ),
+            (
+                |intent| intent.effect_set_digest = sha256(b"other effects"),
+                "effectSetDigest",
+            ),
+            (
+                |intent| intent.authority_binding.binding_revision += 1,
+                "authorityBinding",
+            ),
+            (
+                |intent| intent.admitted_device_facts_digest = sha256(b"other facts"),
+                "admittedDeviceFactsDigest",
+            ),
+        ];
+        for (mutate, field) in cases {
+            let mut pending = intent(&permit, 2_000);
+            mutate(&mut pending);
+            assert_eq!(
+                verify_permit(&permit, &secret, &pending, false),
+                Err(PermitVerificationError::ContextMismatch { field })
+            );
+        }
     }
 
     #[test]
@@ -1009,7 +1133,8 @@ mod tests {
 
     #[test]
     fn every_fact_class_can_break_continuity() {
-        let cases: [(fn(&mut CurrentFacts), ContinuityBreak); 4] = [
+        type ContinuityCase = (fn(&mut CurrentFacts), ContinuityBreak);
+        let cases: [ContinuityCase; 4] = [
             (
                 |facts| facts.transport_session_digest = Some(sha256(b"another session")),
                 ContinuityBreak::SessionChanged,

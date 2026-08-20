@@ -6,7 +6,7 @@
 //! handed to `startExecution`, rather than an executable plan with a warning.
 
 use crate::authority::AuthorityBindingRef;
-use crate::digest::{digest_in_domain, CanonicalCbor, CborError, CborValue, Domain, Sha256Digest};
+use crate::digest::{CanonicalCbor, CborError, CborValue, Domain, Sha256Digest, digest_in_domain};
 use crate::effect::EffectSet;
 use crate::identity::{
     ArtifactIdentity, DeviceProfileIdentity, MaturityState, NegotiatedCapabilities,
@@ -362,7 +362,9 @@ impl CanonicalCbor for ExecutionAvailability {
                 "reason",
                 match self {
                     ExecutionAvailability::Available => CborValue::Null,
-                    ExecutionAvailability::Unavailable { reason } => CborValue::text(reason.clone()),
+                    ExecutionAvailability::Unavailable { reason } => {
+                        CborValue::text(reason.clone())
+                    }
                 },
             ),
         ])
@@ -467,11 +469,21 @@ impl CanonicalCbor for PlanAssessment {
         CborValue::map(vec![
             (
                 "providerCandidates",
-                CborValue::array(self.provider_candidates.iter().map(|c| c.to_cbor()).collect()),
+                CborValue::array(
+                    self.provider_candidates
+                        .iter()
+                        .map(|c| c.to_cbor())
+                        .collect(),
+                ),
             ),
             (
                 "profileCandidates",
-                CborValue::array(self.profile_candidates.iter().map(|c| c.to_cbor()).collect()),
+                CborValue::array(
+                    self.profile_candidates
+                        .iter()
+                        .map(|c| c.to_cbor())
+                        .collect(),
+                ),
             ),
             ("knownEffects", self.known_effects.to_cbor()),
             (
@@ -532,10 +544,9 @@ pub enum PlanError {
 impl fmt::Display for PlanError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            PlanError::ExpiryNotAfterCreation { created, expires } => write!(
-                f,
-                "plan expiry {expires} must be after creation {created}"
-            ),
+            PlanError::ExpiryNotAfterCreation { created, expires } => {
+                write!(f, "plan expiry {expires} must be after creation {created}")
+            }
             PlanError::DigestMismatch { stored, recomputed } => write!(
                 f,
                 "stored plan digest {stored} does not match recomputed {recomputed}"
@@ -557,7 +568,7 @@ mod tests {
     use crate::identity::{ArtifactFormat, ToolchainKind, Version};
     use crate::ids::{ActionId, PartitionId, StepId};
     use crate::projection::{
-        validate_projection, PrivateActionRecord, PrivateActionRole, StoredProviderPlan,
+        PrivateActionRecord, PrivateActionRole, StoredProviderPlan, validate_projection,
     };
     use crate::step::{
         BindingRequirement, CancellationPolicy, FlashStepKind, SemanticTarget, WorkflowEffect,

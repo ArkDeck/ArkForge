@@ -6,9 +6,10 @@
 
 use arkforge_ipc::framing::{read_frame, write_frame};
 use arkforge_ipc::messages::{
-    ErrorBody, Hello, HelloAck, InspectArtifactResponse, MaterializePlanResponse, Request, Response,
+    ErrorBody, Hello, HelloAck, InspectArtifactResponse, JobSummary, MaterializePlanResponse,
+    Request, Response,
 };
-use arkforge_ipc::{wire, Api, SessionKind, Status, PROTOCOL_MAJOR, PROTOCOL_MINOR};
+use arkforge_ipc::{Api, PROTOCOL_MAJOR, PROTOCOL_MINOR, SessionKind, Status, wire};
 use std::os::unix::net::UnixStream;
 
 fn main() {
@@ -31,6 +32,9 @@ fn usage() -> String {
         "  inspect <artifact-id>    show an artifact manifest\n",
         "  assess <artifact-id> <profile-id> <observation-id>\n",
         "                           materialize a plan assessment\n",
+        "  jobs                     list durable job status\n",
+        "  job <job-id>             show one durable job status\n",
+        "  recovery-guide <job-id>  show the no-replay recovery guide\n",
         "\n",
         "This CLI talks to the public socket: it cannot import or execute.\n"
     )
@@ -78,6 +82,19 @@ fn run(arguments: &[String]) -> Result<(), String> {
             wire::write_string(&mut payload, 2, profile);
             wire::write_string(&mut payload, 3, observation);
             (Api::MaterializePlan, payload)
+        }
+        "jobs" => (Api::ListJobs, Vec::new()),
+        "job" => {
+            let job_id = rest.get(1).ok_or_else(usage)?;
+            let mut payload = Vec::new();
+            wire::write_string(&mut payload, 1, job_id);
+            (Api::GetJob, payload)
+        }
+        "recovery-guide" => {
+            let job_id = rest.get(1).ok_or_else(usage)?;
+            let mut payload = Vec::new();
+            wire::write_string(&mut payload, 1, job_id);
+            (Api::GetRecoveryGuide, payload)
         }
         other => return Err(format!("unknown command {other:?}\n\n{}", usage())),
     };
@@ -141,11 +158,23 @@ fn render(response: &Response) -> Result<(), String> {
                     inner.next_field().map_err(|e| e.to_string())?
                 {
                     match inner_field {
-                        1 => id = inner_value.as_str(1).map_err(|e| e.to_string())?.to_string(),
-                        3 => mode = inner_value.as_str(3).map_err(|e| e.to_string())?.to_string(),
+                        1 => {
+                            id = inner_value
+                                .as_str(1)
+                                .map_err(|e| e.to_string())?
+                                .to_string()
+                        }
+                        3 => {
+                            mode = inner_value
+                                .as_str(3)
+                                .map_err(|e| e.to_string())?
+                                .to_string()
+                        }
                         6 => {
-                            strength =
-                                inner_value.as_str(6).map_err(|e| e.to_string())?.to_string()
+                            strength = inner_value
+                                .as_str(6)
+                                .map_err(|e| e.to_string())?
+                                .to_string()
                         }
                         _ => {}
                     }
@@ -225,7 +254,91 @@ fn render(response: &Response) -> Result<(), String> {
                 }
             }
         }
+        Api::GetJob => {
+            let summaries = decode_job_summaries(&response.payload)?;
+            let summary = summaries
+                .first()
+                .ok_or("daemon returned no summary for getJob")?;
+            render_job_summary(summary);
+        }
+        Api::ListJobs => {
+            let summaries = decode_job_summaries(&response.payload)?;
+            if summaries.is_empty() {
+                println!("no jobs recorded");
+            }
+            for summary in &summaries {
+                render_job_summary(summary);
+            }
+        }
+        Api::GetRecoveryGuide => render_recovery_guide(&response.payload)?,
         other => println!("{other}: ok ({} payload bytes)", response.payload.len()),
+    }
+    Ok(())
+}
+
+fn decode_job_summaries(payload: &[u8]) -> Result<Vec<JobSummary>, String> {
+    let mut summaries = Vec::new();
+    let mut reader = wire::Reader::new(payload);
+    while let Some((field, value)) = reader.next_field().map_err(|error| error.to_string())? {
+        if field == 1 {
+            summaries.push(
+                JobSummary::decode(value.as_bytes().map_err(|error| error.to_string())?)
+                    .map_err(|error| error.to_string())?,
+            );
+        }
+    }
+    Ok(summaries)
+}
+
+fn render_job_summary(summary: &JobSummary) {
+    println!(
+        "{}  state={}  steps={}/{}  plan={}  sequence={}",
+        summary.job_id,
+        summary.state,
+        summary.completed_steps,
+        summary.total_steps,
+        summary.plan_id,
+        summary.last_sequence
+    );
+    if !summary.current_step_id.is_empty() {
+        println!("  current: {}", summary.current_step_id);
+    }
+    if !summary.stopped_reason.is_empty() {
+        println!("  reason : {}", summary.stopped_reason);
+    }
+}
+
+fn render_recovery_guide(payload: &[u8]) -> Result<(), String> {
+    let mut reader = wire::Reader::new(payload);
+    let mut job_id = String::new();
+    let mut state = String::new();
+    let mut actions = Vec::new();
+    let mut supported = false;
+    let mut contract = String::new();
+    while let Some((field, value)) = reader.next_field().map_err(|error| error.to_string())? {
+        match field {
+            1 => job_id = value.as_str(1).map_err(|error| error.to_string())?.into(),
+            2 => state = value.as_str(2).map_err(|error| error.to_string())?.into(),
+            5 => actions.push(
+                value
+                    .as_str(5)
+                    .map_err(|error| error.to_string())?
+                    .to_string(),
+            ),
+            6 => supported = value.as_bool().map_err(|error| error.to_string())?,
+            7 => contract = value.as_str(7).map_err(|error| error.to_string())?.into(),
+            _ => {}
+        }
+    }
+    println!("job             {job_id}");
+    println!("original state  {state} (immutable)");
+    println!("automatic replay forbidden");
+    println!("complete overwrite supported: {supported}");
+    if !contract.is_empty() {
+        println!("recovery contract {contract}");
+    }
+    for action in actions {
+        println!("  - {action}");
     }
     Ok(())
 }

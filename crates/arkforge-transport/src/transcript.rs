@@ -15,7 +15,7 @@ use crate::{
     SerialEvidence,
 };
 use arkforge_core::digest::{
-    digest_canonical, CanonicalCbor, CborError, CborValue, Domain, Sha256Digest,
+    CanonicalCbor, CborError, CborValue, Domain, Sha256Digest, digest_canonical,
 };
 use arkforge_core::effect::DeviceMode;
 use arkforge_core::ids::{ObservationId, OpaqueId};
@@ -41,9 +41,7 @@ impl TranscriptProvenance {
     pub fn as_str(self) -> &'static str {
         match self {
             TranscriptProvenance::Captured => "captured",
-            TranscriptProvenance::DerivedFromPublishedReceipts => {
-                "derived-from-published-receipts"
-            }
+            TranscriptProvenance::DerivedFromPublishedReceipts => "derived-from-published-receipts",
             TranscriptProvenance::Synthetic => "synthetic",
         }
     }
@@ -242,7 +240,7 @@ impl Transcript {
             .filter_map(|record| record.observation.as_ref())
     }
 
-    pub fn invocations(&self, action: &str) -> impl Iterator<Item = &TranscriptRecord> {
+    pub fn invocations(&self, action: &str) -> impl Iterator<Item = &TranscriptRecord> + use<'_> {
         // The action is copied into the closure so the returned iterator
         // borrows only the transcript, not the caller's string.
         let action = action.to_string();
@@ -287,7 +285,10 @@ impl Transcript {
 impl CanonicalCbor for Transcript {
     fn to_cbor(&self) -> CborValue {
         CborValue::map(vec![
-            ("schemaVersion", CborValue::text(self.schema_version.clone())),
+            (
+                "schemaVersion",
+                CborValue::text(self.schema_version.clone()),
+            ),
             ("id", self.id.to_cbor()),
             ("provenance", self.provenance.to_cbor()),
             ("source", CborValue::text(self.source.clone())),
@@ -329,7 +330,10 @@ impl fmt::Display for TranscriptError {
                 write!(f, "invocation record {sequence} names no action")
             }
             TranscriptError::ObservationRecordWithoutObservation(sequence) => {
-                write!(f, "record {sequence} declares an observation kind but carries none")
+                write!(
+                    f,
+                    "record {sequence} declares an observation kind but carries none"
+                )
             }
             TranscriptError::MissingField(field) => write!(f, "transcript is missing {field}"),
             TranscriptError::BadField { field, detail } => {
@@ -372,7 +376,11 @@ fn optional_number(value: &YamlValue, key: &str) -> Option<u64> {
         .and_then(|text| text.parse().ok())
 }
 
-fn optional_digest(value: &YamlValue, key: &str, path: &str) -> Result<Option<Sha256Digest>, TranscriptError> {
+fn optional_digest(
+    value: &YamlValue,
+    key: &str,
+    path: &str,
+) -> Result<Option<Sha256Digest>, TranscriptError> {
     match value.get(key).and_then(YamlValue::as_scalar) {
         None => Ok(None),
         Some(raw) => {
@@ -420,7 +428,8 @@ fn parse_observation(
         .get("serialKind")
         .and_then(YamlValue::as_scalar)
         .unwrap_or("absent");
-    let serial_digest = optional_digest(block, "serialDigest", "records[].observation.serialDigest")?;
+    let serial_digest =
+        optional_digest(block, "serialDigest", "records[].observation.serialDigest")?;
     let serial_evidence = match (serial_kind, serial_digest) {
         ("absent", _) => SerialEvidence::Absent,
         ("descriptor", Some(digest)) => SerialEvidence::Descriptor { digest },
@@ -429,13 +438,13 @@ fn parse_observation(
             return Err(bad(
                 "records[].observation.serialDigest",
                 format!("serialKind {kind:?} requires a digest"),
-            ))
+            ));
         }
         (kind, _) => {
             return Err(bad(
                 "records[].observation.serialKind",
                 format!("unknown serial kind {kind:?}"),
-            ))
+            ));
         }
     };
 
@@ -459,10 +468,28 @@ fn parse_observation(
         .unwrap_or(&[])
     {
         provider_candidates.push(ProviderCandidateRef {
-            provider_id: OpaqueId::new(text(entry, "providerId", "observation.providerCandidates[].providerId")?)
-                .map_err(|error| bad("observation.providerCandidates[].providerId", error.to_string()))?,
-            confidence: OpaqueId::new(text(entry, "confidence", "observation.providerCandidates[].confidence")?)
-                .map_err(|error| bad("observation.providerCandidates[].confidence", error.to_string()))?,
+            provider_id: OpaqueId::new(text(
+                entry,
+                "providerId",
+                "observation.providerCandidates[].providerId",
+            )?)
+            .map_err(|error| {
+                bad(
+                    "observation.providerCandidates[].providerId",
+                    error.to_string(),
+                )
+            })?,
+            confidence: OpaqueId::new(text(
+                entry,
+                "confidence",
+                "observation.providerCandidates[].confidence",
+            )?)
+            .map_err(|error| {
+                bad(
+                    "observation.providerCandidates[].confidence",
+                    error.to_string(),
+                )
+            })?,
         });
     }
 
@@ -472,7 +499,11 @@ fn parse_observation(
         observed_at_epoch_ms: at_epoch_ms,
         mode: DeviceMode::new(text(block, "mode", "records[].observation.mode")?)
             .map_err(|error| bad("records[].observation.mode", error.to_string()))?,
-        topology_digest: digest(block, "topologyDigest", "records[].observation.topologyDigest")?,
+        topology_digest: digest(
+            block,
+            "topologyDigest",
+            "records[].observation.topologyDigest",
+        )?,
         descriptor_digest: digest(
             block,
             "descriptorDigest",
@@ -539,8 +570,12 @@ pub fn parse(source: &str) -> Result<Transcript, TranscriptError> {
         schema_version: text(&document, "schemaVersion", "schemaVersion")?.to_string(),
         id: OpaqueId::new(text(header, "id", "transcript.id")?)
             .map_err(|error| bad("transcript.id", error.to_string()))?,
-        provenance: TranscriptProvenance::parse(text(header, "provenance", "transcript.provenance")?)
-            .ok_or_else(|| bad("transcript.provenance", "unknown provenance"))?,
+        provenance: TranscriptProvenance::parse(text(
+            header,
+            "provenance",
+            "transcript.provenance",
+        )?)
+        .ok_or_else(|| bad("transcript.provenance", "unknown provenance"))?,
         source: text(header, "source", "transcript.source")?.to_string(),
         profile_id: OpaqueId::new(text(header, "profileId", "transcript.profileId")?)
             .map_err(|error| bad("transcript.profileId", error.to_string()))?,

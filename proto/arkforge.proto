@@ -99,6 +99,9 @@ enum Api {
   // The authority reports what its own device control channel observed, for a
   // managed control action the daemon asked for on the watchJob stream.
   API_SUBMIT_MANAGED_CONTROL_RECEIPT = 13;
+  // Read-only durable status. Available on both sockets and after restart.
+  API_GET_JOB = 14;
+  API_LIST_JOBS = 15;
 }
 
 message Request {
@@ -123,8 +126,8 @@ enum Status {
   STATUS_OK = 1;
   // The request was understood and refused.
   STATUS_REFUSED = 2;
-  // The capability does not exist in this build. Used for every execute-side
-  // API in the AF-V1 read-only vertical.
+  // The capability does not exist or its required standing dependency is not
+  // available in this build/process.
   STATUS_UNAVAILABLE = 3;
   STATUS_INVALID_ARGUMENT = 4;
   STATUS_NOT_FOUND = 5;
@@ -180,6 +183,44 @@ message KeyValue {
   string value = 2;
 }
 
+message RecoveryJobRequest {
+  string job_id = 1;
+}
+
+message ReconcileJobResponse {
+  string job_id = 1;
+  // succeeded | confirmedNotExecuted | confirmedPartial | stillUnknown |
+  // nothingToReconcile
+  string verdict = 2;
+  string reason = 3;
+  string possible_effects_completeness = 4;
+  repeated string possible_effects = 5;
+  string original_state = 6;
+}
+
+message SupersedingRecoveryAssessment {
+  string job_id = 1;
+  bool eligible = 2;
+  string blocker_code = 3;
+  string blocker_reason = 4;
+  repeated string covered_effects = 5;
+  string recovery_contract_id = 6;
+  string recovery_contract_version = 7;
+  string recovery_contract_sha256 = 8;
+}
+
+message RecoveryGuide {
+  string job_id = 1;
+  string original_state = 2;
+  bool original_outcome_immutable = 3;
+  bool automatic_replay_forbidden = 4;
+  repeated string operator_actions = 5;
+  bool complete_overwrite_supported = 6;
+  string recovery_contract_id = 7;
+  string recovery_contract_version = 8;
+  string recovery_contract_sha256 = 9;
+}
+
 message InspectArtifactResponse {
   string format_id = 1;
   string content_sha256 = 2;
@@ -233,6 +274,16 @@ message MaterializePlanRequest {
   string observation_id = 3;
   string intent = 4;
   string toolchain_id = 5;
+  // The authority binding is sealed into the plan. An executable plan may not
+  // be materialized as "unbound" and acquire a target only when a permit
+  // arrives; that would let plan identity and execution identity disagree.
+  string authority_namespace = 6;
+  string binding_id = 7;
+  uint64 binding_revision = 8;
+  bytes stable_identity_sha256 = 9;
+  // `supersedingRecovery` seals a distinct immutable recovery plan. It is
+  // never interpreted as permission to replay an earlier primary plan.
+  string execution_purpose = 10;
 }
 
 message PublicStepMessage {
@@ -272,6 +323,7 @@ message ExecutablePlan {
   repeated EffectMessage transient_effects = 7;
   repeated KeyValue data_impact = 8;
   uint64 expires_at_epoch_ms = 9;
+  string execution_purpose = 10;
 }
 
 message Assessment {
@@ -316,6 +368,25 @@ message WatchJobRequest {
   // Resume a stream after a reconnect. 0 means "from the beginning".
   uint64 from_sequence = 2;
 }
+
+message GetJobRequest { string job_id = 1; }
+message ListJobsRequest {}
+
+message JobSummary {
+  string job_id = 1;
+  string plan_id = 2;
+  bytes plan_sha256 = 3;
+  string state = 4;
+  bool terminal = 5;
+  string current_step_id = 6;
+  uint64 completed_steps = 7;
+  uint64 total_steps = 8;
+  uint64 last_sequence = 9;
+  string stopped_reason = 10;
+}
+
+message GetJobResponse { JobSummary job = 1; }
+message ListJobsResponse { repeated JobSummary jobs = 1; }
 
 enum JobEventKind {
   JOB_EVENT_KIND_UNSPECIFIED = 0;
@@ -378,6 +449,17 @@ message StepAdmissionSnapshot {
   // permit (architecture.md 8.3).
   uint64 snapshot_lifetime_ms = 12;
   string request_id = 13;
+  // Raw inputs to admitted_device_facts_sha256. The authority recomputes the
+  // canonical digest and checks the topology/serial against its own binding;
+  // echoing only field 9 is not admission.
+  bytes topology_sha256 = 14;
+  bytes descriptor_sha256 = 15;
+  bytes serial_sha256 = 16;
+  string serial_evidence_kind = 17;
+  repeated KeyValue protocol_identity = 18;
+  string identity_strength = 19;
+  bool malformed_descriptor = 20;
+  bytes transport_session_sha256 = 21;
 }
 
 message SubmitStepPermitRequest {

@@ -11,10 +11,10 @@
 
 use crate::transcript::{RecordKind, RecordStatus, Transcript, TranscriptRecord};
 use crate::{
-    evaluate_rebind, DeviceObservation, DeviceTransport, RebindExpectation, RebindOutcome,
-    TransportError, TransportSession, TypedDiscoveryFilter,
+    DeviceObservation, DeviceTransport, RebindExpectation, RebindOutcome, TransportError,
+    TransportSession, TypedDiscoveryFilter, evaluate_rebind,
 };
-use arkforge_core::digest::{sha256, Sha256Digest};
+use arkforge_core::digest::{Sha256Digest, sha256};
 use arkforge_core::ids::OpaqueId;
 
 /// A transport backed by a recorded transcript.
@@ -155,8 +155,8 @@ impl TransportSession for ReplaySession {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::transcript;
     use crate::IdentityEvidenceStrength;
+    use crate::transcript;
     use arkforge_core::effect::DeviceMode;
 
     const SAMPLE: &str = r#"
@@ -209,7 +209,10 @@ records:
     #[test]
     fn opening_a_device_the_transcript_does_not_contain_fails() {
         let transport = transport();
-        let mut phantom = transport.discover(&TypedDiscoveryFilter::default(), 0).unwrap()[0].clone();
+        let mut phantom = transport
+            .discover(&TypedDiscoveryFilter::default(), 0)
+            .unwrap()[0]
+            .clone();
         phantom.descriptor_digest = sha256(b"a device that was never observed");
         assert_eq!(
             transport.open_exact(&phantom).unwrap_err(),
@@ -232,7 +235,10 @@ records:
     #[test]
     fn the_session_digest_is_stable_for_one_device() {
         let transport = transport();
-        let observation = transport.discover(&TypedDiscoveryFilter::default(), 0).unwrap()[0].clone();
+        let observation = transport
+            .discover(&TypedDiscoveryFilter::default(), 0)
+            .unwrap()[0]
+            .clone();
         let first = transport.open_exact(&observation).unwrap().session_digest();
         let second = transport.open_exact(&observation).unwrap().session_digest();
         assert_eq!(first, second);

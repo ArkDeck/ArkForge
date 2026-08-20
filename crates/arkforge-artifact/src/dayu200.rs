@@ -53,8 +53,15 @@ pub enum ParameterError {
     MissingDevice,
     EmptyPartitionList,
     MalformedPartition(String),
-    UnknownAttribute { partition: String, attribute: String },
-    BadHex { partition: String, field: String, value: String },
+    UnknownAttribute {
+        partition: String,
+        attribute: String,
+    },
+    BadHex {
+        partition: String,
+        field: String,
+        value: String,
+    },
     NotUtf8,
     TooLarge(u64),
 }
@@ -82,10 +89,7 @@ impl fmt::Display for ParameterError {
                 partition,
                 field,
                 value,
-            } => write!(
-                f,
-                "partition {partition:?} has non-hex {field} {value:?}"
-            ),
+            } => write!(f, "partition {partition:?} has non-hex {field} {value:?}"),
             ParameterError::NotUtf8 => f.write_str("parameter file is not UTF-8"),
             ParameterError::TooLarge(size) => {
                 write!(f, "parameter file of {size} bytes is implausibly large")
@@ -110,7 +114,10 @@ impl std::error::Error for ParameterError {}
 /// Numeric values are kept in the unit the source encodes — sectors — and are
 /// never converted here. A parser that silently rebased units would make two
 /// honest readers of the same file disagree about an address.
-pub fn parse_parameter(text: &str, logical_block_size: u32) -> Result<PartitionTableFact, ParameterError> {
+pub fn parse_parameter(
+    text: &str,
+    logical_block_size: u32,
+) -> Result<PartitionTableFact, ParameterError> {
     let cmdline = text
         .lines()
         .map(|line| line.trim())
@@ -218,7 +225,9 @@ fn parse_partition(index: u32, descriptor: &str) -> Result<PartitionEntryFact, P
 }
 
 fn parse_hex(text: &str) -> Option<u64> {
-    let digits = text.strip_prefix("0x").or_else(|| text.strip_prefix("0X"))?;
+    let digits = text
+        .strip_prefix("0x")
+        .or_else(|| text.strip_prefix("0X"))?;
     if digits.is_empty() || !digits.chars().all(|c| c.is_ascii_hexdigit()) {
         return None;
     }
@@ -281,9 +290,8 @@ fn classify(path: &str) -> MemberRole {
 pub fn inspect<R: Read>(source: R) -> Result<ArtifactManifest, Dayu200ParseError> {
     let mut counting = CountingHasher::new(source);
     let manifest = {
-        let gzip = GzipReader::new(&mut counting).map_err(|error| {
-            ArchiveError::ArchiveInvalid(error.to_string())
-        })?;
+        let gzip = GzipReader::new(&mut counting)
+            .map_err(|error| ArchiveError::ArchiveInvalid(error.to_string()))?;
         inspect_decompressed(gzip)?
     };
     let (size_bytes, content_digest) = counting.finish();
@@ -333,8 +341,9 @@ fn inspect_decompressed<R: Read>(source: R) -> Result<ArtifactManifest, Dayu200P
         })?;
 
         if let Some(buffer) = parameter_buffer {
-            let text =
-                String::from_utf8(buffer).map_err(|_| ParameterError::NotUtf8).map_err(Dayu200ParseError::Parameter)?;
+            let text = String::from_utf8(buffer)
+                .map_err(|_| ParameterError::NotUtf8)
+                .map_err(Dayu200ParseError::Parameter)?;
             parameter_text = Some(text);
         }
         if let Some(scanner) = scanner {
@@ -345,7 +354,7 @@ fn inspect_decompressed<R: Read>(source: R) -> Result<ArtifactManifest, Dayu200P
                             key,
                             first: format!("{existing} (from {source})"),
                             second: format!("{value} (from {})", header.path),
-                        })
+                        });
                     }
                     Some(_) => {}
                     None => {
@@ -487,7 +496,12 @@ impl BuildFactScanner {
         window.extend_from_slice(chunk);
         self.scan(&window, false);
 
-        let keep = MAX_VALUE_LEN + BUILD_FACT_KEYS.iter().map(|key| key.len()).max().unwrap_or(0);
+        let keep = MAX_VALUE_LEN
+            + BUILD_FACT_KEYS
+                .iter()
+                .map(|key| key.len())
+                .max()
+                .unwrap_or(0);
         if window.len() > keep {
             self.tail = window[window.len() - keep..].to_vec();
         } else {
@@ -507,16 +521,16 @@ impl BuildFactScanner {
             let mut from = 0usize;
             while let Some(offset) = find(&window[from..], &needle) {
                 let start = from + offset + needle.len();
-                if let Some(value) = value_after(window, start, at_end_of_member) {
-                    if !value.is_empty() && value.len() <= MAX_VALUE_LEN {
-                        if let Ok(text) = std::str::from_utf8(value) {
-                            let text = text.trim();
-                            if !text.is_empty() && text.chars().all(|c| !c.is_control()) {
-                                self.found
-                                    .entry(key.to_string())
-                                    .or_insert_with(|| text.to_string());
-                            }
-                        }
+                if let Some(value) = value_after(window, start, at_end_of_member)
+                    && !value.is_empty()
+                    && value.len() <= MAX_VALUE_LEN
+                    && let Ok(text) = std::str::from_utf8(value)
+                {
+                    let text = text.trim();
+                    if !text.is_empty() && text.chars().all(|c| !c.is_control()) {
+                        self.found
+                            .entry(key.to_string())
+                            .or_insert_with(|| text.to_string());
                     }
                 }
                 from = start;
@@ -581,7 +595,9 @@ fn find(haystack: &[u8], needle: &[u8]) -> Option<usize> {
     let last = haystack.len() - needle.len();
     let mut index = 0usize;
     while index <= last {
-        let offset = haystack[index..=last].iter().position(|byte| *byte == first)?;
+        let offset = haystack[index..=last]
+            .iter()
+            .position(|byte| *byte == first)?;
         let candidate = index + offset;
         if &haystack[candidate..candidate + needle.len()] == needle {
             return Some(candidate);
@@ -629,7 +645,12 @@ mod tests {
             ("misc", 16384, Some(8192), GrammarBranch::Fixed),
             ("bootctrl", 24576, Some(4096), GrammarBranch::Fixed),
             ("resource", 28672, Some(12288), GrammarBranch::Fixed),
-            ("boot_linux", 40960, Some(196_608), GrammarBranch::FixedBootable),
+            (
+                "boot_linux",
+                40960,
+                Some(196_608),
+                GrammarBranch::FixedBootable,
+            ),
             ("ramdisk", 237_568, Some(8192), GrammarBranch::Fixed),
             ("system", 245_760, Some(4_194_304), GrammarBranch::Fixed),
             ("vendor", 4_440_064, Some(2_097_152), GrammarBranch::Fixed),
@@ -702,7 +723,8 @@ mod tests {
 
     #[test]
     fn overlapping_partitions_in_a_parameter_file_are_caught_by_validation() {
-        let text = "CMDLINE:mtdparts=rk29xxnand:0x00004000@0x00002000(uboot),0x00002000@0x00004000(misc)";
+        let text =
+            "CMDLINE:mtdparts=rk29xxnand:0x00004000@0x00002000(uboot),0x00002000@0x00004000(misc)";
         let table = parse_parameter(text, 512).unwrap();
         assert!(table.validate().is_err());
     }
@@ -768,7 +790,10 @@ mod tests {
         }
         scanner.push(b"const.ohos.fullname=OpenHarmony-7.0.0.36\n");
         assert_eq!(
-            scanner.finish().get("const.ohos.fullname").map(String::as_str),
+            scanner
+                .finish()
+                .get("const.ohos.fullname")
+                .map(String::as_str),
             Some("OpenHarmony-7.0.0.36")
         );
     }
@@ -777,7 +802,7 @@ mod tests {
     fn build_fact_scanner_claims_nothing_from_an_unterminated_quoted_value() {
         let mut scanner = BuildFactScanner::new();
         let mut blob = b"const.product.name=\"OpenHarmony".to_vec();
-        blob.extend(std::iter::repeat(b'x').take(4096));
+        blob.extend(std::iter::repeat_n(b'x', 4096));
         scanner.push(&blob);
         assert!(scanner.finish().is_empty());
     }

@@ -7,9 +7,11 @@
 //! is recomputed from its declared basis, so a hand-edited value that looked
 //! like a capture would fail here.
 
-use arkforge_core::digest::{sha256, Sha256Digest};
+use arkforge_core::digest::{Sha256Digest, sha256};
 use arkforge_transport::replay::TranscriptTransport;
-use arkforge_transport::transcript::{self, RecordKind, RecordStatus, Transcript, TranscriptProvenance};
+use arkforge_transport::transcript::{
+    self, RecordKind, RecordStatus, Transcript, TranscriptProvenance,
+};
 use arkforge_transport::{IdentityEvidenceStrength, TypedDiscoveryFilter};
 
 const ECAMP_A: &str = include_str!("../../../transcripts/dayu200-gj4-ecamp-96effff15.yaml");
@@ -62,10 +64,12 @@ fn both_campaigns_carry_the_thirteen_step_receipt_chain() {
             "{}",
             transcript.id
         );
-        assert!(transcript
-            .records
-            .iter()
-            .all(|record| record.status == RecordStatus::Ok));
+        assert!(
+            transcript
+                .records
+                .iter()
+                .all(|record| record.status == RecordStatus::Ok)
+        );
     }
 }
 
@@ -151,11 +155,16 @@ fn the_readback_step_records_a_typed_skip_not_a_verification() {
             readback.semantic_value("readback"),
             Some("skipped-lba-read-window")
         );
-        assert_eq!(readback.semantic_value("verificationOutcome"), Some("typedSkip"));
-        assert!(readback
-            .semantic_value("readDomainDetail")
-            .unwrap()
-            .contains("blind past the window"));
+        assert_eq!(
+            readback.semantic_value("verificationOutcome"),
+            Some("typedSkip")
+        );
+        assert!(
+            readback
+                .semantic_value("readDomainDetail")
+                .unwrap()
+                .contains("blind past the window")
+        );
 
         let build = transcript
             .records
@@ -190,7 +199,11 @@ fn the_nine_writes_are_recorded_as_one_destructive_step_over_nine_partitions() {
 #[test]
 fn the_mode_transition_is_recorded_with_its_disconnect_and_reconnect() {
     for transcript in campaigns() {
-        let kinds: Vec<RecordKind> = transcript.records.iter().map(|record| record.kind).collect();
+        let kinds: Vec<RecordKind> = transcript
+            .records
+            .iter()
+            .map(|record| record.kind)
+            .collect();
         let detach = kinds
             .iter()
             .position(|kind| *kind == RecordKind::Detach)

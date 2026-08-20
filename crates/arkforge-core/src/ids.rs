@@ -23,7 +23,10 @@ impl fmt::Display for IdError {
         match self {
             IdError::Empty => f.write_str("identifier must not be empty"),
             IdError::TooLong(len) => {
-                write!(f, "identifier must be at most {MAX_ID_LEN} bytes, found {len}")
+                write!(
+                    f,
+                    "identifier must be at most {MAX_ID_LEN} bytes, found {len}"
+                )
             }
             IdError::InvalidCharacter(found) => write!(
                 f,
@@ -49,8 +52,8 @@ impl OpaqueId {
             return Err(IdError::TooLong(value.len()));
         }
         for character in value.chars() {
-            let allowed = character.is_ascii_alphanumeric()
-                || matches!(character, '.' | '_' | ':' | '-');
+            let allowed =
+                character.is_ascii_alphanumeric() || matches!(character, '.' | '_' | ':' | '-');
             if !allowed {
                 return Err(IdError::InvalidCharacter(character));
             }
@@ -190,14 +193,8 @@ mod tests {
             OpaqueId::new("/etc/passwd"),
             Err(IdError::InvalidCharacter('/'))
         );
-        assert_eq!(
-            OpaqueId::new("naïve"),
-            Err(IdError::InvalidCharacter('ï'))
-        );
-        assert_eq!(
-            OpaqueId::new("a\nb"),
-            Err(IdError::InvalidCharacter('\n'))
-        );
+        assert_eq!(OpaqueId::new("naïve"), Err(IdError::InvalidCharacter('ï')));
+        assert_eq!(OpaqueId::new("a\nb"), Err(IdError::InvalidCharacter('\n')));
         assert!(matches!(
             OpaqueId::new("x".repeat(MAX_ID_LEN + 1)),
             Err(IdError::TooLong(_))

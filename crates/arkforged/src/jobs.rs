@@ -30,26 +30,28 @@
 //! is unknown, which is exactly what the durable intent already records.
 
 use arkforge_authority_api::{
-    verify_permit, ControllerPairingSecret, DispatchIntent, PairingEpoch, PermitIntegrityTag,
-    PermitVerificationError, StepPermit,
+    ControllerPairingSecret, CurrentFacts, DispatchIntent, FreshnessVerdict, PairingEpoch,
+    PermitIntegrityTag, PermitVerificationError, StepAdmissionSnapshot as AuthoritySnapshot,
+    StepPermit, evaluate_freshness, verify_permit,
 };
+use arkforge_core::Sha256Digest;
 use arkforge_core::digest::sha256;
-use arkforge_core::ids::OpaqueId;
+use arkforge_core::ids::{AttemptId, ControllerSessionId, JobId, OpaqueId, PlanId, StepId};
 use arkforge_core::outcome::ActionDisposition;
 use arkforge_core::plan::FlashPlanEnvelope;
 use arkforge_core::profile::DeviceProfile;
 use arkforge_core::projection::{PrivateActionRecord, PrivateActionRole, StoredProviderPlan};
 use arkforge_core::verification::VerificationOutcome;
-use arkforge_core::Sha256Digest;
+use arkforge_engine::JobState;
 use arkforge_engine::durable::{DurableJournal, DurableJournalError};
 use arkforge_engine::journal::JournalRecordKind;
-use arkforge_engine::recovery::{fact, PermitDisposition, PermitLedger};
-use arkforge_engine::JobState;
+use arkforge_engine::recovery::{PermitDisposition, PermitLedger, fact};
 use arkforge_ipc::messages::{
     ActionReceiptSummary, JobEvent, JobEventKind, KeyValue, ManagedControlAction,
     ManagedControlRequest, StepAdmissionSnapshot, SubmitManagedControlReceiptRequest,
 };
 use arkforge_provider::rockchip_execute::StoredAction;
+use arkforge_transport::{DeviceObservation, SerialEvidence};
 use core::fmt;
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
@@ -62,15 +64,52 @@ use std::path::{Path, PathBuf};
 /// rather than arriving late.
 pub const SNAPSHOT_LIFETIME_MS: u64 = 60_000;
 
+/// Live facts captured from one exact transport session for one admission.
+///
+/// The three non-device digests bind the other mutable inputs that could make
+/// an otherwise identical private action mean something different. The raw
+/// observation is carried to the authority so it can recompute and check the
+/// device digest against its own binding.
+#[derive(Debug, Clone)]
+pub struct AdmissionFacts {
+    pub observation: DeviceObservation,
+    pub transport_session_digest: Sha256Digest,
+    pub provider_facts_digest: Sha256Digest,
+    pub toolchain_facts_digest: Sha256Digest,
+    pub artifact_facts_digest: Sha256Digest,
+}
+
+impl AdmissionFacts {
+    fn authority_snapshot(&self) -> Result<AuthoritySnapshot, JobError> {
+        Ok(AuthoritySnapshot {
+            captured_at_epoch_ms: self.observation.observed_at_epoch_ms,
+            freshness_deadline_epoch_ms: self
+                .observation
+                .observed_at_epoch_ms
+                .saturating_add(SNAPSHOT_LIFETIME_MS),
+            device_facts_digest: self
+                .observation
+                .admission_facts_digest()
+                .map_err(|error| JobError::Core(error.to_string()))?,
+            transport_session_digest: Some(self.transport_session_digest),
+            provider_facts_digest: self.provider_facts_digest,
+            toolchain_facts_digest: self.toolchain_facts_digest,
+            artifact_facts_digest: self.artifact_facts_digest,
+        })
+    }
+}
+
 /// A job the authority is driving.
 #[derive(Debug)]
 pub struct Job {
     job_id: String,
+    controller_session_id: ControllerSessionId,
     plan_id: String,
     plan_digest: Sha256Digest,
     state: JobState,
     /// Index into the plan's public steps.
     step_index: usize,
+    total_steps: usize,
     journal: DurableJournal,
     events: Vec<JobEvent>,
     pending: Option<Pending>,
@@ -87,7 +126,8 @@ enum Pending {
     /// A permit for the step at `step_index`.
     Admission {
         request_id: String,
-        snapshot: StepAdmissionSnapshot,
+        snapshot: Box<StepAdmissionSnapshot>,
+        freshness: AuthoritySnapshot,
     },
     /// The authority to perform a control action and report what it observed.
     Control {
@@ -100,7 +140,7 @@ enum Pending {
     /// Held rather than run here: dispatch can take minutes, and this registry
     /// is reached under the service lock. The dispatcher takes the work,
     /// releases the lock, runs it, and comes back with a receipt.
-    Dispatch { work: PendingDispatch },
+    Dispatch { work: Box<PendingDispatch> },
 }
 
 /// One private action waiting for this daemon's dispatcher.
@@ -158,11 +198,13 @@ impl fmt::Display for JobStop {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             JobStop::Completed => f.write_str("every step completed"),
-            JobStop::RefusedByAuthority { step_id, reason } => write!(
-                f,
-                "the authority refused admission for {step_id}: {reason}"
-            ),
-            JobStop::DispatchOutcomeUnknown { step_id, disposition } => write!(
+            JobStop::RefusedByAuthority { step_id, reason } => {
+                write!(f, "the authority refused admission for {step_id}: {reason}")
+            }
+            JobStop::DispatchOutcomeUnknown {
+                step_id,
+                disposition,
+            } => write!(
                 f,
                 "{step_id} dispatched and reported {}; whether the device changed is not \
                  established, and the intent must not be replayed",
@@ -196,6 +238,47 @@ impl Job {
 
     pub fn stopped(&self) -> Option<&JobStop> {
         self.stopped.as_ref()
+    }
+
+    pub fn needs_admission(&self) -> bool {
+        self.state == JobState::Preflight && self.pending.is_none()
+    }
+
+    pub fn expected_mode(&self, envelope: &FlashPlanEnvelope) -> Option<arkforge_core::DeviceMode> {
+        envelope
+            .public_steps
+            .get(self.step_index)
+            .and_then(|step| step.expected_mode_before.clone())
+    }
+
+    pub fn completed_steps(&self) -> usize {
+        self.step_index.min(self.total_steps)
+    }
+
+    pub fn total_steps(&self) -> usize {
+        self.total_steps
+    }
+
+    pub fn current_step_id(&self) -> String {
+        match &self.pending {
+            Some(Pending::Admission { snapshot, .. }) => snapshot.step_id.clone(),
+            Some(Pending::Control { request, .. }) => request.step_id.clone(),
+            Some(Pending::Dispatch { work }) => work.step_id.clone(),
+            None => self
+                .in_flight
+                .as_ref()
+                .map(|work| work.step_id.clone())
+                .unwrap_or_default(),
+        }
+    }
+
+    pub fn last_sequence(&self) -> u64 {
+        self.events.last().map(|event| event.sequence).unwrap_or(0)
+    }
+
+    /// Verified durable history used by the read-only recovery assessment.
+    pub fn journal(&self) -> &arkforge_engine::journal::Journal {
+        self.journal.journal()
     }
 
     pub fn events_from(&self, from_sequence: u64) -> Vec<JobEvent> {
@@ -253,11 +336,35 @@ pub struct JobRegistry {
 
 impl JobRegistry {
     pub fn new(root: impl Into<PathBuf>) -> Self {
-        JobRegistry {
-            root: root.into(),
+        let root = root.into();
+        Self::open(root).expect("job registry must be readable")
+    }
+
+    /// Opens the registry and classifies every journal left by an earlier
+    /// daemon before serving requests. It never resumes an unresolved external
+    /// intent: that is `outcomeUnknown`, not work to replay.
+    pub fn open(root: impl Into<PathBuf>) -> Result<Self, JobError> {
+        let root = root.into();
+        std::fs::create_dir_all(&root)
+            .map_err(|error| JobError::RegistryIo(format!("{}: {error}", root.display())))?;
+        let mut registry = JobRegistry {
+            root: root.clone(),
             jobs: BTreeMap::new(),
             counter: 0,
+        };
+        let entries = std::fs::read_dir(&root)
+            .map_err(|error| JobError::RegistryIo(format!("{}: {error}", root.display())))?;
+        for entry in entries {
+            let entry = entry.map_err(|error| JobError::RegistryIo(error.to_string()))?;
+            let path = entry.path();
+            if path.extension().and_then(|value| value.to_str()) != Some("journal") {
+                continue;
+            }
+            let job = recover_job(&path)?;
+            registry.counter = registry.counter.saturating_add(1);
+            registry.jobs.insert(job.job_id.clone(), job);
         }
+        Ok(registry)
     }
 
     pub fn job(&self, job_id: &str) -> Option<&Job> {
@@ -272,6 +379,18 @@ impl JobRegistry {
         self.jobs.is_empty()
     }
 
+    pub fn jobs_needing_admission(&self) -> Vec<String> {
+        self.jobs
+            .values()
+            .filter(|job| job.needs_admission())
+            .map(|job| job.job_id.clone())
+            .collect()
+    }
+
+    pub fn all_jobs(&self) -> impl Iterator<Item = &Job> {
+        self.jobs.values()
+    }
+
     /// Creates a job and publishes the first admission it needs.
     ///
     /// The plan is walked from step zero. A plan with no steps is refused
@@ -281,6 +400,8 @@ impl JobRegistry {
         &mut self,
         envelope: &FlashPlanEnvelope,
         private_plan: &StoredProviderPlan,
+        controller_session_id: ControllerSessionId,
+        admission_facts: &AdmissionFacts,
         now_epoch_ms: u64,
     ) -> Result<String, JobError> {
         if envelope.public_steps.is_empty() {
@@ -293,10 +414,12 @@ impl JobRegistry {
 
         let mut job = Job {
             job_id: job_id.clone(),
+            controller_session_id,
             plan_id: envelope.plan_id.as_str().to_string(),
             plan_digest: envelope.plan_digest,
             state: JobState::Planned,
             step_index: 0,
+            total_steps: envelope.public_steps.len(),
             journal,
             events: Vec::new(),
             pending: None,
@@ -312,13 +435,25 @@ impl JobRegistry {
             vec![
                 (id(fact::JOB_ID)?, job_id.clone()),
                 (id(fact::PLAN_ID)?, job.plan_id.clone()),
+                (id("planDigest")?, job.plan_digest.to_hex()),
+                (id("totalSteps")?, job.total_steps.to_string()),
+                (
+                    id("controllerSessionId")?,
+                    job.controller_session_id.to_string(),
+                ),
             ],
         )?;
         job.move_to(JobState::AwaitingStart)?;
         job.move_to(JobState::Preflight)?;
         job.publish(JobEventKind::StateChanged, now_epoch_ms, digest, |_| {});
 
-        request_admission(&mut job, envelope, private_plan, now_epoch_ms)?;
+        request_admission(
+            &mut job,
+            envelope,
+            private_plan,
+            admission_facts,
+            now_epoch_ms,
+        )?;
         self.jobs.insert(job_id.clone(), job);
         Ok(job_id)
     }
@@ -339,11 +474,16 @@ impl JobRegistry {
         envelope: &FlashPlanEnvelope,
         private_plan: &StoredProviderPlan,
         profile: &DeviceProfile,
+        current_facts: Option<CurrentFacts>,
         now_epoch_ms: u64,
     ) -> Result<(), JobError> {
         let artifact_digest = envelope.artifact.content_digest;
         let job = self.jobs.get_mut(job_id).ok_or(JobError::UnknownJob)?;
-        let Some(Pending::Admission { request_id: expected, snapshot }) = job.pending.clone()
+        let Some(Pending::Admission {
+            request_id: expected,
+            snapshot,
+            freshness,
+        }) = job.pending.clone()
         else {
             return Err(JobError::NoAdmissionPending);
         };
@@ -353,14 +493,6 @@ impl JobRegistry {
                 found: request_id.to_string(),
             });
         }
-        if !snapshot.is_fresh_at(now_epoch_ms) {
-            // A late permit was signed against device facts that are no longer
-            // in front of the daemon. Take a new snapshot instead.
-            job.pending = None;
-            request_admission(job, envelope, private_plan, now_epoch_ms)?;
-            return Err(JobError::SnapshotExpired);
-        }
-
         let Some((mut permit, tag, epoch)) = permit else {
             // A refusal is an answer. Nothing was recorded, so this is safe.
             job.pending = None;
@@ -377,18 +509,38 @@ impl JobRegistry {
                 step_id: snapshot.step_id.clone(),
                 reason: refusal.to_string(),
             });
-            job.publish(JobEventKind::OutcomeClassified, now_epoch_ms, digest, |event| {
-                event.facts.push(KeyValue {
-                    key: "outcome".into(),
-                    value: "cancelledSafe".into(),
-                });
-                event.facts.push(KeyValue {
-                    key: "refusal".into(),
-                    value: refusal.to_string(),
-                });
-            });
+            job.publish(
+                JobEventKind::OutcomeClassified,
+                now_epoch_ms,
+                digest,
+                |event| {
+                    event.facts.push(KeyValue {
+                        key: "outcome".into(),
+                        value: "cancelledSafe".into(),
+                    });
+                    event.facts.push(KeyValue {
+                        key: "refusal".into(),
+                        value: refusal.to_string(),
+                    });
+                },
+            );
             return Ok(());
         };
+
+        let current_facts = current_facts.ok_or(JobError::CurrentFactsUnavailable)?;
+        match evaluate_freshness(&freshness, &current_facts) {
+            FreshnessVerdict::Fresh => {}
+            FreshnessVerdict::StaleSnapshot { .. } => {
+                // The authority's answer is not consumed. The service will
+                // take and publish a new same-device snapshot.
+                job.pending = None;
+                return Err(JobError::SnapshotExpired);
+            }
+            FreshnessVerdict::ContinuityBroken(reason) => {
+                job.pending = None;
+                return Err(JobError::ContinuityBroken(format!("{reason:?}")));
+            }
+        }
 
         permit.integrity_tag = PermitIntegrityTag {
             epoch: PairingEpoch(epoch),
@@ -399,8 +551,24 @@ impl JobRegistry {
         // merely be a valid permit.
         let action = private_action_digest(&snapshot)?;
         let intent = DispatchIntent {
+            controller_session_id: job.controller_session_id.clone(),
+            job_id: JobId::new(&job.job_id)
+                .map_err(|_| JobError::UnusableIdentifier(job.job_id.clone()))?,
+            plan_id: PlanId::new(&job.plan_id)
+                .map_err(|_| JobError::UnusableIdentifier(job.plan_id.clone()))?,
             plan_digest: job.plan_digest,
+            step_id: StepId::new(&snapshot.step_id)
+                .map_err(|_| JobError::UnusableIdentifier(snapshot.step_id.clone()))?,
+            attempt_id: AttemptId::new(&snapshot.attempt_id)
+                .map_err(|_| JobError::UnusableIdentifier(snapshot.attempt_id.clone()))?,
+            public_step_digest: digest_from(&snapshot.public_step_sha256)
+                .ok_or(JobError::TagNotADigest)?,
             private_action_digest: action,
+            effect_set_digest: digest_from(&snapshot.effect_set_sha256)
+                .ok_or(JobError::TagNotADigest)?,
+            authority_binding: envelope.authority_binding.clone(),
+            admitted_device_facts_digest: digest_from(&snapshot.admitted_device_facts_sha256)
+                .ok_or(JobError::TagNotADigest)?,
             now_epoch_ms,
         };
         let ledger = PermitLedger::from_journal(job.journal.journal());
@@ -439,7 +607,12 @@ impl JobRegistry {
         )?;
         job.move_to(JobState::StepIntentDurable)?;
         job.pending = None;
-        job.publish(JobEventKind::StateChanged, now_epoch_ms, intent_digest, |_| {});
+        job.publish(
+            JobEventKind::StateChanged,
+            now_epoch_ms,
+            intent_digest,
+            |_| {},
+        );
 
         // Whose step is this? The plan says. A step the authority performs goes
         // back out as a control request; anything else needs a dispatch.
@@ -502,7 +675,7 @@ impl JobRegistry {
                 )?;
                 job.move_to(JobState::Dispatching)?;
                 job.pending = Some(Pending::Dispatch {
-                    work: PendingDispatch {
+                    work: Box::new(PendingDispatch {
                         job_id: job.job_id.clone(),
                         step_id: step_id.clone(),
                         permit_id,
@@ -510,7 +683,7 @@ impl JobRegistry {
                         profile: profile.clone(),
                         artifact_digest,
                         intent_digest,
-                    },
+                    }),
                 });
                 job.publish(JobEventKind::StateChanged, now_epoch_ms, digest, |_| {});
             }
@@ -529,11 +702,30 @@ impl JobRegistry {
                 // from here on is unknown until a receipt says otherwise, which
                 // is exactly what the journal already records.
                 job.pending = None;
+                let work = *work;
                 job.in_flight = Some(work.clone());
                 return Some(work);
             }
         }
         None
+    }
+
+    /// Publishes the next admission after a checkpoint/rebind established a
+    /// new exact session. No caller can supply device facts through IPC; this
+    /// is invoked only by the service after transport observation.
+    pub fn request_next_admission(
+        &mut self,
+        job_id: &str,
+        envelope: &FlashPlanEnvelope,
+        private_plan: &StoredProviderPlan,
+        admission_facts: &AdmissionFacts,
+        now_epoch_ms: u64,
+    ) -> Result<(), JobError> {
+        let job = self.jobs.get_mut(job_id).ok_or(JobError::UnknownJob)?;
+        if job.pending.is_some() || job.state != JobState::Preflight {
+            return Err(JobError::AdmissionNotReady);
+        }
+        request_admission(job, envelope, private_plan, admission_facts, now_epoch_ms)
     }
 
     /// Classifies every control request left unanswered past its deadline.
@@ -592,16 +784,21 @@ impl JobRegistry {
                 step_id,
                 reason: reason.clone(),
             });
-            job.publish(JobEventKind::OutcomeClassified, now_epoch_ms, digest, |event| {
-                event.facts.push(KeyValue {
-                    key: "outcome".into(),
-                    value: "outcomeUnknown".into(),
-                });
-                event.facts.push(KeyValue {
-                    key: "reason".into(),
-                    value: reason.clone(),
-                });
-            });
+            job.publish(
+                JobEventKind::OutcomeClassified,
+                now_epoch_ms,
+                digest,
+                |event| {
+                    event.facts.push(KeyValue {
+                        key: "outcome".into(),
+                        value: "outcomeUnknown".into(),
+                    });
+                    event.facts.push(KeyValue {
+                        key: "reason".into(),
+                        value: reason.clone(),
+                    });
+                },
+            );
             expired.push(job_id.clone());
         }
         expired
@@ -617,7 +814,7 @@ impl JobRegistry {
         job_id: &str,
         outcome: DispatchOutcome,
         envelope: &FlashPlanEnvelope,
-        private_plan: &StoredProviderPlan,
+        _private_plan: &StoredProviderPlan,
         now_epoch_ms: u64,
     ) -> Result<(), JobError> {
         let job = self.jobs.get_mut(job_id).ok_or(JobError::UnknownJob)?;
@@ -651,22 +848,27 @@ impl JobRegistry {
                 step_id: step_id.clone(),
                 disposition: outcome.disposition,
             });
-            job.publish(JobEventKind::OutcomeClassified, now_epoch_ms, digest, |event| {
-                event.facts.push(KeyValue {
-                    key: "outcome".into(),
-                    value: outcome.disposition.as_str().to_string(),
-                });
-                // The dispatch facts name what actually happened — the tool's
-                // exit, its duration, the tail of what it printed. Publishing
-                // only "unknown" made the authority's timeline end in a word
-                // while the explanation sat in this daemon's CBOR journal.
-                for (key, value) in &outcome.facts {
+            job.publish(
+                JobEventKind::OutcomeClassified,
+                now_epoch_ms,
+                digest,
+                |event| {
                     event.facts.push(KeyValue {
-                        key: key.clone(),
-                        value: value.clone(),
+                        key: "outcome".into(),
+                        value: outcome.disposition.as_str().to_string(),
                     });
-                }
-            });
+                    // The dispatch facts name what actually happened — the tool's
+                    // exit, its duration, the tail of what it printed. Publishing
+                    // only "unknown" made the authority's timeline end in a word
+                    // while the explanation sat in this daemon's CBOR journal.
+                    for (key, value) in &outcome.facts {
+                        event.facts.push(KeyValue {
+                            key: key.clone(),
+                            value: value.clone(),
+                        });
+                    }
+                },
+            );
             return Ok(());
         }
 
@@ -755,12 +957,20 @@ impl JobRegistry {
             ],
         )?;
         job.move_to(JobState::Checkpointed)?;
-        job.publish(JobEventKind::ActionReceipt, now_epoch_ms, checkpoint, |event| {
-            event.receipt = Some(receipt)
-        });
-        job.publish(JobEventKind::StepCheckpointed, now_epoch_ms, checkpoint, |_| {});
+        job.publish(
+            JobEventKind::ActionReceipt,
+            now_epoch_ms,
+            checkpoint,
+            |event| event.receipt = Some(receipt),
+        );
+        job.publish(
+            JobEventKind::StepCheckpointed,
+            now_epoch_ms,
+            checkpoint,
+            |_| {},
+        );
 
-        advance(job, envelope, private_plan, now_epoch_ms, checkpoint)
+        advance(job, envelope, now_epoch_ms, checkpoint)
     }
 
     /// Records what the authority's own control channel observed.
@@ -768,7 +978,7 @@ impl JobRegistry {
         &mut self,
         request: &SubmitManagedControlReceiptRequest,
         envelope: &FlashPlanEnvelope,
-        private_plan: &StoredProviderPlan,
+        _private_plan: &StoredProviderPlan,
         now_epoch_ms: u64,
     ) -> Result<(), JobError> {
         let forbidden = request.forbidden_facts();
@@ -780,7 +990,10 @@ impl JobRegistry {
             ));
         }
 
-        let job = self.jobs.get_mut(&request.job_id).ok_or(JobError::UnknownJob)?;
+        let job = self
+            .jobs
+            .get_mut(&request.job_id)
+            .ok_or(JobError::UnknownJob)?;
         let Some(Pending::Control {
             request_id: expected,
             request: asked,
@@ -841,19 +1054,24 @@ impl JobRegistry {
                 step_id: step_id.clone(),
                 reason: request.failure_reason.clone(),
             });
-            job.publish(JobEventKind::OutcomeClassified, now_epoch_ms, digest, |event| {
-                event.facts.push(KeyValue {
-                    key: "outcome".into(),
-                    value: "outcomeUnknown".into(),
-                });
-                // The journal keeps the reason; the event must carry it too,
-                // or the authority ends its job knowing only "unknown" while
-                // the one line naming the cause sits in a CBOR file.
-                event.facts.push(KeyValue {
-                    key: "reason".into(),
-                    value: request.failure_reason.clone(),
-                });
-            });
+            job.publish(
+                JobEventKind::OutcomeClassified,
+                now_epoch_ms,
+                digest,
+                |event| {
+                    event.facts.push(KeyValue {
+                        key: "outcome".into(),
+                        value: "outcomeUnknown".into(),
+                    });
+                    // The journal keeps the reason; the event must carry it too,
+                    // or the authority ends its job knowing only "unknown" while
+                    // the one line naming the cause sits in a CBOR file.
+                    event.facts.push(KeyValue {
+                        key: "reason".into(),
+                        value: request.failure_reason.clone(),
+                    });
+                },
+            );
             return Ok(());
         }
 
@@ -913,13 +1131,21 @@ impl JobRegistry {
             ],
         )?;
         job.move_to(JobState::Checkpointed)?;
-        job.publish(JobEventKind::ActionReceipt, now_epoch_ms, checkpoint, |event| {
-            event.receipt = Some(receipt)
-        });
-        job.publish(JobEventKind::StepCheckpointed, now_epoch_ms, checkpoint, |_| {});
+        job.publish(
+            JobEventKind::ActionReceipt,
+            now_epoch_ms,
+            checkpoint,
+            |event| event.receipt = Some(receipt),
+        );
+        job.publish(
+            JobEventKind::StepCheckpointed,
+            now_epoch_ms,
+            checkpoint,
+            |_| {},
+        );
 
         job.pending = None;
-        advance(job, envelope, private_plan, now_epoch_ms, checkpoint)
+        advance(job, envelope, now_epoch_ms, checkpoint)
     }
 
     /// Cancels a job, if cancelling is still safe.
@@ -935,7 +1161,10 @@ impl JobRegistry {
         }
         if !matches!(
             job.state,
-            JobState::Planned | JobState::AwaitingStart | JobState::Preflight | JobState::AwaitingPermit
+            JobState::Planned
+                | JobState::AwaitingStart
+                | JobState::Preflight
+                | JobState::AwaitingPermit
         ) {
             return Err(JobError::CancelWouldHideAnUnresolvedEffect);
         }
@@ -955,12 +1184,17 @@ impl JobRegistry {
             step_id: String::new(),
             reason: "cancelled before any permit".into(),
         });
-        job.publish(JobEventKind::OutcomeClassified, now_epoch_ms, digest, |event| {
-            event.facts.push(KeyValue {
-                key: "outcome".into(),
-                value: "cancelledSafe".into(),
-            });
-        });
+        job.publish(
+            JobEventKind::OutcomeClassified,
+            now_epoch_ms,
+            digest,
+            |event| {
+                event.facts.push(KeyValue {
+                    key: "outcome".into(),
+                    value: "cancelledSafe".into(),
+                });
+            },
+        );
         Ok(JobState::CancelledSafe)
     }
 }
@@ -969,7 +1203,6 @@ impl JobRegistry {
 fn advance(
     job: &mut Job,
     envelope: &FlashPlanEnvelope,
-    private_plan: &StoredProviderPlan,
     now_epoch_ms: u64,
     checkpoint: Sha256Digest,
 ) -> Result<(), JobError> {
@@ -978,16 +1211,21 @@ fn advance(
         job.move_to(JobState::Postflight)?;
         job.move_to(JobState::Succeeded)?;
         job.stopped = Some(JobStop::Completed);
-        job.publish(JobEventKind::OutcomeClassified, now_epoch_ms, checkpoint, |event| {
-            event.facts.push(KeyValue {
-                key: "outcome".into(),
-                value: "succeeded".into(),
-            });
-        });
+        job.publish(
+            JobEventKind::OutcomeClassified,
+            now_epoch_ms,
+            checkpoint,
+            |event| {
+                event.facts.push(KeyValue {
+                    key: "outcome".into(),
+                    value: "succeeded".into(),
+                });
+            },
+        );
         return Ok(());
     }
     job.move_to(JobState::Preflight)?;
-    request_admission(job, envelope, private_plan, now_epoch_ms)
+    Ok(())
 }
 
 /// Publishes the admission the job's current step needs.
@@ -995,6 +1233,7 @@ fn request_admission(
     job: &mut Job,
     envelope: &FlashPlanEnvelope,
     private_plan: &StoredProviderPlan,
+    admission_facts: &AdmissionFacts,
     now_epoch_ms: u64,
 ) -> Result<(), JobError> {
     let step = envelope
@@ -1009,6 +1248,20 @@ fn request_admission(
         })
         .ok_or_else(|| JobError::StepHasNoAction(step.step_id.to_string()))?;
 
+    if let Some(expected_mode) = &step.expected_mode_before
+        && expected_mode != &admission_facts.observation.mode
+    {
+        return Err(JobError::ObservedModeMismatch {
+            expected: expected_mode.as_str().to_string(),
+            found: admission_facts.observation.mode.as_str().to_string(),
+        });
+    }
+    let freshness = admission_facts.authority_snapshot()?;
+    let (serial_evidence_kind, serial_sha256) = match admission_facts.observation.serial_evidence {
+        SerialEvidence::Absent => ("absent", Vec::new()),
+        SerialEvidence::Descriptor { digest } => ("descriptor", digest.as_bytes().to_vec()),
+        SerialEvidence::ProtocolUnique { digest } => ("protocolUnique", digest.as_bytes().to_vec()),
+    };
     let snapshot = StepAdmissionSnapshot {
         job_id: job.job_id.clone(),
         plan_id: job.plan_id.clone(),
@@ -1025,16 +1278,45 @@ fn request_admission(
             .map_err(|error| JobError::Core(error.to_string()))?
             .as_bytes()
             .to_vec(),
-        effect_set_sha256: envelope.plan_digest.as_bytes().to_vec(),
-        admitted_device_facts_sha256: envelope.plan_digest.as_bytes().to_vec(),
-        observed_mode: step
-            .expected_mode_before
-            .as_ref()
-            .map(|mode| mode.as_str().to_string())
-            .unwrap_or_default(),
-        observed_at_epoch_ms: now_epoch_ms,
+        effect_set_sha256: envelope
+            .effect_set
+            .digest()
+            .map_err(|error| JobError::Core(error.to_string()))?
+            .as_bytes()
+            .to_vec(),
+        admitted_device_facts_sha256: freshness.device_facts_digest.as_bytes().to_vec(),
+        observed_mode: admission_facts.observation.mode.as_str().to_string(),
+        observed_at_epoch_ms: admission_facts.observation.observed_at_epoch_ms,
         snapshot_lifetime_ms: SNAPSHOT_LIFETIME_MS,
         request_id: format!("{}-{}", job.job_id, job.step_index + 1),
+        topology_sha256: admission_facts
+            .observation
+            .topology_digest
+            .as_bytes()
+            .to_vec(),
+        descriptor_sha256: admission_facts
+            .observation
+            .descriptor_digest
+            .as_bytes()
+            .to_vec(),
+        serial_sha256,
+        serial_evidence_kind: serial_evidence_kind.to_string(),
+        protocol_identity: admission_facts
+            .observation
+            .protocol_identity
+            .iter()
+            .map(|fact| KeyValue {
+                key: fact.key.to_string(),
+                value: fact.value.clone(),
+            })
+            .collect(),
+        identity_strength: admission_facts
+            .observation
+            .identity_strength
+            .as_str()
+            .to_string(),
+        malformed_descriptor: admission_facts.observation.malformed_descriptor,
+        transport_session_sha256: admission_facts.transport_session_digest.as_bytes().to_vec(),
     };
 
     let digest = job.journal.append(
@@ -1046,7 +1328,8 @@ fn request_admission(
     )?;
     job.pending = Some(Pending::Admission {
         request_id: snapshot.request_id.clone(),
-        snapshot: snapshot.clone(),
+        snapshot: Box::new(snapshot.clone()),
+        freshness,
     });
     job.publish(
         JobEventKind::StepAdmissionRequested,
@@ -1089,10 +1372,12 @@ fn ordered_actions(
 /// the provider already writes `via: managed-device-control-port` into the
 /// action body, and a second copy of that mapping in the daemon is a second
 /// copy that can drift.
+type ManagedControlSpec = (ManagedControlAction, Vec<(String, String)>);
+
 fn managed_control_for(
     private_plan: &StoredProviderPlan,
     step_id: &str,
-) -> Result<Option<(ManagedControlAction, Vec<(String, String)>)>, JobError> {
+) -> Result<Option<ManagedControlSpec>, JobError> {
     let Some(action) = private_plan
         .actions
         .iter()
@@ -1161,6 +1446,151 @@ fn id(value: &str) -> Result<OpaqueId, JobError> {
     OpaqueId::new(value).map_err(|_| JobError::UnusableIdentifier(value.to_string()))
 }
 
+fn recover_job(path: &Path) -> Result<Job, JobError> {
+    let (mut journal, _) = DurableJournal::open(path)?;
+    let records = journal.journal().records();
+    let created = records
+        .iter()
+        .find(|record| record.kind == JournalRecordKind::JobCreated)
+        .ok_or_else(|| {
+            JobError::RegistryIo(format!("{} has no jobCreated record", path.display()))
+        })?;
+    let fact_value = |name: &str| -> Option<String> {
+        created
+            .facts
+            .iter()
+            .find(|(key, _)| key.as_str() == name)
+            .map(|(_, value)| value.clone())
+    };
+    let job_id = fact_value(fact::JOB_ID)
+        .ok_or_else(|| JobError::RegistryIo(format!("{} has no job id", path.display())))?;
+    let plan_id = fact_value(fact::PLAN_ID).unwrap_or_else(|| "PLAN-RECOVERED".to_string());
+    let plan_digest = fact_value("planDigest")
+        .and_then(|value| Sha256Digest::parse_hex(&value).ok())
+        .unwrap_or_else(|| sha256(b"arkforge/recovered/unknown-plan-digest"));
+    let controller_session_id = fact_value("controllerSessionId")
+        .and_then(|value| ControllerSessionId::new(value).ok())
+        .unwrap_or_else(|| {
+            ControllerSessionId::new("RECOVERED-SESSION").expect("literal identifier")
+        });
+    let step_index = records
+        .iter()
+        .filter(|record| record.kind == JournalRecordKind::StepCheckpointed)
+        .count();
+    let total_steps = fact_value("totalSteps")
+        .and_then(|value| value.parse().ok())
+        .unwrap_or(step_index);
+    let last_classification = records
+        .iter()
+        .rev()
+        .find(|record| record.kind == JournalRecordKind::OutcomeClassified)
+        .and_then(|record| {
+            record
+                .facts
+                .iter()
+                .find(|(key, _)| key.as_str() == "outcome")
+                .map(|(_, value)| (value.clone(), record.record_digest, record.at_epoch_ms))
+        });
+
+    let (state, outcome, reason, record_digest, at_epoch_ms) =
+        if let Some((outcome, digest, at)) = last_classification {
+            let state = match outcome.as_str() {
+                "succeeded" => JobState::Succeeded,
+                "cancelledSafe" => JobState::CancelledSafe,
+                "recoveryAssessable" => JobState::RecoveryAssessable,
+                "confirmedFailed" => JobState::ConfirmedFailed,
+                _ => JobState::OutcomeUnknown,
+            };
+            (
+                state,
+                outcome,
+                "replayed from durable journal".to_string(),
+                digest,
+                at,
+            )
+        } else {
+            let unresolved = !PermitLedger::from_journal(journal.journal())
+                .unresolved()
+                .is_empty();
+            let (state, outcome, reason) = if unresolved {
+                (
+                    JobState::OutcomeUnknown,
+                    "outcomeUnknown",
+                    "daemon restarted with a durable external intent and no settled receipt",
+                )
+            } else {
+                (
+                    JobState::CancelledSafe,
+                    "cancelledSafe",
+                    "daemon restarted before any unresolved external intent existed",
+                )
+            };
+            let at = records
+                .last()
+                .map(|record| record.at_epoch_ms.saturating_add(1))
+                .unwrap_or(0);
+            let digest = journal.append(
+                JournalRecordKind::OutcomeClassified,
+                at,
+                1,
+                id(&job_id)?,
+                vec![
+                    (id("outcome")?, outcome.to_string()),
+                    (id("reason")?, reason.to_string()),
+                ],
+            )?;
+            (state, outcome.to_string(), reason.to_string(), digest, at)
+        };
+
+    let stopped = match state {
+        JobState::Succeeded => Some(JobStop::Completed),
+        JobState::CancelledSafe => Some(JobStop::RefusedByAuthority {
+            step_id: "daemon-restart".to_string(),
+            reason: reason.clone(),
+        }),
+        JobState::OutcomeUnknown | JobState::RecoveryAssessable => {
+            Some(JobStop::DispatchOutcomeUnknown {
+                step_id: "daemon-restart".to_string(),
+                disposition: ActionDisposition::OutcomeUnknown,
+            })
+        }
+        _ => None,
+    };
+    let event = JobEvent {
+        job_id: job_id.clone(),
+        sequence: journal.len() as u64,
+        kind: JobEventKind::OutcomeClassified,
+        at_epoch_ms,
+        journal_record_sha256: record_digest.as_bytes().to_vec(),
+        job_state: state.as_str().to_string(),
+        facts: vec![
+            KeyValue {
+                key: "outcome".to_string(),
+                value: outcome,
+            },
+            KeyValue {
+                key: "reason".to_string(),
+                value: reason,
+            },
+        ],
+        ..JobEvent::default()
+    };
+    Ok(Job {
+        job_id,
+        controller_session_id,
+        plan_id,
+        plan_digest,
+        state,
+        step_index,
+        total_steps,
+        journal,
+        events: vec![event],
+        pending: None,
+        in_flight: None,
+        stopped,
+    })
+}
+
 #[derive(Debug)]
 pub enum JobError {
     UnknownJob,
@@ -1178,6 +1608,13 @@ pub enum JobError {
         found: ManagedControlAction,
     },
     SnapshotExpired,
+    CurrentFactsUnavailable,
+    ContinuityBroken(String),
+    AdmissionNotReady,
+    ObservedModeMismatch {
+        expected: String,
+        found: String,
+    },
     TagNotADigest,
     ControlEvidenceMismatch,
     ReceiptCarriesForbiddenFacts(Vec<String>),
@@ -1191,6 +1628,7 @@ pub enum JobError {
     Journal(DurableJournalError),
     UnusableIdentifier(String),
     Core(String),
+    RegistryIo(String),
 }
 
 impl JobError {
@@ -1206,6 +1644,10 @@ impl JobError {
             JobError::WrongRequest { .. } => "WRONG_REQUEST",
             JobError::WrongControlAction { .. } => "WRONG_CONTROL_ACTION",
             JobError::SnapshotExpired => "SNAPSHOT_EXPIRED",
+            JobError::CurrentFactsUnavailable => "CURRENT_FACTS_UNAVAILABLE",
+            JobError::ContinuityBroken(_) => "CONTINUITY_BROKEN",
+            JobError::AdmissionNotReady => "ADMISSION_NOT_READY",
+            JobError::ObservedModeMismatch { .. } => "OBSERVED_MODE_MISMATCH",
             JobError::TagNotADigest => "NOT_A_DIGEST",
             JobError::ControlEvidenceMismatch => "CONTROL_EVIDENCE_MISMATCH",
             JobError::ReceiptCarriesForbiddenFacts(_) => "RECEIPT_CARRIES_FORBIDDEN_FACTS",
@@ -1216,6 +1658,7 @@ impl JobError {
             JobError::Journal(_) => "JOURNAL",
             JobError::UnusableIdentifier(_) => "UNUSABLE_IDENTIFIER",
             JobError::Core(_) => "CORE",
+            JobError::RegistryIo(_) => "REGISTRY_IO",
         }
     }
 }
@@ -1228,9 +1671,7 @@ impl fmt::Display for JobError {
             JobError::StepHasNoAction(step) => {
                 write!(f, "step {step} has no private action in the stored plan")
             }
-            JobError::NoAdmissionPending => {
-                f.write_str("this job is not waiting for a permit")
-            }
+            JobError::NoAdmissionPending => f.write_str("this job is not waiting for a permit"),
             JobError::NoControlPending => {
                 f.write_str("this job is not waiting for a control receipt")
             }
@@ -1252,6 +1693,19 @@ impl fmt::Display for JobError {
                  been published and the permit must be re-issued against it \
                  (architecture.md 8.3)",
             ),
+            JobError::CurrentFactsUnavailable => {
+                f.write_str("the current device facts could not be read from the admission session")
+            }
+            JobError::ContinuityBroken(reason) => {
+                write!(f, "device continuity broke before dispatch: {reason}")
+            }
+            JobError::AdmissionNotReady => {
+                f.write_str("the job is not waiting for a new admission snapshot")
+            }
+            JobError::ObservedModeMismatch { expected, found } => write!(
+                f,
+                "the live device mode is {found}; the next step requires {expected}"
+            ),
             JobError::TagNotADigest => f.write_str("a digest field is not 32 bytes"),
             JobError::ControlEvidenceMismatch => f.write_str(
                 "the receipt's evidence digest is not the canonical digest of its own facts",
@@ -1263,7 +1717,10 @@ impl fmt::Display for JobError {
                 keys.join(", ")
             ),
             JobError::UnknownControlAction(action) => {
-                write!(f, "the plan names control action {action:?}, which is not one of the four")
+                write!(
+                    f,
+                    "the plan names control action {action:?}, which is not one of the four"
+                )
             }
             JobError::CancelWouldHideAnUnresolvedEffect => f.write_str(
                 "this job has a durable intent whose outcome is not settled; it cannot return \
@@ -1281,6 +1738,7 @@ impl fmt::Display for JobError {
                 write!(f, "{value:?} is not usable as a journal identifier")
             }
             JobError::Core(message) => f.write_str(message),
+            JobError::RegistryIo(message) => f.write_str(message),
         }
     }
 }

@@ -219,7 +219,7 @@ pub fn check_step(step: &PublicFlashStep) -> Result<&'static str, AdmissionRefus
                 step: step.step_id.to_string(),
                 kind: step.kind,
                 reason,
-            })
+            });
         }
     };
 
@@ -262,7 +262,11 @@ mod tests {
     use arkforge_core::ids::{PartitionId, StepId};
     use arkforge_core::step::SemanticTarget;
 
-    fn step(kind: FlashStepKind, effect: WorkflowEffect, cancellation: CancellationPolicy) -> PublicFlashStep {
+    fn step(
+        kind: FlashStepKind,
+        effect: WorkflowEffect,
+        cancellation: CancellationPolicy,
+    ) -> PublicFlashStep {
         PublicFlashStep {
             step_id: StepId::new("STEP-001").unwrap(),
             kind,

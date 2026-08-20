@@ -5,12 +5,13 @@
 //! DAYU600 path through the identical request surface and assert that the
 //! answers are the honest ones.
 
+use arkforge_core::digest::sha256;
 use arkforge_core::profile;
-use arkforged::{Clock, Service};
 use arkforge_ipc::messages::{
     ErrorBody, InspectArtifactResponse, MaterializePlanResponse, Request, Response,
 };
-use arkforge_ipc::{wire, Api, SessionKind, Status};
+use arkforge_ipc::{Api, SessionKind, Status, wire};
+use arkforged::{Clock, Service};
 use std::path::PathBuf;
 
 const DAYU600_PROFILE: &str = include_str!("../../../profiles/dayu600.yaml");
@@ -64,6 +65,16 @@ fn request(api: Api, payload: Vec<u8>) -> Request {
 
 fn decode_error(response: &Response) -> Option<ErrorBody> {
     ErrorBody::decode(&response.payload).ok()
+}
+
+fn complete_materialize_payload(payload: &mut Vec<u8>, toolchain_id: &str) {
+    wire::write_string(payload, 4, "fullRestore");
+    wire::write_string(payload, 5, toolchain_id);
+    wire::write_string(payload, 6, "test-authority");
+    wire::write_string(payload, 7, "BINDING-600");
+    wire::write_uint64(payload, 8, 1);
+    wire::write_bytes(payload, 9, sha256(b"stable-device-600").as_bytes());
+    wire::write_string(payload, 10, "primaryFlash");
 }
 
 /// A container shaped like a firmware package. Not a PAC file.
@@ -138,10 +149,12 @@ fn the_dayu600_research_vertical_runs_over_the_same_api() {
         12,
         "the exact unknown list crosses the wire"
     );
-    assert!(manifest
-        .execution_relevant_unknowns
-        .iter()
-        .any(|unknown| unknown.key == "UNI-U01"));
+    assert!(
+        manifest
+            .execution_relevant_unknowns
+            .iter()
+            .any(|unknown| unknown.key == "UNI-U01")
+    );
 
     // discover / probe
     let response = service.handle(
@@ -166,6 +179,7 @@ fn the_dayu600_research_vertical_runs_over_the_same_api() {
     wire::write_string(&mut payload, 1, &artifact_id);
     wire::write_string(&mut payload, 2, "org.openharmony.dayu600");
     wire::write_string(&mut payload, 3, "OBS-DAYU600-NORMAL");
+    complete_materialize_payload(&mut payload, "research-inspect");
     let response = service.handle(
         SessionKind::Public,
         &request(Api::MaterializePlan, payload),
@@ -240,10 +254,7 @@ fn start_execution_is_unavailable_for_dayu600_at_every_layer() {
         // standing facts before it ever looks at a DAYU600 plan. That the
         // refusal is not DAYU600-specific is the point: no payload reaches a
         // path that could produce an executable plan for it.
-        assert_eq!(
-            decode_error(&response).unwrap().code,
-            "NO_PAIRED_AUTHORITY"
-        );
+        assert_eq!(decode_error(&response).unwrap().code, "NO_PAIRED_AUTHORITY");
     }
 }
 
@@ -268,6 +279,7 @@ fn a_pac_container_offered_against_the_dayu200_profile_is_refused() {
     wire::write_string(&mut payload, 1, &artifact_id);
     wire::write_string(&mut payload, 2, "org.openharmony.dayu200");
     wire::write_string(&mut payload, 3, "OBS-DAYU600-NORMAL");
+    complete_materialize_payload(&mut payload, "arkforged-native-rockusb");
     let response = service.handle(
         SessionKind::Public,
         &request(Api::MaterializePlan, payload),

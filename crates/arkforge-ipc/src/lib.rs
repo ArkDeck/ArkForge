@@ -62,7 +62,7 @@ impl SessionKind {
             // A public caller may ask for an assessment; the daemon returns an
             // assessment to it regardless of what the provider could build.
             Api::MaterializePlan => true,
-            Api::WatchJob | Api::GetRecoveryGuide => true,
+            Api::WatchJob | Api::GetRecoveryGuide | Api::GetJob | Api::ListJobs => true,
             // Answering an admission is minting authority. A public caller
             // that could submit a permit would be an authority nobody paired.
             Api::ImportArtifact
@@ -95,10 +95,14 @@ pub enum Api {
     SubmitStepPermit,
     /// The authority reports what its own device control channel observed.
     SubmitManagedControlReceipt,
+    /// Read-only durable point-in-time job status.
+    GetJob,
+    /// Read-only durable status for every known job.
+    ListJobs,
 }
 
 impl Api {
-    pub const ALL: [Api; 13] = [
+    pub const ALL: [Api; 15] = [
         Api::ImportArtifact,
         Api::InspectArtifact,
         Api::DiscoverDevices,
@@ -112,6 +116,8 @@ impl Api {
         Api::GetRecoveryGuide,
         Api::SubmitStepPermit,
         Api::SubmitManagedControlReceipt,
+        Api::GetJob,
+        Api::ListJobs,
     ];
 
     pub fn wire_value(self) -> i32 {
@@ -129,13 +135,13 @@ impl Api {
             Api::GetRecoveryGuide => 11,
             Api::SubmitStepPermit => 12,
             Api::SubmitManagedControlReceipt => 13,
+            Api::GetJob => 14,
+            Api::ListJobs => 15,
         }
     }
 
     pub fn from_wire(value: i32) -> Option<Self> {
-        Api::ALL
-            .into_iter()
-            .find(|api| api.wire_value() == value)
+        Api::ALL.into_iter().find(|api| api.wire_value() == value)
     }
 
     pub fn as_str(self) -> &'static str {
@@ -153,6 +159,8 @@ impl Api {
             Api::GetRecoveryGuide => "getRecoveryGuide",
             Api::SubmitStepPermit => "submitStepPermit",
             Api::SubmitManagedControlReceipt => "submitManagedControlReceipt",
+            Api::GetJob => "getJob",
+            Api::ListJobs => "listJobs",
         }
     }
 }

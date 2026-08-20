@@ -17,11 +17,11 @@
 #![forbid(unsafe_code)]
 
 pub mod replay;
-pub mod usb;
 pub mod transcript;
+pub mod usb;
 
 use arkforge_core::digest::{
-    digest_canonical, CanonicalCbor, CborError, CborValue, Domain, Sha256Digest,
+    CanonicalCbor, CborError, CborValue, Domain, Sha256Digest, digest_canonical, digest_in_domain,
 };
 use arkforge_core::effect::DeviceMode;
 use arkforge_core::ids::{ObservationId, OpaqueId};
@@ -171,6 +171,34 @@ impl DeviceObservation {
         digest_canonical(Domain::DeviceFacts, self)
     }
 
+    /// Digest of the device facts that identify the device *now*.
+    ///
+    /// Observation ids and timestamps deliberately do not participate: a
+    /// same-handle re-read is fresh evidence of the same facts, not a new
+    /// identity merely because the clock advanced. This is the digest carried
+    /// by an admission permit and compared again immediately before dispatch.
+    pub fn admission_facts_digest(&self) -> Result<Sha256Digest, CborError> {
+        let facts = CborValue::map(vec![
+            ("mode", self.mode.to_cbor()),
+            ("topologyDigest", self.topology_digest.to_cbor()),
+            ("descriptorDigest", self.descriptor_digest.to_cbor()),
+            ("serialEvidence", self.serial_evidence.to_cbor()),
+            (
+                "protocolIdentity",
+                CborValue::array(self.protocol_identity.iter().map(|f| f.to_cbor()).collect()),
+            ),
+            ("identityStrength", self.identity_strength.to_cbor()),
+            (
+                "malformedDescriptor",
+                CborValue::Bool(self.malformed_descriptor),
+            ),
+        ]);
+        Ok(digest_in_domain(
+            Domain::DeviceFacts,
+            &facts.to_canonical_bytes()?,
+        ))
+    }
+
     /// Whether this observation is stable enough to compare identities against.
     pub fn is_stable(&self) -> bool {
         !self.malformed_descriptor
@@ -233,10 +261,10 @@ impl TypedDiscoveryFilter {
         {
             return false;
         }
-        if let Some(floor) = self.minimum_identity_strength {
-            if observation.identity_strength < floor {
-                return false;
-            }
+        if let Some(floor) = self.minimum_identity_strength
+            && observation.identity_strength < floor
+        {
+            return false;
         }
         true
     }
@@ -285,15 +313,21 @@ pub enum RebindOutcome {
     NoCandidate,
     /// More than one device satisfies the expectation. Never pick one
     /// (architecture.md 11.3).
-    Ambiguous { count: usize },
+    Ambiguous {
+        count: usize,
+    },
     IdentityWeakened {
         before: IdentityEvidenceStrength,
         after: IdentityEvidenceStrength,
     },
     SerialChanged,
     TopologyChanged,
-    ExpectedModeNotReached { observed: Option<DeviceMode> },
-    ToleranceWindowExhausted { transient_observations: usize },
+    ExpectedModeNotReached {
+        observed: Option<DeviceMode>,
+    },
+    ToleranceWindowExhausted {
+        transient_observations: usize,
+    },
 }
 
 impl RebindOutcome {
@@ -465,7 +499,9 @@ impl fmt::Display for TransportError {
                 write!(f, "{count} devices matched; refusing to choose")
             }
             TransportError::Closed => f.write_str("transport session is closed"),
-            TransportError::Unsupported(detail) => write!(f, "unsupported by this transport: {detail}"),
+            TransportError::Unsupported(detail) => {
+                write!(f, "unsupported by this transport: {detail}")
+            }
             TransportError::Evidence(detail) => write!(f, "transport evidence problem: {detail}"),
             TransportError::Cbor(error) => write!(f, "{error}"),
         }
@@ -530,8 +566,18 @@ mod tests {
 
     #[test]
     fn a_transient_malformed_observation_does_not_fail_the_rebind() {
-        let previous = observation("OBS-0", 0, "hdc-normal", IdentityEvidenceStrength::SerialAndTopology);
-        let mut malformed = observation("OBS-1", 1_000, "rockusb-loader", IdentityEvidenceStrength::ClassOnly);
+        let previous = observation(
+            "OBS-0",
+            0,
+            "hdc-normal",
+            IdentityEvidenceStrength::SerialAndTopology,
+        );
+        let mut malformed = observation(
+            "OBS-1",
+            1_000,
+            "rockusb-loader",
+            IdentityEvidenceStrength::ClassOnly,
+        );
         malformed.malformed_descriptor = true;
         let settled = observation(
             "OBS-2",
@@ -545,17 +591,42 @@ mod tests {
 
     #[test]
     fn a_declared_alias_counts_as_the_expected_mode() {
-        let previous = observation("OBS-0", 0, "hdc-normal", IdentityEvidenceStrength::SerialAndTopology);
-        let settled = observation("OBS-1", 500, "loader", IdentityEvidenceStrength::SerialAndTopology);
+        let previous = observation(
+            "OBS-0",
+            0,
+            "hdc-normal",
+            IdentityEvidenceStrength::SerialAndTopology,
+        );
+        let settled = observation(
+            "OBS-1",
+            500,
+            "loader",
+            IdentityEvidenceStrength::SerialAndTopology,
+        );
         let outcome = evaluate_rebind(&expectation(), &previous, &[settled]);
         assert!(outcome.settled().is_some(), "{outcome:?}");
     }
 
     #[test]
     fn two_matching_devices_are_ambiguous_rather_than_first_match() {
-        let previous = observation("OBS-0", 0, "hdc-normal", IdentityEvidenceStrength::SerialAndTopology);
-        let first = observation("OBS-1", 500, "rockusb-loader", IdentityEvidenceStrength::SerialAndTopology);
-        let second = observation("OBS-2", 600, "rockusb-loader", IdentityEvidenceStrength::SerialAndTopology);
+        let previous = observation(
+            "OBS-0",
+            0,
+            "hdc-normal",
+            IdentityEvidenceStrength::SerialAndTopology,
+        );
+        let first = observation(
+            "OBS-1",
+            500,
+            "rockusb-loader",
+            IdentityEvidenceStrength::SerialAndTopology,
+        );
+        let second = observation(
+            "OBS-2",
+            600,
+            "rockusb-loader",
+            IdentityEvidenceStrength::SerialAndTopology,
+        );
         let outcome = evaluate_rebind(&expectation(), &previous, &[first, second]);
         assert_eq!(outcome, RebindOutcome::Ambiguous { count: 2 });
     }
@@ -582,7 +653,12 @@ mod tests {
 
     #[test]
     fn a_changed_serial_is_allowed_only_where_the_policy_says_so() {
-        let previous = observation("OBS-0", 0, "hdc-normal", IdentityEvidenceStrength::SerialAndTopology);
+        let previous = observation(
+            "OBS-0",
+            0,
+            "hdc-normal",
+            IdentityEvidenceStrength::SerialAndTopology,
+        );
         let mut settled = observation(
             "OBS-1",
             500,
@@ -594,9 +670,11 @@ mod tests {
         };
 
         // DAYU200 changes its serial across this transition, so MayChange.
-        assert!(evaluate_rebind(&expectation(), &previous, std::slice::from_ref(&settled))
-            .settled()
-            .is_some());
+        assert!(
+            evaluate_rebind(&expectation(), &previous, std::slice::from_ref(&settled))
+                .settled()
+                .is_some()
+        );
 
         let mut strict = expectation();
         strict.serial_policy = SerialPolicy::MustMatch;
@@ -608,7 +686,12 @@ mod tests {
 
     #[test]
     fn a_device_moved_to_another_port_is_refused_only_when_topology_must_match() {
-        let previous = observation("OBS-0", 0, "hdc-normal", IdentityEvidenceStrength::SerialAndTopology);
+        let previous = observation(
+            "OBS-0",
+            0,
+            "hdc-normal",
+            IdentityEvidenceStrength::SerialAndTopology,
+        );
         let mut settled = observation(
             "OBS-1",
             500,
@@ -619,9 +702,11 @@ mod tests {
 
         // DAYU200's enter-loader transition changes the port path, so the
         // measured policy is MayChange and this settles.
-        assert!(evaluate_rebind(&expectation(), &previous, std::slice::from_ref(&settled))
-            .settled()
-            .is_some());
+        assert!(
+            evaluate_rebind(&expectation(), &previous, std::slice::from_ref(&settled))
+                .settled()
+                .is_some()
+        );
 
         // Where a Profile has measured that the path is stable, a move is a
         // stop.
@@ -635,7 +720,12 @@ mod tests {
 
     #[test]
     fn nothing_appearing_is_no_candidate_not_success() {
-        let previous = observation("OBS-0", 0, "hdc-normal", IdentityEvidenceStrength::SerialAndTopology);
+        let previous = observation(
+            "OBS-0",
+            0,
+            "hdc-normal",
+            IdentityEvidenceStrength::SerialAndTopology,
+        );
         assert_eq!(
             evaluate_rebind(&expectation(), &previous, &[]),
             RebindOutcome::NoCandidate
@@ -644,10 +734,25 @@ mod tests {
 
     #[test]
     fn transient_noise_past_the_window_exhausts_the_tolerance() {
-        let previous = observation("OBS-0", 0, "hdc-normal", IdentityEvidenceStrength::SerialAndTopology);
-        let mut early = observation("OBS-1", 1_000, "rockusb-loader", IdentityEvidenceStrength::ClassOnly);
+        let previous = observation(
+            "OBS-0",
+            0,
+            "hdc-normal",
+            IdentityEvidenceStrength::SerialAndTopology,
+        );
+        let mut early = observation(
+            "OBS-1",
+            1_000,
+            "rockusb-loader",
+            IdentityEvidenceStrength::ClassOnly,
+        );
         early.malformed_descriptor = true;
-        let mut late = observation("OBS-2", 100_000, "rockusb-loader", IdentityEvidenceStrength::ClassOnly);
+        let mut late = observation(
+            "OBS-2",
+            100_000,
+            "rockusb-loader",
+            IdentityEvidenceStrength::ClassOnly,
+        );
         late.malformed_descriptor = true;
         assert_eq!(
             evaluate_rebind(&expectation(), &previous, &[early, late]),
@@ -664,7 +769,12 @@ mod tests {
             provider_ids: vec![],
             minimum_identity_strength: Some(IdentityEvidenceStrength::SerialAndTopology),
         };
-        let weak = observation("OBS-1", 0, "rockusb-loader", IdentityEvidenceStrength::ClassOnly);
+        let weak = observation(
+            "OBS-1",
+            0,
+            "rockusb-loader",
+            IdentityEvidenceStrength::ClassOnly,
+        );
         let strong = observation(
             "OBS-2",
             0,

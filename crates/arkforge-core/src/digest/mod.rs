@@ -8,8 +8,8 @@
 pub mod cbor;
 pub mod sha256;
 
-pub use cbor::{decode_canonical, CanonicalCbor, CborError, CborValue};
-pub use sha256::{sha256, DigestParseError, Sha256, Sha256Digest};
+pub use cbor::{CanonicalCbor, CborError, CborValue, decode_canonical};
+pub use sha256::{DigestParseError, Sha256, Sha256Digest, sha256};
 
 /// A digest domain separator.
 ///
@@ -134,7 +134,11 @@ mod tests {
         let mut seen = std::collections::BTreeSet::new();
         for domain in all {
             let bytes = domain.as_bytes();
-            assert_eq!(*bytes.last().unwrap(), 0, "{domain:?} must be NUL-terminated");
+            assert_eq!(
+                *bytes.last().unwrap(),
+                0,
+                "{domain:?} must be NUL-terminated"
+            );
             assert!(seen.insert(bytes), "duplicate domain string for {domain:?}");
         }
     }

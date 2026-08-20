@@ -248,8 +248,8 @@ impl<'a> RockUsbProtocol<'a> {
         data: &[u8],
         command_length: u8,
     ) -> Result<(), RockUsbProtocolError> {
-        let transfer_bytes = u32::try_from(data.len())
-            .map_err(|_| RockUsbProtocolError::TransferTooLarge {
+        let transfer_bytes =
+            u32::try_from(data.len()).map_err(|_| RockUsbProtocolError::TransferTooLarge {
                 sectors: sectors as u64,
             })?;
         let tag = self.next_tag;
@@ -302,10 +302,7 @@ fn command_block(
     cbw
 }
 
-fn validate_sector_range(
-    begin_sector: u64,
-    sectors: u64,
-) -> Result<(), RockUsbProtocolError> {
+fn validate_sector_range(begin_sector: u64, sectors: u64) -> Result<(), RockUsbProtocolError> {
     let end = begin_sector
         .checked_add(sectors)
         .ok_or(RockUsbProtocolError::AddressOutOfRange {
@@ -436,12 +433,12 @@ fn parse_partition_entries(
                 "entry {index} has an empty name"
             )));
         }
-        if let Some((_, previous, _)) = rows.last() {
-            if first_lba <= *previous {
-                return Err(RockUsbProtocolError::MalformedGpt(format!(
-                    "entry {index} begins at {first_lba}, not after {previous}"
-                )));
-            }
+        if let Some((_, previous, _)) = rows.last()
+            && first_lba <= *previous
+        {
+            return Err(RockUsbProtocolError::MalformedGpt(format!(
+                "entry {index} begins at {first_lba}, not after {previous}"
+            )));
         }
         rows.push((index as u32, first_lba, name));
     }
@@ -490,7 +487,7 @@ fn le_u64(bytes: &[u8], offset: usize) -> Result<u64, RockUsbProtocolError> {
 }
 
 fn ceil_div(numerator: usize, denominator: usize) -> usize {
-    numerator / denominator + usize::from(numerator % denominator != 0)
+    numerator / denominator + usize::from(!numerator.is_multiple_of(denominator))
 }
 
 /// IEEE CRC-32 used by GPT headers and entry arrays.
@@ -696,7 +693,10 @@ mod tests {
     fn an_empty_write_is_refused_before_a_cbw() {
         let mut io = ScriptedIo::default();
         let mut protocol = RockUsbProtocol::new(&mut io, 1);
-        assert_eq!(protocol.write_lba(0, &[]), Err(RockUsbProtocolError::EmptyWrite));
+        assert_eq!(
+            protocol.write_lba(0, &[]),
+            Err(RockUsbProtocolError::EmptyWrite)
+        );
         assert!(io.writes.borrow().is_empty());
     }
 

@@ -178,7 +178,10 @@ impl fmt::Display for CborError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             CborError::NegativeNotNegative(value) => {
-                write!(f, "CborValue::Negative must hold a negative value, got {value}")
+                write!(
+                    f,
+                    "CborValue::Negative must hold a negative value, got {value}"
+                )
             }
             CborError::DuplicateMapKey(key) => {
                 write!(f, "duplicate map key in canonical encoding: {key:02x?}")
@@ -316,10 +319,10 @@ impl<'a> Cursor<'a> {
                     let key_start = self.position;
                     let key = self.read_value(depth + 1)?;
                     let key_bytes = self.input[key_start..self.position].to_vec();
-                    if let Some(previous) = previous_key.as_ref() {
-                        if previous >= &key_bytes {
-                            return Err(CborError::UnsortedMapKeys);
-                        }
+                    if let Some(previous) = previous_key.as_ref()
+                        && previous >= &key_bytes
+                    {
+                        return Err(CborError::UnsortedMapKeys);
                     }
                     previous_key = Some(key_bytes);
                     let value = self.read_value(depth + 1)?;

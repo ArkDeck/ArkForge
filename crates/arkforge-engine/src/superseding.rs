@@ -19,7 +19,7 @@
 //! that is only an assessment. Admission stays the authority's (14.6).
 
 use crate::journal::Journal;
-use crate::recovery::{fact, PermitLedger};
+use crate::recovery::{PermitLedger, fact};
 use arkforge_authority_api::{EffectSetCompleteness, PossibleEffectSet};
 use arkforge_core::effect::{DataImpact, DataImpactState, EffectSet, PersistentEffect};
 use arkforge_core::ids::{ActionId, OpaqueId};
@@ -96,7 +96,7 @@ pub fn possible_effects(
             secure_storage: DataImpactState::Preserved,
         }
     } else {
-        declared_data_impact.clone()
+        *declared_data_impact
     };
 
     PossibleEffectSet {
@@ -302,9 +302,9 @@ pub fn assess_superseding_recovery(
         .map(describe_effect)
         .collect();
     if !uncovered.is_empty() {
-        return SupersedingRecoveryAssessment::Ineligible(
-            RecoveryBlocker::EffectOutsideCoverage { effects: uncovered },
-        );
+        return SupersedingRecoveryAssessment::Ineligible(RecoveryBlocker::EffectOutsideCoverage {
+            effects: uncovered,
+        });
     }
 
     SupersedingRecoveryAssessment::Eligible {
@@ -370,10 +370,10 @@ pub fn blocker_id(blocker: &RecoveryBlocker) -> OpaqueId {
 mod tests {
     use super::*;
     use crate::journal::JournalRecordKind;
+    use arkforge_core::digest::{CborValue, sha256};
     use arkforge_core::effect::ByteRange;
     use arkforge_core::ids::{PartitionId, StepId};
     use arkforge_core::projection::{PrivateActionRecord, PrivateActionRole};
-    use arkforge_core::digest::{sha256, CborValue};
 
     /// A full restore's declared impact, in the neutral vocabulary. Which
     /// device declares this is a Profile's business; this crate never learns
@@ -453,7 +453,9 @@ mod tests {
         assert_eq!(possible.completeness, EffectSetCompleteness::Bounded);
         assert_eq!(possible.effects.persistent.len(), 1);
         assert_eq!(
-            possible.effects.persistent[0].partition().map(|p| p.to_string()),
+            possible.effects.persistent[0]
+                .partition()
+                .map(|p| p.to_string()),
             Some("system".to_string())
         );
         assert_eq!(possible.source_action_ids.len(), 1);

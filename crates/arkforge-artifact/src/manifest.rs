@@ -7,7 +7,7 @@
 //! Profile and the Provider against these facts, never by the parser.
 
 use arkforge_core::digest::{
-    digest_canonical, CanonicalCbor, CborError, CborValue, Domain, Sha256Digest,
+    CanonicalCbor, CborError, CborValue, Domain, Sha256Digest, digest_canonical,
 };
 use arkforge_core::identity::ArtifactFormat;
 use arkforge_core::ids::OpaqueId;

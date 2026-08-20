@@ -1,28 +1,31 @@
-//! The AF-V1 vertical, end to end:
+//! The DAYU200 provider vertical, end to end:
 //!
 //! ```text
 //! artifact import → inspect → profile validation → discover/probe
 //!   → public/private plan materialization → plan/effect parity
 //! ```
 //!
-//! Every assertion here is an AF-V1 acceptance line from architecture.md 22.
+//! It covers both assessment-only combinations and the executable native plan.
 
 use arkforge_artifact::cas::{CasQuota, ContentAddressedStore, VolumeSpaceProbe};
 use arkforge_artifact::{dayu200, fixture};
-use arkforge_core::digest::{sha256, CborValue};
-use arkforge_core::effect::{DataImpactState, PersistentEffect, TransientEffect};
-use arkforge_core::identity::{HostPlatform, MaturityKey, MaturityState, ToolchainIdentity, ToolchainKind, Version};
+use arkforge_core::digest::{CborValue, Domain, digest_canonical, sha256};
+use arkforge_core::effect::{DataImpactState, DeviceMode, PersistentEffect, TransientEffect};
+use arkforge_core::identity::{
+    HostPlatform, MaturityKey, MaturityState, ToolchainIdentity, ToolchainKind, Version,
+};
 use arkforge_core::ids::{OpaqueId, PartitionId, PlanId};
+use arkforge_core::plan::ExecutionPurpose;
 use arkforge_core::profile;
-use arkforge_core::projection::{validate_projection, PrivateActionRole};
+use arkforge_core::projection::{PrivateActionRole, validate_projection};
 use arkforge_core::step::{FlashStepKind, SemanticTarget, WorkflowEffect};
 use arkforge_core::{AuthorityBindingRef, AuthorityNamespace};
-use arkforge_provider::rockchip::{publish_af_v1_maturity, RockchipProvider};
+use arkforge_provider::rockchip::{RockchipProvider, publish_af_v1_maturity};
 use arkforge_provider::{
     FlashIntent, FlashProvider, MaterializeRequest, MaturityRegistry, ProbeContext,
 };
 use arkforge_transport::replay::TranscriptTransport;
-use arkforge_transport::{transcript, DeviceTransport, TypedDiscoveryFilter};
+use arkforge_transport::{DeviceTransport, TypedDiscoveryFilter, transcript};
 use std::io;
 use std::path::{Path, PathBuf};
 
@@ -144,6 +147,7 @@ fn run_vertical(root: &TempRoot) -> Vertical {
 fn request<'a>(vertical: &'a Vertical, toolchain: ToolchainIdentity) -> MaterializeRequest<'a> {
     MaterializeRequest {
         plan_id: PlanId::new("PLAN-001").unwrap(),
+        execution_purpose: ExecutionPurpose::PrimaryFlash,
         intent: FlashIntent::FullRestore,
         artifact: &vertical.manifest,
         artifact_id: OpaqueId::new("ART-001").unwrap(),
@@ -231,10 +235,12 @@ fn af_v1_materializes_a_complete_plan_that_is_not_executable() {
         .materialization
         .assessment()
         .expect("AF-V1 must not produce an executable plan for a hardware-gated combination");
-    assert!(assessment
-        .unknowns
-        .iter()
-        .any(|unknown| unknown.summary.contains("AF-V2")));
+    assert!(
+        assessment
+            .unknowns
+            .iter()
+            .any(|unknown| unknown.summary.contains("AF-V2"))
+    );
     assert!(matches!(
         assessment.availability,
         arkforge_core::plan::ExecutionAvailability::Unavailable { .. }
@@ -267,10 +273,11 @@ fn a_replay_toolchain_can_never_produce_an_executable_plan() {
         .materialize(&request(&vertical, toolchain), &registry)
         .unwrap();
     let assessment = materialization.assessment().expect("replay is plan-only");
-    assert!(assessment
-        .unknowns
-        .iter()
-        .any(|unknown| unknown.summary.contains("transcript replay is not a device")));
+    assert!(assessment.unknowns.iter().any(|unknown| {
+        unknown
+            .summary
+            .contains("transcript replay is not a device")
+    }));
 }
 
 #[test]
@@ -291,6 +298,16 @@ fn the_executable_branch_produces_a_fully_projected_sealed_plan() {
     let private_plan = built.private_plan.as_ref().unwrap();
 
     plan.verify_self_digest().unwrap();
+    let recovery = plan
+        .recovery_contract
+        .as_ref()
+        .expect("the executable complete-overwrite recipe publishes its coverage");
+    assert_eq!(recovery.id.as_str(), "arkforge.rockchip.complete-overwrite");
+    assert_eq!(recovery.version, Version::new(1, 0, 0));
+    assert_eq!(
+        recovery.digest,
+        digest_canonical(Domain::RecoveryCoverage, &vertical.profile.recovery).unwrap()
+    );
 
     // 1 ensure-mode + 1 probe + 1 validate-layout + 9 writes + 9 verifies
     // + 1 reboot + 1 postflight.
@@ -319,7 +336,8 @@ fn the_executable_branch_produces_a_fully_projected_sealed_plan() {
     }
 
     // Re-running the projection over the sealed plan reproduces its digests.
-    let projection = validate_projection(&plan.public_steps, private_plan, &plan.effect_set).unwrap();
+    let projection =
+        validate_projection(&plan.public_steps, private_plan, &plan.effect_set).unwrap();
     assert_eq!(
         projection.provider_execution_plan_digest,
         plan.provider_execution_plan_digest
@@ -328,6 +346,51 @@ fn the_executable_branch_produces_a_fully_projected_sealed_plan() {
         projection.public_projection_digest,
         plan.public_projection_digest
     );
+}
+
+#[test]
+fn a_plan_materialized_in_loader_starts_with_the_exact_loader_probe() {
+    let root = TempRoot::new("loader-start");
+    let vertical = run_vertical(&root);
+    let toolchain = native_tool();
+    let registry = hypothetical_production_registry(&vertical, &toolchain);
+    let mut loader_probe = vertical.probe.clone();
+    loader_probe.observation.mode = DeviceMode::new("rockusb-loader").unwrap();
+    let mut loader_request = request(&vertical, toolchain);
+    loader_request.probe = &loader_probe;
+
+    let built = vertical
+        .provider
+        .materialize_with_private_plan(&loader_request, &registry)
+        .unwrap();
+    let plan = built
+        .materialization
+        .executable()
+        .expect("the exact Loader observation is executable");
+
+    assert_eq!(plan.public_steps.len(), 22);
+    assert_eq!(plan.public_steps[0].kind, FlashStepKind::ProbeDevice);
+    assert_eq!(
+        plan.public_steps[0]
+            .expected_mode_before
+            .as_ref()
+            .map(|mode| mode.as_str()),
+        Some("rockusb-loader")
+    );
+    assert!(
+        !plan
+            .effect_set
+            .transient
+            .iter()
+            .any(|effect| matches!(effect, TransientEffect::EnterMode { .. })),
+        "an already-satisfied mode transition must not remain in the sealed effect set"
+    );
+    validate_projection(
+        &plan.public_steps,
+        built.private_plan.as_ref().unwrap(),
+        &plan.effect_set,
+    )
+    .unwrap();
 }
 
 #[test]
@@ -394,6 +457,41 @@ fn the_effect_set_matches_the_profile_and_the_artifact() {
             "{protected} is protected and must not be written"
         );
     }
+}
+
+#[test]
+fn superseding_recovery_is_a_distinct_sealed_plan_not_a_primary_replay() {
+    let root = TempRoot::new("recovery-purpose");
+    let vertical = run_vertical(&root);
+    let toolchain = native_tool();
+    let registry = hypothetical_production_registry(&vertical, &toolchain);
+
+    let primary = vertical
+        .provider
+        .materialize(&request(&vertical, toolchain.clone()), &registry)
+        .unwrap();
+    let mut recovery_request = request(&vertical, toolchain);
+    recovery_request.execution_purpose = ExecutionPurpose::SupersedingRecovery;
+    let recovery = vertical
+        .provider
+        .materialize(&recovery_request, &registry)
+        .unwrap();
+    let primary = primary.executable().unwrap();
+    let recovery = recovery.executable().unwrap();
+
+    assert_eq!(primary.execution_purpose, ExecutionPurpose::PrimaryFlash);
+    assert_eq!(
+        recovery.execution_purpose,
+        ExecutionPurpose::SupersedingRecovery
+    );
+    assert_ne!(
+        primary.plan_digest, recovery.plan_digest,
+        "execution purpose is part of the immutable plan identity"
+    );
+    assert!(
+        recovery.recovery_contract.is_some(),
+        "a superseding recovery plan must carry the profile's coverage contract"
+    );
 }
 
 fn collect_text_tokens(value: &CborValue, tokens: &mut Vec<String>) {
@@ -475,10 +573,16 @@ fn retired_vendor_vocabulary_never_appears_in_the_plan() {
             "private action leaked exact token {retired:?}"
         );
     }
-    assert!(private_tokens.iter().any(|token| token == "write-partition"));
-    assert!(private_tokens
-        .iter()
-        .any(|token| token == "readback-partition"));
+    assert!(
+        private_tokens
+            .iter()
+            .any(|token| token == "write-partition")
+    );
+    assert!(
+        private_tokens
+            .iter()
+            .any(|token| token == "readback-partition")
+    );
 }
 
 #[test]
@@ -551,10 +655,12 @@ fn an_artifact_with_an_unaccounted_member_blocks_execution() {
     let assessment = materialization
         .assessment()
         .expect("an unaccounted member must block execution");
-    assert!(assessment
-        .unknowns
-        .iter()
-        .any(|unknown| unknown.summary.contains("mystery.blob")));
+    assert!(
+        assessment
+            .unknowns
+            .iter()
+            .any(|unknown| unknown.summary.contains("mystery.blob"))
+    );
 }
 
 #[test]
@@ -575,19 +681,23 @@ fn a_profile_offset_that_disagrees_with_the_artifact_table_blocks_execution() {
         .validate(&vertical.manifest, &vertical.profile, &vertical.probe)
         .unwrap();
     assert!(!report.is_clean());
-    assert!(report
-        .violations
-        .iter()
-        .any(|violation| violation.id.as_str() == "RK-V05"));
+    assert!(
+        report
+            .violations
+            .iter()
+            .any(|violation| violation.id.as_str() == "RK-V05")
+    );
 
     let toolchain = native_tool();
     let registry = hypothetical_production_registry(&vertical, &toolchain);
-    assert!(vertical
-        .provider
-        .materialize(&request(&vertical, toolchain), &registry)
-        .unwrap()
-        .assessment()
-        .is_some());
+    assert!(
+        vertical
+            .provider
+            .materialize(&request(&vertical, toolchain), &registry)
+            .unwrap()
+            .assessment()
+            .is_some()
+    );
 }
 
 #[test]
@@ -603,10 +713,12 @@ fn a_missing_image_member_blocks_execution() {
         .provider
         .validate(&vertical.manifest, &vertical.profile, &vertical.probe)
         .unwrap();
-    assert!(report
-        .violations
-        .iter()
-        .any(|violation| violation.id.as_str() == "RK-V07"));
+    assert!(
+        report
+            .violations
+            .iter()
+            .any(|violation| violation.id.as_str() == "RK-V07")
+    );
 }
 
 #[test]

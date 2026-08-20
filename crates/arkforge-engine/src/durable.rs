@@ -21,8 +21,8 @@
 //! an open limit rather than a passed gate.
 
 use crate::journal::{FsyncPolicy, Journal, JournalError, JournalRecord, JournalRecordKind};
-use arkforge_core::ids::OpaqueId;
 use arkforge_core::Sha256Digest;
+use arkforge_core::ids::OpaqueId;
 use core::fmt;
 use std::fs::{File, OpenOptions};
 use std::io::{Read, Seek, SeekFrom, Write};
@@ -75,13 +75,13 @@ impl DurableJournal {
     /// from.
     pub fn open(path: impl AsRef<Path>) -> Result<(Self, RecoveryReport), DurableJournalError> {
         let path = path.as_ref().to_path_buf();
-        if let Some(parent) = path.parent() {
-            if !parent.as_os_str().is_empty() {
-                std::fs::create_dir_all(parent).map_err(|error| DurableJournalError::Io {
-                    path: parent.to_path_buf(),
-                    message: error.to_string(),
-                })?;
-            }
+        if let Some(parent) = path.parent()
+            && !parent.as_os_str().is_empty()
+        {
+            std::fs::create_dir_all(parent).map_err(|error| DurableJournalError::Io {
+                path: parent.to_path_buf(),
+                message: error.to_string(),
+            })?;
         }
         let existed = path.exists();
         let mut file = OpenOptions::new()
@@ -228,9 +228,9 @@ impl DurableJournal {
         let body = record
             .to_canonical_bytes()
             .map_err(|error| DurableJournalError::Journal(Box::new(JournalError::Cbor(error))))?;
-        let length = u32::try_from(body.len()).ok().filter(|length| {
-            *length > 0 && *length <= MAX_FRAME_BYTES
-        });
+        let length = u32::try_from(body.len())
+            .ok()
+            .filter(|length| *length > 0 && *length <= MAX_FRAME_BYTES);
         let Some(length) = length else {
             return Err(DurableJournalError::RecordTooLarge(body.len()));
         };
@@ -325,10 +325,8 @@ mod tests {
 
     impl TempDir {
         fn new(label: &str) -> Self {
-            let path = std::env::temp_dir().join(format!(
-                "arkforge-durable-{label}-{}",
-                std::process::id()
-            ));
+            let path = std::env::temp_dir()
+                .join(format!("arkforge-durable-{label}-{}", std::process::id()));
             let _ = std::fs::remove_dir_all(&path);
             std::fs::create_dir_all(&path).unwrap();
             TempDir(path)
@@ -353,7 +351,13 @@ mod tests {
         let (mut journal, report) = DurableJournal::open(path).unwrap();
         assert!(!report.existed);
         journal
-            .append(JournalRecordKind::PlanStored, 1_000, 1, id("PLAN-1"), vec![])
+            .append(
+                JournalRecordKind::PlanStored,
+                1_000,
+                1,
+                id("PLAN-1"),
+                vec![],
+            )
             .unwrap();
         journal
             .append(
@@ -386,7 +390,10 @@ mod tests {
         assert!(!report.was_torn());
         assert_eq!(report.records_replayed, 3);
         reopened.journal().verify().unwrap();
-        assert_eq!(reopened.journal().records()[2].kind, JournalRecordKind::StepIntentRecorded);
+        assert_eq!(
+            reopened.journal().records()[2].kind,
+            JournalRecordKind::StepIntentRecorded
+        );
     }
 
     #[test]

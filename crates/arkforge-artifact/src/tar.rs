@@ -26,7 +26,10 @@ const MAX_PAX_BYTES: usize = 1 << 20;
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ArchiveError {
     /// ARC001: the archive is not the one the plan is bound to.
-    IdentityMismatch { expected: String, observed: String },
+    IdentityMismatch {
+        expected: String,
+        observed: String,
+    },
     /// ARC002: framing is not a valid archive.
     ArchiveInvalid(String),
     /// ARC003: a member path is absolute.
@@ -41,7 +44,10 @@ pub enum ArchiveError {
     /// ARC007: symlink or hardlink member.
     LinkUnsupported(String),
     /// ARC008: member type outside the supported set.
-    MemberTypeUnsupported { path: String, type_flag: char },
+    MemberTypeUnsupported {
+        path: String,
+        type_flag: char,
+    },
     /// ARC009: the declared member size does not match the bytes present.
     MemberSizeMismatch {
         path: String,
@@ -84,10 +90,9 @@ impl fmt::Display for ArchiveError {
             ArchiveError::LinkUnsupported(path) => {
                 write!(f, "link member {path:?} is not supported")
             }
-            ArchiveError::MemberTypeUnsupported { path, type_flag } => write!(
-                f,
-                "member {path:?} has unsupported type flag {type_flag:?}"
-            ),
+            ArchiveError::MemberTypeUnsupported { path, type_flag } => {
+                write!(f, "member {path:?} has unsupported type flag {type_flag:?}")
+            }
             ArchiveError::MemberSizeMismatch {
                 path,
                 declared,
@@ -170,12 +175,12 @@ impl<R: Read> TarReader<R> {
                 BlockRead::Eof => {
                     return Err(ArchiveError::ArchiveInvalid(
                         "archive ends without the two-block end marker".into(),
-                    ))
+                    ));
                 }
                 BlockRead::Short(count) => {
                     return Err(ArchiveError::ArchiveInvalid(format!(
                         "archive ends with a partial {count}-byte block"
-                    )))
+                    )));
                 }
                 BlockRead::Full => {}
             }
@@ -188,7 +193,7 @@ impl<R: Read> TarReader<R> {
                     _ => {
                         return Err(ArchiveError::ArchiveInvalid(
                             "end marker is not two zero blocks".into(),
-                        ))
+                        ));
                     }
                 }
                 self.check_no_trailing_data()?;
@@ -215,8 +220,9 @@ impl<R: Read> TarReader<R> {
                 }
                 'L' => {
                     let raw = self.read_body_to_vec(declared_size)?;
-                    let name = String::from_utf8(strip_nul(&raw).to_vec())
-                        .map_err(|_| ArchiveError::PathInvalid("<non-utf8 gnu long name>".into()))?;
+                    let name = String::from_utf8(strip_nul(&raw).to_vec()).map_err(|_| {
+                        ArchiveError::PathInvalid("<non-utf8 gnu long name>".into())
+                    })?;
                     self.next_path_override = Some(name);
                     continue;
                 }
@@ -241,7 +247,7 @@ impl<R: Read> TarReader<R> {
                     return Err(ArchiveError::MemberTypeUnsupported {
                         path,
                         type_flag: other,
-                    })
+                    });
                 }
             }
 
@@ -382,9 +388,8 @@ impl<R: Read> TarReader<R> {
                 let value = &body[equals + 1..];
                 match key {
                     b"path" => {
-                        let text = std::str::from_utf8(value).map_err(|_| {
-                            ArchiveError::PathInvalid("<non-utf8 pax path>".into())
-                        })?;
+                        let text = std::str::from_utf8(value)
+                            .map_err(|_| ArchiveError::PathInvalid("<non-utf8 pax path>".into()))?;
                         self.next_path_override = Some(text.to_string());
                     }
                     b"size" => {
@@ -396,7 +401,7 @@ impl<R: Read> TarReader<R> {
                     b"linkpath" => {
                         return Err(ArchiveError::LinkUnsupported(
                             String::from_utf8_lossy(value).into_owned(),
-                        ))
+                        ));
                     }
                     _ => {}
                 }
@@ -459,11 +464,7 @@ enum BlockRead {
 
 fn padding_for(size: u64) -> usize {
     let remainder = (size % BLOCK as u64) as usize;
-    if remainder == 0 {
-        0
-    } else {
-        BLOCK - remainder
-    }
+    if remainder == 0 { 0 } else { BLOCK - remainder }
 }
 
 fn strip_nul(bytes: &[u8]) -> &[u8] {
@@ -492,10 +493,7 @@ fn validate_path(raw: &str) -> Result<String, ArchiveError> {
         return Err(ArchiveError::PathInvalid(raw.to_string()));
     }
     if raw.len() > MAX_PATH_LEN {
-        return Err(ArchiveError::PathInvalid(format!(
-            "<{} bytes>",
-            raw.len()
-        )));
+        return Err(ArchiveError::PathInvalid(format!("<{} bytes>", raw.len())));
     }
     if raw.starts_with('/') {
         return Err(ArchiveError::PathAbsolute(raw.to_string()));
@@ -531,7 +529,7 @@ fn validate_path(raw: &str) -> Result<String, ArchiveError> {
     if normalized.is_empty() {
         return Err(ArchiveError::PathInvalid(raw.to_string()));
     }
-    if normalized.iter().any(|component| *component == "..") {
+    if normalized.contains(&"..") {
         // A `..` that stays within the archive is still a shape a firmware
         // bundle never needs, and normalizing it would make two paths collide.
         return Err(ArchiveError::PathTraversal(raw.to_string()));
@@ -544,7 +542,11 @@ fn verify_checksum(header: &[u8; BLOCK]) -> Result<(), ArchiveError> {
     let mut unsigned_sum = 0u64;
     let mut signed_sum = 0i64;
     for (index, byte) in header.iter().enumerate() {
-        let value = if (148..156).contains(&index) { b' ' } else { *byte };
+        let value = if (148..156).contains(&index) {
+            b' '
+        } else {
+            *byte
+        };
         unsigned_sum += value as u64;
         signed_sum += (value as i8) as i64;
     }
@@ -580,9 +582,8 @@ fn parse_octal(field: &[u8], name: &str) -> Result<u64, ArchiveError> {
     if text.is_empty() {
         return Ok(0);
     }
-    u64::from_str_radix(text, 8).map_err(|_| {
-        ArchiveError::ArchiveInvalid(format!("{name} field is not octal: {text:?}"))
-    })
+    u64::from_str_radix(text, 8)
+        .map_err(|_| ArchiveError::ArchiveInvalid(format!("{name} field is not octal: {text:?}")))
 }
 
 #[cfg(test)]
@@ -632,7 +633,8 @@ mod tests {
 
             self.bytes.extend_from_slice(&header);
             self.bytes.extend_from_slice(body);
-            self.bytes.extend_from_slice(&vec![0u8; padding_for(body.len() as u64)]);
+            self.bytes
+                .extend_from_slice(&vec![0u8; padding_for(body.len() as u64)]);
             self
         }
 
@@ -836,7 +838,10 @@ mod tests {
         assert!(paths.contains(&"uboot.img"), "{paths:?}");
         let uboot = members.iter().find(|m| m.path == "uboot.img").unwrap();
         assert_eq!(uboot.size, 9000);
-        assert_eq!(uboot.sha256, arkforge_core::digest::sha256(&vec![0x5Au8; 9000]));
+        assert_eq!(
+            uboot.sha256,
+            arkforge_core::digest::sha256(&vec![0x5Au8; 9000])
+        );
         let _ = std::fs::remove_dir_all(&dir);
     }
 

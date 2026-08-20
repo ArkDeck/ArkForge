@@ -62,24 +62,20 @@ impl VolumeSpaceProbe for SystemVolumeSpaceProbe {
             .arg(path)
             .output()?;
         if !output.status.success() {
-            return Err(io::Error::new(
-                io::ErrorKind::Other,
-                "df reported a failure",
-            ));
+            return Err(io::Error::other("df reported a failure"));
         }
         let text = String::from_utf8_lossy(&output.stdout);
         // POSIX `df -P`: header line, then one line per filesystem with
         // "Filesystem 1024-blocks Used Available Capacity Mounted-on".
-        let line = text.lines().nth(1).ok_or_else(|| {
-            io::Error::new(io::ErrorKind::Other, "df produced no data line")
-        })?;
+        let line = text
+            .lines()
+            .nth(1)
+            .ok_or_else(|| io::Error::other("df produced no data line"))?;
         let available_kb: u64 = line
             .split_whitespace()
             .nth(3)
             .and_then(|field| field.parse().ok())
-            .ok_or_else(|| {
-                io::Error::new(io::ErrorKind::Other, "df data line has no available column")
-            })?;
+            .ok_or_else(|| io::Error::other("df data line has no available column"))?;
         Ok(available_kb.saturating_mul(1024))
     }
 }
@@ -138,10 +134,9 @@ impl fmt::Display for CasError {
                 report.requested_bytes,
                 report.blocker.as_deref().unwrap_or("quota exceeded")
             ),
-            CasError::DigestMismatch { expected, observed } => write!(
-                f,
-                "imported bytes hash to {observed}, expected {expected}"
-            ),
+            CasError::DigestMismatch { expected, observed } => {
+                write!(f, "imported bytes hash to {observed}, expected {expected}")
+            }
             CasError::ArtifactTooLarge { size_bytes, limit } => write!(
                 f,
                 "artifact of {size_bytes} bytes exceeds the {limit}-byte per-artifact limit"
@@ -221,8 +216,7 @@ impl ContentAddressedStore {
                 "store holds {store_bytes_in_use} bytes; adding {requested_bytes} would exceed the {}-byte ceiling",
                 self.quota.max_total_bytes
             ));
-        } else if volume_available_bytes
-            < requested_bytes.saturating_add(self.quota.min_free_bytes)
+        } else if volume_available_bytes < requested_bytes.saturating_add(self.quota.min_free_bytes)
         {
             blocker = Some(format!(
                 "volume has {volume_available_bytes} bytes free; {requested_bytes} plus the {}-byte reserve does not fit",
@@ -298,14 +292,14 @@ impl ContentAddressedStore {
         drop(staged);
 
         let digest = hasher.finalize();
-        if let Some(expected) = expected_digest {
-            if expected != digest {
-                let _ = fs::remove_file(&staging_path);
-                return Err(CasError::DigestMismatch {
-                    expected,
-                    observed: digest,
-                });
-            }
+        if let Some(expected) = expected_digest
+            && expected != digest
+        {
+            let _ = fs::remove_file(&staging_path);
+            return Err(CasError::DigestMismatch {
+                expected,
+                observed: digest,
+            });
         }
 
         let object_path = self.object_path(&digest);
@@ -457,10 +451,10 @@ impl ContentAddressedStore {
             }
             for object_entry in fs::read_dir(prefix_entry.path())? {
                 let object_entry = object_entry?;
-                if let Some(name) = object_entry.file_name().to_str() {
-                    if let Ok(digest) = Sha256Digest::parse_hex(name) {
-                        digests.push(digest);
-                    }
+                if let Some(name) = object_entry.file_name().to_str()
+                    && let Ok(digest) = Sha256Digest::parse_hex(name)
+                {
+                    digests.push(digest);
                 }
             }
         }
@@ -480,10 +474,7 @@ impl ContentAddressedStore {
 
     fn object_path(&self, digest: &Sha256Digest) -> PathBuf {
         let hex = digest.to_hex();
-        self.root
-            .join(OBJECTS_DIR)
-            .join(&hex[..2])
-            .join(&hex)
+        self.root.join(OBJECTS_DIR).join(&hex[..2]).join(&hex)
     }
 
     fn lease_dir(&self, digest: &Sha256Digest) -> PathBuf {

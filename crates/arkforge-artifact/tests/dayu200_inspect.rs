@@ -96,10 +96,12 @@ fn import_then_inspect_reproduces_the_pinned_archive_facts() {
     assert_eq!(role("updater_binary"), MemberRole::Unclassified);
     assert_eq!(manifest.unclassified_members, vec!["updater_binary"]);
     assert_eq!(manifest.confidence, ParserConfidence::ResearchOnly);
-    assert!(manifest
-        .execution_relevant_unknowns
-        .iter()
-        .any(|unknown| unknown.summary.contains("updater_binary")));
+    assert!(
+        manifest
+            .execution_relevant_unknowns
+            .iter()
+            .any(|unknown| unknown.summary.contains("updater_binary"))
+    );
 
     // Every member hash is the hash of the bytes the fixture put there.
     assert_eq!(
@@ -126,8 +128,14 @@ fn import_then_inspect_reproduces_the_pinned_archive_facts() {
             .find(|(id, _)| id.as_str() == key)
             .map(|(_, value)| value.as_str())
     };
-    assert_eq!(fact("const.ohos.fullname"), Some(fixture::FIXTURE_BUILD_VERSION));
-    assert_eq!(fact("const.product.model"), Some(fixture::FIXTURE_PRODUCT_MODEL));
+    assert_eq!(
+        fact("const.ohos.fullname"),
+        Some(fixture::FIXTURE_BUILD_VERSION)
+    );
+    assert_eq!(
+        fact("const.product.model"),
+        Some(fixture::FIXTURE_PRODUCT_MODEL)
+    );
 }
 
 #[test]
@@ -153,9 +161,11 @@ fn an_extra_unknown_member_is_reported_rather_than_ignored() {
     let archive = fixture::gzip_stored(&tar.finish());
 
     let manifest = dayu200::inspect(archive.as_slice()).unwrap();
-    assert!(manifest
-        .unclassified_members
-        .contains(&"surprise.payload".to_string()));
+    assert!(
+        manifest
+            .unclassified_members
+            .contains(&"surprise.payload".to_string())
+    );
     assert_eq!(manifest.confidence, ParserConfidence::ResearchOnly);
 }
 

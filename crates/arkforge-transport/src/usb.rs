@@ -21,14 +21,15 @@
 //! substrate. When a native IOKit binding arrives, only the enumerator changes.
 
 use crate::{
-    evaluate_rebind, DeviceObservation, DeviceTransport, IdentityEvidenceStrength,
-    ProtocolIdentityFact, RebindExpectation, RebindOutcome, SerialEvidence, TransportError,
-    TransportSession, TypedDiscoveryFilter,
+    DeviceObservation, DeviceTransport, IdentityEvidenceStrength, ProtocolIdentityFact,
+    RebindExpectation, RebindOutcome, SerialEvidence, TransportError, TransportSession,
+    TypedDiscoveryFilter, evaluate_rebind,
 };
-use arkforge_core::digest::{digest_in_domain, Domain, Sha256Digest};
+use arkforge_core::digest::{Domain, Sha256Digest, digest_in_domain};
 use arkforge_core::ids::{ObservationId, OpaqueId};
 use arkforge_core::profile::DeviceProfile;
 use core::fmt;
+use std::sync::Arc;
 
 /// One USB device as the operating system describes it.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -216,7 +217,7 @@ fn unquote(value: &str) -> String {
 #[derive(Debug)]
 pub struct UsbTransport {
     id: OpaqueId,
-    enumerator: Box<dyn UsbEnumerator>,
+    enumerator: Arc<dyn UsbEnumerator>,
     /// `(vendor_id, product_id) -> mode`, from the Profile.
     identities: Vec<(u16, u16, arkforge_core::effect::DeviceMode)>,
     profile_id: OpaqueId,
@@ -228,12 +229,16 @@ impl UsbTransport {
     pub fn new(profile: &DeviceProfile, enumerator: Box<dyn UsbEnumerator>) -> Self {
         UsbTransport {
             id: OpaqueId::new("arkforge.transport.usb").expect("literal identifier"),
-            enumerator,
+            enumerator: Arc::from(enumerator),
             identities: profile
                 .usb_identities
                 .iter()
                 .map(|identity| {
-                    (identity.vendor_id, identity.product_id, identity.mode.clone())
+                    (
+                        identity.vendor_id,
+                        identity.product_id,
+                        identity.mode.clone(),
+                    )
                 })
                 .collect(),
             profile_id: profile.id.clone(),
@@ -253,67 +258,7 @@ impl UsbTransport {
     }
 
     fn observe(&self, record: &UsbDeviceRecord, at_epoch_ms: u64) -> Option<DeviceObservation> {
-        let mode = self
-            .identities
-            .iter()
-            .find(|(vendor, product, _)| {
-                *vendor == record.vendor_id && *product == record.product_id
-            })
-            .map(|(_, _, mode)| mode.clone())?;
-
-        let serial_evidence = record.serial_evidence();
-        // Serial plus a port path is the strongest claim a descriptor read can
-        // make. Confirming identity through the protocol is a Provider's job,
-        // and this transport does not speak one.
-        let identity_strength = match serial_evidence {
-            SerialEvidence::Absent => IdentityEvidenceStrength::ClassOnly,
-            _ => IdentityEvidenceStrength::SerialAndTopology,
-        };
-
-        let observation_id = ObservationId::new(format!(
-            "USB-{:04x}-{:04x}-{:08x}",
-            record.vendor_id, record.product_id, record.location_id
-        ))
-        .ok()?;
-
-        let mut protocol_identity = Vec::new();
-        if let Some(name) = &record.product_name {
-            protocol_identity.push(ProtocolIdentityFact {
-                key: OpaqueId::new("usb.productName").expect("literal identifier"),
-                value: name.clone(),
-            });
-        }
-        if let Some(name) = &record.vendor_name {
-            protocol_identity.push(ProtocolIdentityFact {
-                key: OpaqueId::new("usb.vendorName").expect("literal identifier"),
-                value: name.clone(),
-            });
-        }
-        protocol_identity.push(ProtocolIdentityFact {
-            key: OpaqueId::new("usb.identity").expect("literal identifier"),
-            value: format!("{:#06x}:{:#06x}", record.vendor_id, record.product_id),
-        });
-        protocol_identity.push(ProtocolIdentityFact {
-            key: OpaqueId::new("profile").expect("literal identifier"),
-            value: self.profile_id.to_string(),
-        });
-        protocol_identity.sort();
-
-        Some(DeviceObservation {
-            observation_id,
-            observed_at_epoch_ms: at_epoch_ms,
-            mode,
-            topology_digest: record.topology_digest(),
-            descriptor_digest: record.descriptor_digest(),
-            serial_evidence,
-            protocol_identity,
-            provider_candidates: Vec::new(),
-            identity_strength,
-            // A descriptor that ioreg rendered is by construction a settled
-            // one: the OS finished enumerating it. Transient malformed reads
-            // are a claim only a live protocol read can make.
-            malformed_descriptor: false,
-        })
+        observe_record(&self.identities, &self.profile_id, record, at_epoch_ms)
     }
 
     /// Observes now, labelling each device the Profile recognizes.
@@ -325,6 +270,72 @@ impl UsbTransport {
             .filter_map(|record| self.observe(record, at_epoch_ms))
             .collect())
     }
+}
+
+fn observe_record(
+    identities: &[(u16, u16, arkforge_core::effect::DeviceMode)],
+    profile_id: &OpaqueId,
+    record: &UsbDeviceRecord,
+    at_epoch_ms: u64,
+) -> Option<DeviceObservation> {
+    let mode = identities
+        .iter()
+        .find(|(vendor, product, _)| *vendor == record.vendor_id && *product == record.product_id)
+        .map(|(_, _, mode)| mode.clone())?;
+
+    let serial_evidence = record.serial_evidence();
+    // Serial plus a port path is the strongest claim a descriptor read can
+    // make. Confirming identity through the protocol is a Provider's job,
+    // and this transport does not speak one.
+    let identity_strength = match serial_evidence {
+        SerialEvidence::Absent => IdentityEvidenceStrength::ClassOnly,
+        _ => IdentityEvidenceStrength::SerialAndTopology,
+    };
+
+    let observation_id = ObservationId::new(format!(
+        "USB-{:04x}-{:04x}-{:08x}",
+        record.vendor_id, record.product_id, record.location_id
+    ))
+    .ok()?;
+
+    let mut protocol_identity = Vec::new();
+    if let Some(name) = &record.product_name {
+        protocol_identity.push(ProtocolIdentityFact {
+            key: OpaqueId::new("usb.productName").expect("literal identifier"),
+            value: name.clone(),
+        });
+    }
+    if let Some(name) = &record.vendor_name {
+        protocol_identity.push(ProtocolIdentityFact {
+            key: OpaqueId::new("usb.vendorName").expect("literal identifier"),
+            value: name.clone(),
+        });
+    }
+    protocol_identity.push(ProtocolIdentityFact {
+        key: OpaqueId::new("usb.identity").expect("literal identifier"),
+        value: format!("{:#06x}:{:#06x}", record.vendor_id, record.product_id),
+    });
+    protocol_identity.push(ProtocolIdentityFact {
+        key: OpaqueId::new("profile").expect("literal identifier"),
+        value: profile_id.to_string(),
+    });
+    protocol_identity.sort();
+
+    Some(DeviceObservation {
+        observation_id,
+        observed_at_epoch_ms: at_epoch_ms,
+        mode,
+        topology_digest: record.topology_digest(),
+        descriptor_digest: record.descriptor_digest(),
+        serial_evidence,
+        protocol_identity,
+        provider_candidates: Vec::new(),
+        identity_strength,
+        // A descriptor that ioreg rendered is by construction a settled one:
+        // the OS finished enumerating it. Transient malformed reads are a claim
+        // only a live protocol read can make.
+        malformed_descriptor: false,
+    })
 }
 
 impl DeviceTransport for UsbTransport {
@@ -372,7 +383,10 @@ impl DeviceTransport for UsbTransport {
                 Ok(Box::new(UsbObservationSession {
                     session_digest,
                     observation,
-                    enumerator_id: self.id.clone(),
+                    enumerator: Arc::clone(&self.enumerator),
+                    identities: self.identities.clone(),
+                    profile_id: self.profile_id.clone(),
+                    detached: false,
                 }))
             }
             None => Err(TransportError::NoDevice),
@@ -396,8 +410,10 @@ impl DeviceTransport for UsbTransport {
 struct UsbObservationSession {
     session_digest: Sha256Digest,
     observation: DeviceObservation,
-    #[allow(dead_code)]
-    enumerator_id: OpaqueId,
+    enumerator: Arc<dyn UsbEnumerator>,
+    identities: Vec<(u16, u16, arkforge_core::effect::DeviceMode)>,
+    profile_id: OpaqueId,
+    detached: bool,
 }
 
 impl TransportSession for UsbObservationSession {
@@ -410,12 +426,35 @@ impl TransportSession for UsbObservationSession {
     }
 
     fn reread_identity(&mut self) -> Result<DeviceObservation, TransportError> {
-        Ok(self.observation.clone())
+        let records = self.enumerator.enumerate()?;
+        let mut at_same_topology = records
+            .iter()
+            .filter(|record| record.topology_digest() == self.observation.topology_digest)
+            .filter_map(|record| {
+                observe_record(&self.identities, &self.profile_id, record, now_ms())
+            });
+        let Some(observation) = at_same_topology.next() else {
+            self.detached = true;
+            return Err(TransportError::NoDevice);
+        };
+        if at_same_topology.next().is_some() {
+            self.detached = true;
+            return Err(TransportError::Ambiguous(2));
+        }
+        self.observation = observation.clone();
+        Ok(observation)
     }
 
     fn saw_detach(&self) -> bool {
-        false
+        self.detached
     }
+}
+
+fn now_ms() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|delta| delta.as_millis() as u64)
+        .unwrap_or(0)
 }
 
 #[cfg(test)]
@@ -642,7 +681,12 @@ mod tests {
 
     #[test]
     fn garbage_input_parses_to_nothing_rather_than_panicking() {
-        for input in ["", "not ioreg output", "+-o \"x\"@1 <class IOUSBHostDevice", "{}{}{}"] {
+        for input in [
+            "",
+            "not ioreg output",
+            "+-o \"x\"@1 <class IOUSBHostDevice",
+            "{}{}{}",
+        ] {
             let _ = parse_ioreg(input);
         }
     }

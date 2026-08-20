@@ -4,7 +4,7 @@
 //! authority-neutral; compatibility with ArkDeck's WorkflowStep registry is the
 //! adapter's published mapping table, never a Core dependency.
 
-use crate::digest::{digest_canonical, CanonicalCbor, CborError, CborValue, Domain, Sha256Digest};
+use crate::digest::{CanonicalCbor, CborError, CborValue, Domain, Sha256Digest, digest_canonical};
 use crate::effect::{BootMetadataField, DeviceMode};
 use crate::ids::{PartitionId, RegionId, StepId};
 use core::fmt;
@@ -239,9 +239,7 @@ pub enum SemanticTarget {
 impl CanonicalCbor for SemanticTarget {
     fn to_cbor(&self) -> CborValue {
         match self {
-            SemanticTarget::Partition(id) => {
-                CborValue::map(vec![("partition", id.to_cbor())])
-            }
+            SemanticTarget::Partition(id) => CborValue::map(vec![("partition", id.to_cbor())]),
             SemanticTarget::RawRegion(id) => CborValue::map(vec![("rawRegion", id.to_cbor())]),
             SemanticTarget::BootMetadata(field) => {
                 CborValue::map(vec![("bootMetadata", CborValue::text(field.as_str()))])
@@ -284,7 +282,9 @@ impl PublicFlashStep {
             });
         }
         if matches!(self.kind, FlashStepKind::WriteTarget) && self.content_digest.is_none() {
-            return Err(StepError::WriteWithoutContentDigest(self.step_id.to_string()));
+            return Err(StepError::WriteWithoutContentDigest(
+                self.step_id.to_string(),
+            ));
         }
         if matches!(
             self.kind,
@@ -377,7 +377,10 @@ impl fmt::Display for StepError {
                 write!(f, "write step {step} has no content digest")
             }
             StepError::TargetedStepWithoutTarget { step, kind } => {
-                write!(f, "step {step} of kind {kind} needs a partition or region target")
+                write!(
+                    f,
+                    "step {step} of kind {kind} needs a partition or region target"
+                )
             }
         }
     }
@@ -442,7 +445,10 @@ mod tests {
 
     #[test]
     fn unknown_step_kind_fails_closed() {
-        assert_eq!(FlashStepKind::parse("writeTarget"), Some(FlashStepKind::WriteTarget));
+        assert_eq!(
+            FlashStepKind::parse("writeTarget"),
+            Some(FlashStepKind::WriteTarget)
+        );
         assert_eq!(FlashStepKind::parse("flashEverything"), None);
         assert_eq!(FlashStepKind::parse("WriteTarget"), None);
     }

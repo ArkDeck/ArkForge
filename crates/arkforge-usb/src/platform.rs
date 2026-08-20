@@ -116,7 +116,7 @@ struct IoUsbInterface182 {
 }
 
 #[link(name = "IOKit", kind = "framework")]
-extern "C" {
+unsafe extern "C" {
     fn IOServiceMatching(name: *const c_char) -> *mut c_void;
     fn IOServiceGetMatchingServices(
         main_port: u32,
@@ -146,7 +146,7 @@ extern "C" {
 }
 
 #[link(name = "CoreFoundation", kind = "framework")]
-extern "C" {
+unsafe extern "C" {
     fn CFUUIDGetConstantUUIDWithBytes(
         allocator: *const c_void,
         byte0: u8,
@@ -344,10 +344,7 @@ impl InterfaceHandle {
             (table.usb_interface_open)(self.raw.cast::<c_void>())
         };
         if status != IO_SUCCESS {
-            return Err(UsbError::Claim(status_message(
-                status,
-                "USBInterfaceOpen",
-            )));
+            return Err(UsbError::Claim(status_message(status, "USBInterfaceOpen")));
         }
 
         let mut count = 0u8;
@@ -357,10 +354,7 @@ impl InterfaceHandle {
         };
         if status != IO_SUCCESS {
             close_interface(self.raw);
-            return Err(UsbError::Claim(status_message(
-                status,
-                "GetNumEndpoints",
-            )));
+            return Err(UsbError::Claim(status_message(status, "GetNumEndpoints")));
         }
 
         let mut bulk_in = None;

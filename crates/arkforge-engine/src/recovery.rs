@@ -9,8 +9,8 @@
 //! The rule underneath all of them: never replay a dispatch (architecture.md
 //! 14.1). Nothing here ever concludes "try that step again".
 
-use crate::journal::{Journal, JournalRecordKind};
 use crate::JobState;
+use crate::journal::{Journal, JournalRecordKind};
 use arkforge_core::ids::OpaqueId;
 use core::fmt;
 use std::collections::BTreeMap;
@@ -80,8 +80,7 @@ impl PermitLedger {
                 JournalRecordKind::StepIntentRecorded => {
                     *entry = PermitDisposition::IntentDurable;
                 }
-                JournalRecordKind::PermitConsuming
-                | JournalRecordKind::ExternalDispatchStarted => {
+                JournalRecordKind::PermitConsuming | JournalRecordKind::ExternalDispatchStarted => {
                     *entry = PermitDisposition::ConsumingOutcomeUnknown;
                 }
                 JournalRecordKind::PermitConsumed => {
@@ -177,16 +176,12 @@ impl CrashDisposition {
             return CrashDisposition::NoJob;
         }
 
-        if let Some(state) = records.iter().rev().find_map(|record| {
-            match record.kind {
-                JournalRecordKind::OutcomeClassified => fact_value(
-                    record.facts.as_slice(),
-                    "outcome",
-                )
-                .and_then(terminal_state),
-                JournalRecordKind::CancellationRequested => None,
-                _ => None,
+        if let Some(state) = records.iter().rev().find_map(|record| match record.kind {
+            JournalRecordKind::OutcomeClassified => {
+                fact_value(record.facts.as_slice(), "outcome").and_then(terminal_state)
             }
+            JournalRecordKind::CancellationRequested => None,
+            _ => None,
         }) {
             return CrashDisposition::Concluded(state);
         }
@@ -386,11 +381,13 @@ mod tests {
                 permit_id: "PERMIT-1".into()
             }
         );
-        assert!(!builder
-            .journal
-            .records()
-            .iter()
-            .any(|record| record.kind == JournalRecordKind::ExternalDispatchStarted));
+        assert!(
+            !builder
+                .journal
+                .records()
+                .iter()
+                .any(|record| record.kind == JournalRecordKind::ExternalDispatchStarted)
+        );
     }
 
     #[test]
@@ -410,7 +407,12 @@ mod tests {
 
     #[test]
     fn a_durable_receipt_without_a_checkpoint_completes_the_checkpoint() {
-        let builder = Builder::new().created().accepted().intent().consuming().consumed();
+        let builder = Builder::new()
+            .created()
+            .accepted()
+            .intent()
+            .consuming()
+            .consumed();
         assert_eq!(
             builder.disposition(),
             CrashDisposition::CheckpointFromDurableReceipt {
@@ -428,7 +430,10 @@ mod tests {
             .consuming()
             .consumed()
             .checkpointed();
-        assert_eq!(builder.disposition(), CrashDisposition::ReplayFromCheckpoint);
+        assert_eq!(
+            builder.disposition(),
+            CrashDisposition::ReplayFromCheckpoint
+        );
     }
 
     #[test]
@@ -454,7 +459,12 @@ mod tests {
 
     #[test]
     fn a_consumed_permit_is_never_dispatchable_again() {
-        let builder = Builder::new().created().accepted().intent().consuming().consumed();
+        let builder = Builder::new()
+            .created()
+            .accepted()
+            .intent()
+            .consuming()
+            .consumed();
         let ledger = PermitLedger::from_journal(&builder.journal);
         assert_eq!(
             ledger.disposition("PERMIT-1"),

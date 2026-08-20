@@ -24,7 +24,7 @@
 //! the evidence exists.
 
 use crate::manifest::{ArchiveMemberFact, ArtifactManifest, MemberRole, ParserConfidence};
-use arkforge_core::digest::{sha256, Sha256, Sha256Digest};
+use arkforge_core::digest::{Sha256, Sha256Digest, sha256};
 use arkforge_core::identity::{ArtifactFormat, Version};
 use arkforge_core::ids::OpaqueId;
 use arkforge_core::plan::ExecutionUnknown;
@@ -288,11 +288,7 @@ fn push(
 }
 
 fn preview(text: &str) -> String {
-    let cleaned: String = text
-        .chars()
-        .filter(|c| !c.is_control())
-        .take(48)
-        .collect();
+    let cleaned: String = text.chars().filter(|c| !c.is_control()).take(48).collect();
     cleaned
 }
 
@@ -361,10 +357,7 @@ fn collect_utf16le_runs(
             let units = (index - begin) / 2;
             if units >= MIN_STRING_RUN {
                 let slice = &bytes[begin..index];
-                let text: String = slice
-                    .chunks(2)
-                    .map(|pair| pair[0] as char)
-                    .collect();
+                let text: String = slice.chunks(2).map(|pair| pair[0] as char).collect();
                 push(
                     candidates,
                     truncated,
@@ -739,11 +732,13 @@ mod tests {
     fn string_runs_are_found_in_both_encodings() {
         let bytes = synthetic_container();
         let report = observe(&bytes);
-        assert!(report
-            .candidates
-            .iter()
-            .any(|candidate| candidate.kind == CandidateKind::AsciiStringRun
-                && candidate.preview.as_deref() == Some("BP_R1.0.0")));
+        assert!(
+            report
+                .candidates
+                .iter()
+                .any(|candidate| candidate.kind == CandidateKind::AsciiStringRun
+                    && candidate.preview.as_deref() == Some("BP_R1.0.0"))
+        );
         assert!(report.candidates.iter().any(|candidate| {
             candidate.kind == CandidateKind::Utf16LeStringRun
                 && candidate
@@ -772,14 +767,18 @@ mod tests {
     #[test]
     fn entropy_separates_the_payload_from_the_metadata() {
         let report = observe(&synthetic_container());
-        assert!(report
-            .candidates
-            .iter()
-            .any(|candidate| candidate.kind == CandidateKind::HighEntropyRegion));
-        assert!(report
-            .candidates
-            .iter()
-            .any(|candidate| candidate.kind == CandidateKind::LowEntropyRegion));
+        assert!(
+            report
+                .candidates
+                .iter()
+                .any(|candidate| candidate.kind == CandidateKind::HighEntropyRegion)
+        );
+        assert!(
+            report
+                .candidates
+                .iter()
+                .any(|candidate| candidate.kind == CandidateKind::LowEntropyRegion)
+        );
     }
 
     #[test]
@@ -797,11 +796,17 @@ mod tests {
     #[test]
     fn the_report_is_deterministic() {
         let bytes = synthetic_container();
-        assert_eq!(report_digest(&observe(&bytes)), report_digest(&observe(&bytes)));
+        assert_eq!(
+            report_digest(&observe(&bytes)),
+            report_digest(&observe(&bytes))
+        );
         // And it is content-sensitive.
         let mut edited = bytes.clone();
         edited[0] ^= 0xff;
-        assert_ne!(report_digest(&observe(&bytes)), report_digest(&observe(&edited)));
+        assert_ne!(
+            report_digest(&observe(&bytes)),
+            report_digest(&observe(&edited))
+        );
     }
 
     #[test]
@@ -820,7 +825,9 @@ mod tests {
             .count();
         assert_eq!(ascii, MAX_CANDIDATES_PER_KIND);
         assert!(
-            report.truncated_kinds.contains(&CandidateKind::AsciiStringRun),
+            report
+                .truncated_kinds
+                .contains(&CandidateKind::AsciiStringRun),
             "truncation must be reported, or an empty tail reads as nothing being there"
         );
     }

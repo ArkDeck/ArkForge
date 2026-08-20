@@ -183,7 +183,10 @@ impl fmt::Display for StagingError {
                 members.join(", ")
             ),
             StagingError::NameEscapesDirectory(member) => {
-                write!(f, "member name {member:?} does not stay inside the staging directory")
+                write!(
+                    f,
+                    "member name {member:?} does not stay inside the staging directory"
+                )
             }
             StagingError::MemberDisagrees {
                 member,
@@ -214,10 +217,8 @@ mod tests {
 
     impl TempDir {
         fn new(label: &str) -> Self {
-            let path = std::env::temp_dir().join(format!(
-                "arkforge-staging-{label}-{}",
-                std::process::id()
-            ));
+            let path = std::env::temp_dir()
+                .join(format!("arkforge-staging-{label}-{}", std::process::id()));
             let _ = std::fs::remove_dir_all(&path);
             std::fs::create_dir_all(&path).unwrap();
             TempDir(path)

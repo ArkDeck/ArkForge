@@ -27,7 +27,8 @@ use arkforged::packaging::{
 fn the_shipped_entitlement_files_are_empty_dictionaries() {
     // The release inputs and the rule are the same statement, so they cannot
     // drift apart: a key added to either file fails here.
-    for (name, source) in [("arkforged.entitlements", packaging::ARKFORGED_ENTITLEMENTS)] {
+    {
+        let (name, source) = ("arkforged.entitlements", packaging::ARKFORGED_ENTITLEMENTS);
         let keys = packaging::plist_keys(source);
         assert!(
             keys.is_empty(),
@@ -80,7 +81,10 @@ fn an_app_sandbox_entitlement_is_refused_in_every_mode() {
 
     // And the refusal has to say what the key does, not just that it is there.
     let rendered = code.violations(ContractMode::Development)[0].to_string();
-    assert!(rendered.contains("com.apple.security.app-sandbox"), "{rendered}");
+    assert!(
+        rendered.contains("com.apple.security.app-sandbox"),
+        "{rendered}"
+    );
     assert!(rendered.contains("before main"), "{rendered}");
     assert!(rendered.contains("AD-007"), "{rendered}");
 }
@@ -113,7 +117,11 @@ fn an_adhoc_local_build_passes_development_and_fails_release() {
         .collect();
     assert_eq!(
         release,
-        vec!["ADHOC_SIGNATURE", "NO_HARDENED_RUNTIME", "NO_TEAM_IDENTIFIER"],
+        vec![
+            "ADHOC_SIGNATURE",
+            "NO_HARDENED_RUNTIME",
+            "NO_TEAM_IDENTIFIER"
+        ],
         "release names every reason separately rather than one 'not release' verdict"
     );
 }
@@ -137,7 +145,10 @@ fn the_shipped_arkdeck_component_shape_passes_release() {
     assert!(signature.hardened_runtime);
     assert!(!signature.ad_hoc);
     assert!(signature.entitlements.is_empty());
-    assert_eq!(signature.entitlement_encoding, Some(EntitlementEncoding::Xml));
+    assert_eq!(
+        signature.entitlement_encoding,
+        Some(EntitlementEncoding::Xml)
+    );
 }
 
 #[test]
@@ -191,10 +202,16 @@ fn der_only_entitlements_are_read_rather_than_missed() {
     //
     // The bytes are Apple's, taken from /usr/bin/codesign on 2026-08-16:
     //   70 3c 02 01 01 b0 37 30 35 0c 30 <48-byte key> 01 01 ff
-    let mut der = vec![0x70, 0x3c, 0x02, 0x01, 0x01, 0xb0, 0x37, 0x30, 0x35, 0x0c, 0x30];
+    let mut der = vec![
+        0x70, 0x3c, 0x02, 0x01, 0x01, 0xb0, 0x37, 0x30, 0x35, 0x0c, 0x30,
+    ];
     der.extend_from_slice(b"com.apple.private.codesignkit.signer-source-host");
     der.extend_from_slice(&[0x01, 0x01, 0xff]);
-    assert_eq!(der.len(), 62, "the lengths in the real blob describe these bytes");
+    assert_eq!(
+        der.len(),
+        62,
+        "the lengths in the real blob describe these bytes"
+    );
 
     let binary = macho(Signed {
         entitlements: Some(Entitlements::Der(der)),
@@ -202,7 +219,10 @@ fn der_only_entitlements_are_read_rather_than_missed() {
     });
     let code = packaging::read(&binary).expect("a signed fixture reads");
     let signature = code.slices[0].signature.as_ref().expect("signed");
-    assert_eq!(signature.entitlement_encoding, Some(EntitlementEncoding::Der));
+    assert_eq!(
+        signature.entitlement_encoding,
+        Some(EntitlementEncoding::Der)
+    );
     assert_eq!(
         signature.entitlements,
         vec!["com.apple.private.codesignkit.signer-source-host"]
@@ -228,12 +248,14 @@ fn an_empty_der_container_reads_as_no_entitlements() {
         ..developer_id()
     });
     let code = packaging::read(&binary).expect("a signed fixture reads");
-    assert!(code.slices[0]
-        .signature
-        .as_ref()
-        .expect("signed")
-        .entitlements
-        .is_empty());
+    assert!(
+        code.slices[0]
+            .signature
+            .as_ref()
+            .expect("signed")
+            .entitlements
+            .is_empty()
+    );
     assert!(code.violations(ContractMode::Release).is_empty());
 }
 
@@ -261,7 +283,10 @@ fn a_big_endian_macho_is_refused_rather_than_misread() {
     // Saying nothing about a binary is not the same as saying it is clean.
     let mut bytes = vec![0u8; 64];
     bytes[..4].copy_from_slice(&0xcffa_edfeu32.to_le_bytes());
-    assert_eq!(packaging::read(&bytes), Err(ReadError::UnsupportedByteOrder));
+    assert_eq!(
+        packaging::read(&bytes),
+        Err(ReadError::UnsupportedByteOrder)
+    );
 }
 
 #[test]
@@ -445,10 +470,13 @@ fn mach_header(cpu_type: u32, command_count: u32) -> Vec<u8> {
 /// optionally, one entitlements blob.
 fn super_blob(spec: &Signed) -> Vec<u8> {
     let directory = code_directory(spec);
-    let entitlements = spec.entitlements.as_ref().map(|entitlements| match entitlements {
-        Entitlements::Xml(xml) => (5u32, blob(0xfade_7171, xml.as_bytes())),
-        Entitlements::Der(der) => (7u32, blob(0xfade_7172, der)),
-    });
+    let entitlements = spec
+        .entitlements
+        .as_ref()
+        .map(|entitlements| match entitlements {
+            Entitlements::Xml(xml) => (5u32, blob(0xfade_7171, xml.as_bytes())),
+            Entitlements::Der(der) => (7u32, blob(0xfade_7172, der)),
+        });
 
     let count = 1 + entitlements.iter().count() as u32;
     let index_size = 12 + 8 * count as usize;
@@ -526,7 +554,11 @@ fn code_directory(spec: &Signed) -> Vec<u8> {
     out.extend_from_slice(&0u64.to_be_bytes()); // execSegBase
     out.extend_from_slice(&0u64.to_be_bytes()); // execSegLimit
     out.extend_from_slice(&0u64.to_be_bytes()); // execSegFlags
-    assert_eq!(out.len(), FIXED, "the fixed CodeDirectory fields are 88 bytes");
+    assert_eq!(
+        out.len(),
+        FIXED,
+        "the fixed CodeDirectory fields are 88 bytes"
+    );
 
     out.extend_from_slice(spec.identifier.as_bytes());
     out.push(0);

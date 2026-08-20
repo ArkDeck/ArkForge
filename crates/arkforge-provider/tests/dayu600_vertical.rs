@@ -12,13 +12,15 @@ use arkforge_artifact::manifest::ParserConfidence;
 use arkforge_artifact::{dayu200, fixture, pac};
 use arkforge_core::digest::sha256;
 use arkforge_core::effect::DataImpactState;
-use arkforge_core::identity::{HostPlatform, MaturityState, ToolchainIdentity, ToolchainKind, Version};
+use arkforge_core::identity::{
+    HostPlatform, MaturityState, ToolchainIdentity, ToolchainKind, Version,
+};
 use arkforge_core::ids::{OpaqueId, PlanId};
-use arkforge_core::plan::ExecutionAvailability;
+use arkforge_core::plan::{ExecutionAvailability, ExecutionPurpose};
 use arkforge_core::profile::{self, DeviceProfile};
 use arkforge_core::{AuthorityBindingRef, AuthorityNamespace};
 use arkforge_provider::rockchip::RockchipProvider;
-use arkforge_provider::unisoc::{publish_af_v3_maturity, UnisocProvider};
+use arkforge_provider::unisoc::{UnisocProvider, publish_af_v3_maturity};
 use arkforge_provider::{
     FlashIntent, FlashProvider, MaterializeRequest, MaturityRegistry, ProbeContext, ProviderProbe,
 };
@@ -101,7 +103,10 @@ fn the_dayu600_profile_loads_and_states_every_thing_it_does_not_know() {
     assert_eq!(profile.soc.family.as_str(), "uis7885");
 
     assert!(profile.allowed_targets.is_empty(), "nothing is writable");
-    assert!(profile.mode_transitions.is_empty(), "no transition observed");
+    assert!(
+        profile.mode_transitions.is_empty(),
+        "no transition observed"
+    );
     assert_eq!(profile.storage.logical_block_size, None);
     assert_eq!(profile.read_domain.erased_medium_filler, None);
     assert_eq!(profile.data_impact.userdata, DataImpactState::Unknown);
@@ -111,7 +116,9 @@ fn the_dayu600_profile_loads_and_states_every_thing_it_does_not_know() {
         .iter()
         .map(|blocker| blocker.id())
         .collect();
-    for expected in ["PROF-B01", "PROF-B02", "PROF-B03", "PROF-B04", "PROF-B05", "PROF-B06"] {
+    for expected in [
+        "PROF-B01", "PROF-B02", "PROF-B03", "PROF-B04", "PROF-B05", "PROF-B06",
+    ] {
         assert!(ids.contains(&expected), "{expected} missing from {ids:?}");
     }
     assert!(!profile.permits_executable_plan());
@@ -152,6 +159,7 @@ fn the_vertical_ends_in_an_assessment_with_evidence_requirements() {
         .materialize(
             &MaterializeRequest {
                 plan_id: PlanId::new("PLAN-DAYU600").unwrap(),
+                execution_purpose: ExecutionPurpose::PrimaryFlash,
                 intent: FlashIntent::FullRestore,
                 artifact: &manifest,
                 artifact_id: OpaqueId::new("ART-DAYU600").unwrap(),
@@ -192,10 +200,12 @@ fn the_vertical_ends_in_an_assessment_with_evidence_requirements() {
         assessment.evidence_requirements.len(),
         assessment.unknowns.len()
     );
-    assert!(assessment
-        .evidence_requirements
-        .iter()
-        .all(|requirement| requirement.minimum_grade == 'A'));
+    assert!(
+        assessment
+            .evidence_requirements
+            .iter()
+            .all(|requirement| requirement.minimum_grade == 'A')
+    );
 
     // The unknowns come from three independent sources.
     let ids: Vec<&str> = assessment
@@ -205,14 +215,14 @@ fn the_vertical_ends_in_an_assessment_with_evidence_requirements() {
         .collect();
     assert!(ids.iter().any(|id| id.starts_with("UNI-U")), "{ids:?}");
     assert!(ids.iter().any(|id| id.starts_with("PROF-B")), "{ids:?}");
-    assert!(ids.contains(&"UNI-G01"), "the evidence gate itself: {ids:?}");
+    assert!(
+        ids.contains(&"UNI-G01"),
+        "the evidence gate itself: {ids:?}"
+    );
 
     // The assessment declares unknown data impact — not "read only", which
     // would be a claim that nothing is touched.
-    assert_eq!(
-        assessment.known_effects.data_impact.unknown_axes().len(),
-        4
-    );
+    assert_eq!(assessment.known_effects.data_impact.unknown_axes().len(), 4);
     assert!(assessment.known_effects.persistent.is_empty());
 
     // And an EffectSet with unknown impact can never be sealed into a plan.
@@ -285,7 +295,10 @@ fn the_unisoc_provider_refuses_a_dayu200_device() {
         .iter()
         .find(|(key, _)| key.as_str() == "identityConfirmation")
         .expect("the probe must state its confidence");
-    assert!(confirmation.1.starts_with("unconfirmed"), "{confirmation:?}");
+    assert!(
+        confirmation.1.starts_with("unconfirmed"),
+        "{confirmation:?}"
+    );
 }
 
 #[test]
@@ -349,15 +362,17 @@ fn the_rockchip_provider_refuses_a_pac_artifact() {
         .iter()
         .map(|violation| violation.id.as_str())
         .collect();
-    assert!(ids.contains(&"UNI-V01") || ids.contains(&"RK-V01"), "{ids:?}");
+    assert!(
+        ids.contains(&"UNI-V01") || ids.contains(&"RK-V01"),
+        "{ids:?}"
+    );
 }
 
 #[test]
 fn the_unisoc_provider_refuses_a_rockchip_artifact() {
     let profile = profile::load(DAYU600_PROFILE).unwrap();
     let provider = UnisocProvider::new();
-    let rockchip_manifest =
-        dayu200::inspect(fixture::dayu200_archive().as_slice()).unwrap();
+    let rockchip_manifest = dayu200::inspect(fixture::dayu200_archive().as_slice()).unwrap();
     let probe = probe_dayu600(&profile, &provider);
 
     let report = provider
@@ -395,8 +410,10 @@ fn a_dayu200_plan_cannot_be_built_against_the_dayu600_profile() {
     let report = provider.validate(&manifest, &dayu600, &probe).unwrap();
     assert!(!report.is_clean());
     // The DAYU600 profile does not accept the Rockchip artifact format.
-    assert!(report
-        .violations
-        .iter()
-        .any(|violation| violation.id.as_str() == "RK-V02"));
+    assert!(
+        report
+            .violations
+            .iter()
+            .any(|violation| violation.id.as_str() == "RK-V02")
+    );
 }

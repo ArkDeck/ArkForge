@@ -70,7 +70,7 @@ fn mutate(seed: u64, base: &[u8]) -> Vec<u8> {
             }
             4 => {
                 let count = rng.below(64);
-                out.extend(std::iter::repeat(0xffu8).take(count));
+                out.extend(std::iter::repeat_n(0xffu8, count));
             }
             _ => {
                 let start = rng.below(out.len());
@@ -132,14 +132,9 @@ fn mutated_tar_streams_never_panic_the_reader() {
     for seed in 0..6_000u64 {
         let input = mutate(seed, &base);
         let mut reader = TarReader::new(input.as_slice());
-        loop {
-            match reader.next_member() {
-                Ok(Some(header)) => {
-                    if reader.read_member_body(&header, |_| {}).is_err() {
-                        break;
-                    }
-                }
-                Ok(None) | Err(_) => break,
+        while let Ok(Some(header)) = reader.next_member() {
+            if reader.read_member_body(&header, |_| {}).is_err() {
+                break;
             }
         }
     }

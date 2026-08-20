@@ -299,13 +299,13 @@ impl ExecutionReadiness {
     /// Blockers for one plan, standing ones included.
     pub fn blockers_for(&self, plan: &FlashPlanEnvelope) -> Vec<ExecutionBlocker> {
         let mut blockers = self.standing_blockers();
-        if let Some(bound) = &self.dispatcher {
-            if bound.backend_digest != plan.toolchain.backend_digest {
-                blockers.push(ExecutionBlocker::ToolchainDigestMismatch {
-                    plan_expects: plan.toolchain.backend_digest,
-                    daemon_bound: bound.backend_digest,
-                });
-            }
+        if let Some(bound) = &self.dispatcher
+            && bound.backend_digest != plan.toolchain.backend_digest
+        {
+            blockers.push(ExecutionBlocker::ToolchainDigestMismatch {
+                plan_expects: plan.toolchain.backend_digest,
+                daemon_bound: bound.backend_digest,
+            });
         }
         blockers
     }
@@ -527,7 +527,10 @@ mod tests {
                 .unwrap_err();
             // Readiness never masks a real caller error: an operator told
             // "execution is unavailable" would go and fix the wrong thing.
-            assert!(matches!(error, EngineError::UnknownPlan(_)), "{readiness:?}");
+            assert!(
+                matches!(error, EngineError::UnknownPlan(_)),
+                "{readiness:?}"
+            );
         }
     }
 

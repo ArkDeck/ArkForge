@@ -192,13 +192,22 @@ fn the_hardware_revision_set_is_explicit() {
 }
 
 #[test]
-fn af_v1_declares_no_recovery_coverage_it_cannot_execute() {
+fn complete_overwrite_coverage_matches_the_closed_partition_recipe() {
     let profile = load();
-    assert!(
-        !profile.recovery.supports_complete_overwrite,
-        "AF-V1 has no durable engine; claiming coverage would be a claim ahead of the code"
-    );
-    assert!(!profile.recovery.unsupported_states.is_empty());
+    assert!(profile.recovery.supports_complete_overwrite);
+    assert!(profile.recovery.unsupported_states.is_empty());
+    let covered: Vec<_> = profile
+        .recovery
+        .covered_effects
+        .iter()
+        .map(|effect| effect.as_str())
+        .collect();
+    let writable: Vec<_> = profile
+        .allowed_targets
+        .iter()
+        .map(|target| target.partition.as_str())
+        .collect();
+    assert_eq!(covered, writable);
 }
 
 #[test]

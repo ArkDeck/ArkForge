@@ -1,20 +1,20 @@
 //! `arkforged` — the ArkForge mechanics daemon.
 //!
-//! architecture.md 15.1/15.2. AF-V1 serves the read-only API over a Unix domain
-//! socket. `startExecution` answers `UNAVAILABLE` on both sockets.
+//! architecture.md 15.1/15.2. The public Unix-domain socket is read-only; the
+//! controller socket carries execution, admission and recovery assessment.
 //!
 //! Two sockets, two capabilities:
 //!
-//! - `public.sock` (0600): inspect, discover, probe, assessment;
-//! - `controller.sock` (0600): the above plus artifact import.
+//! - `public.sock` (0600): inspect, discover, probe, job status and guides;
+//! - `controller.sock` (0600): the above plus import, execution and permits.
 //!
 //! Windows named pipes are a design reservation, out of AF-V1/AF-V2 acceptance
 //! (architecture.md 15.2).
 
-use arkforged::{Clock, Service};
 use arkforge_ipc::framing::{read_frame, write_frame};
 use arkforge_ipc::messages::{Hello, HelloAck, Request, Response};
-use arkforge_ipc::{negotiate, Api, SessionKind, Status, PROTOCOL_MAJOR, PROTOCOL_MINOR};
+use arkforge_ipc::{Api, PROTOCOL_MAJOR, PROTOCOL_MINOR, SessionKind, Status, negotiate};
+use arkforged::{Clock, Service};
 use std::io::{self, Read, Write};
 use std::os::unix::net::{UnixListener, UnixStream};
 use std::path::{Path, PathBuf};
@@ -71,17 +71,15 @@ fn run(arguments: &[String]) -> Result<(), String> {
         match arguments[index].as_str() {
             "--runtime-dir" => {
                 index += 1;
-                runtime_dir = Some(PathBuf::from(
-                    arguments.get(index).ok_or_else(|| usage())?,
-                ));
+                runtime_dir = Some(PathBuf::from(arguments.get(index).ok_or_else(usage)?));
             }
             "--profile" => {
                 index += 1;
-                profile_paths.push(PathBuf::from(arguments.get(index).ok_or_else(|| usage())?));
+                profile_paths.push(PathBuf::from(arguments.get(index).ok_or_else(usage)?));
             }
             "--transcript" => {
                 index += 1;
-                transcript_paths.push(PathBuf::from(arguments.get(index).ok_or_else(|| usage())?));
+                transcript_paths.push(PathBuf::from(arguments.get(index).ok_or_else(usage)?));
             }
             "--hardware-campaign" => {
                 index += 1;
@@ -126,7 +124,8 @@ fn run(arguments: &[String]) -> Result<(), String> {
     let mut transcripts = Vec::new();
     for path in &transcript_paths {
         transcripts.push(
-            std::fs::read_to_string(path).map_err(|error| format!("{}: {error}", path.display()))?,
+            std::fs::read_to_string(path)
+                .map_err(|error| format!("{}: {error}", path.display()))?,
         );
     }
 
@@ -242,6 +241,7 @@ where
                          classified unknown"
                     );
                 }
+                guard.refresh_pending_admissions();
                 guard.take_pending_dispatch()
             };
             let Some(work) = work else {
@@ -262,7 +262,8 @@ where
 fn bind(path: &Path) -> Result<UnixListener, String> {
     // A stale socket from a previous run would otherwise make bind fail.
     let _ = std::fs::remove_file(path);
-    let listener = UnixListener::bind(path).map_err(|error| format!("{}: {error}", path.display()))?;
+    let listener =
+        UnixListener::bind(path).map_err(|error| format!("{}: {error}", path.display()))?;
     set_private(path)?;
     Ok(listener)
 }
@@ -431,7 +432,10 @@ impl<'a> Read for ContentStream<'a> {
                     return Ok(0);
                 }
                 Err(error) => {
-                    return Err(io::Error::new(io::ErrorKind::InvalidData, error.to_string()))
+                    return Err(io::Error::new(
+                        io::ErrorKind::InvalidData,
+                        error.to_string(),
+                    ));
                 }
             }
         }
@@ -456,8 +460,15 @@ mod tests {
     fn only_native_rockusb_is_exposed() {
         let text = usage();
         assert!(text.contains("always the native implementation"));
-        for retired in ["--rockusb-port", "--rkdeveloptool", "vendor is migration-only"] {
-            assert!(!text.contains(retired), "retired surface returned: {retired}");
+        for retired in [
+            "--rockusb-port",
+            "--rkdeveloptool",
+            "vendor is migration-only",
+        ] {
+            assert!(
+                !text.contains(retired),
+                "retired surface returned: {retired}"
+            );
         }
     }
 }

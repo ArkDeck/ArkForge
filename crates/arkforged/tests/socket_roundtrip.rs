@@ -6,11 +6,12 @@
 //! `startExecution` is unavailable over the wire, not just in the handler.
 
 use arkforge_artifact::fixture;
+use arkforge_core::digest::sha256;
 use arkforge_ipc::framing::{read_frame, write_frame};
 use arkforge_ipc::messages::{
     ErrorBody, Hello, HelloAck, InspectArtifactResponse, MaterializePlanResponse, Request, Response,
 };
-use arkforge_ipc::{wire, Api, SessionKind, Status, PROTOCOL_MAJOR, PROTOCOL_MINOR};
+use arkforge_ipc::{Api, PROTOCOL_MAJOR, PROTOCOL_MINOR, SessionKind, Status, wire};
 use std::io::Write;
 use std::os::unix::net::UnixStream;
 use std::path::PathBuf;
@@ -32,11 +33,8 @@ impl Drop for Daemon {
 
 impl Daemon {
     fn start(name: &str) -> Option<Self> {
-        let runtime_dir = std::env::temp_dir().join(format!(
-            "arkforged-live-{}-{}",
-            name,
-            std::process::id()
-        ));
+        let runtime_dir =
+            std::env::temp_dir().join(format!("arkforged-live-{}-{}", name, std::process::id()));
         let _ = std::fs::remove_dir_all(&runtime_dir);
         std::fs::create_dir_all(&runtime_dir).ok()?;
 
@@ -177,6 +175,13 @@ fn the_daemon_serves_the_read_only_vertical_over_unix_sockets() {
     wire::write_string(&mut payload, 1, &artifact_id);
     wire::write_string(&mut payload, 2, "org.openharmony.dayu200");
     wire::write_string(&mut payload, 3, "OBS-PREFLIGHT");
+    wire::write_string(&mut payload, 4, "fullRestore");
+    wire::write_string(&mut payload, 5, "arkforged-native-rockusb");
+    wire::write_string(&mut payload, 6, "test-authority");
+    wire::write_string(&mut payload, 7, "BINDING-SOCKET");
+    wire::write_uint64(&mut payload, 8, 1);
+    wire::write_bytes(&mut payload, 9, sha256(b"stable-device-socket").as_bytes());
+    wire::write_string(&mut payload, 10, "primaryFlash");
     let response = call(&mut public, Api::MaterializePlan, payload);
     assert_eq!(response.status, Status::Ok);
     match MaterializePlanResponse::decode(&response.payload).unwrap() {

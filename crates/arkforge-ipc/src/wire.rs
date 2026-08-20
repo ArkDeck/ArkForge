@@ -61,10 +61,16 @@ pub enum WireError {
     DepthLimit,
     TrailingBytes(usize),
     /// A security-relevant enum carried a value this build does not know.
-    UnknownEnumValue { field: u32, value: i64 },
+    UnknownEnumValue {
+        field: u32,
+        value: i64,
+    },
     FrameTooLarge(usize),
     /// A field the schema marks as required for this message is absent.
-    MissingField { message: &'static str, field: u32 },
+    MissingField {
+        message: &'static str,
+        field: u32,
+    },
 }
 
 impl fmt::Display for WireError {
@@ -314,7 +320,8 @@ pub fn decode_enum<T>(
     parse: impl Fn(i32) -> Option<T>,
 ) -> Result<T, WireError> {
     let raw = value.as_u64()? as i64;
-    let narrowed = i32::try_from(raw).map_err(|_| WireError::UnknownEnumValue { field, value: raw })?;
+    let narrowed =
+        i32::try_from(raw).map_err(|_| WireError::UnknownEnumValue { field, value: raw })?;
     parse(narrowed).ok_or(WireError::UnknownEnumValue { field, value: raw })
 }
 

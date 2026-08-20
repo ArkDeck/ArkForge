@@ -54,10 +54,10 @@ fn dependency_graph() -> BTreeMap<String, BTreeSet<String>> {
                 if !in_runtime_dependencies {
                     continue;
                 }
-                if let Some((left, _)) = line.split_once(" = { path =") {
-                    if left.starts_with("arkforge") {
-                        dependencies.insert(left.to_string());
-                    }
+                if let Some((left, _)) = line.split_once(" = { path =")
+                    && left.starts_with("arkforge")
+                {
+                    dependencies.insert(left.to_string());
                 }
             }
             graph.insert(name, dependencies);
@@ -194,10 +194,10 @@ fn collect(directory: &Path, out: &mut Vec<(PathBuf, String)>) {
         let path = entry.path();
         if path.is_dir() {
             collect(&path, out);
-        } else if path.extension().map(|ext| ext == "rs").unwrap_or(false) {
-            if let Ok(source) = std::fs::read_to_string(&path) {
-                out.push((path, source));
-            }
+        } else if path.extension().map(|ext| ext == "rs").unwrap_or(false)
+            && let Ok(source) = std::fs::read_to_string(&path)
+        {
+            out.push((path, source));
         }
     }
 }
@@ -224,8 +224,21 @@ fn the_neutral_crates_name_no_device_vendor_or_authority_in_code() {
     // Secondary net. The dependency graph above is the primary guard; this
     // catches a name typed directly into a neutral crate's code.
     let forbidden = [
-        "dayu200", "dayu600", "DAYU200", "DAYU600", "rockchip", "Rockchip", "unisoc", "Unisoc",
-        "rkdeveloptool", "CmdDloader", "RockUSB", "rockusb", "arkdeck", "ArkDeck", "uis7885",
+        "dayu200",
+        "dayu600",
+        "DAYU200",
+        "DAYU600",
+        "rockchip",
+        "Rockchip",
+        "unisoc",
+        "Unisoc",
+        "rkdeveloptool",
+        "CmdDloader",
+        "RockUSB",
+        "rockusb",
+        "arkdeck",
+        "ArkDeck",
+        "uis7885",
     ];
     // `arkforge-artifact` and `arkforge-provider` are the crates architecture.md
     // 4.2 says may hold device modules, so they are excluded by design.
@@ -360,7 +373,16 @@ fn the_public_plan_surface_carries_no_vendor_vocabulary() {
 
     for kind in FlashStepKind::ALL {
         let rendered = kind.as_str();
-        for needle in ["rkdeveloptool", "wlx", "rl", "sector", "lba", "usb", "vid", "pid"] {
+        for needle in [
+            "rkdeveloptool",
+            "wlx",
+            "rl",
+            "sector",
+            "lba",
+            "usb",
+            "vid",
+            "pid",
+        ] {
             assert!(
                 !rendered.to_lowercase().contains(needle),
                 "the public step vocabulary leaks {needle:?} through {rendered:?}"
@@ -392,7 +414,11 @@ fn the_materialized_dayu200_plan_would_be_admissible_by_the_arkdeck_registry() {
     assert_eq!(mapped[1], "probeDevice");
     assert_eq!(mapped[2], "verifyRemoteState");
     assert!(mapped[3..12].iter().all(|kind| *kind == "flashPartition"));
-    assert!(mapped[12..21].iter().all(|kind| *kind == "verifyRemoteState"));
+    assert!(
+        mapped[12..21]
+            .iter()
+            .all(|kind| *kind == "verifyRemoteState")
+    );
     assert_eq!(mapped[21], "rebootDevice");
     assert_eq!(mapped[22], "verifyRemoteState");
 }
@@ -404,7 +430,7 @@ mod support {
         HostPlatform, MaturityKey, MaturityState, ToolchainIdentity, ToolchainKind, Version,
     };
     use arkforge_core::ids::{OpaqueId, PlanId};
-    use arkforge_core::plan::FlashPlanEnvelope;
+    use arkforge_core::plan::{ExecutionPurpose, FlashPlanEnvelope};
     use arkforge_core::profile;
     use arkforge_core::{AuthorityBindingRef, AuthorityNamespace};
     use arkforge_provider::rockchip::RockchipProvider;
@@ -412,11 +438,10 @@ mod support {
         FlashIntent, FlashProvider, MaterializeRequest, MaturityRegistry, ProbeContext,
     };
     use arkforge_transport::replay::TranscriptTransport;
-    use arkforge_transport::{transcript, DeviceTransport, TypedDiscoveryFilter};
+    use arkforge_transport::{DeviceTransport, TypedDiscoveryFilter, transcript};
 
     const PROFILE_SOURCE: &str = include_str!("../../../profiles/dayu200.yaml");
-    const CAMPAIGN: &str =
-        include_str!("../../../transcripts/dayu200-gj4-ecamp-96effff15.yaml");
+    const CAMPAIGN: &str = include_str!("../../../transcripts/dayu200-gj4-ecamp-96effff15.yaml");
 
     /// Materializes the DAYU200 plan through the executable branch, so the
     /// admission check has a full step list to examine.
@@ -465,6 +490,7 @@ mod support {
 
         let request = MaterializeRequest {
             plan_id: PlanId::new("PLAN-GUARD").unwrap(),
+            execution_purpose: ExecutionPurpose::PrimaryFlash,
             intent: FlashIntent::FullRestore,
             artifact: &manifest,
             artifact_id: OpaqueId::new("ART-GUARD").unwrap(),

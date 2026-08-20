@@ -8,8 +8,8 @@
 //! declared effect appears in the plan's EffectSet.
 
 use crate::digest::{
-    digest_canonical, digest_in_domain, digest_ordered, CanonicalCbor, CborError, CborValue, Domain,
-    Sha256Digest,
+    CanonicalCbor, CborError, CborValue, Domain, Sha256Digest, digest_canonical, digest_in_domain,
+    digest_ordered,
 };
 use crate::effect::{ByteRange, EffectSet, PersistentEffect, TransientEffect};
 use crate::ids::{ActionId, StepId};
@@ -116,10 +116,7 @@ impl CanonicalCbor for ActionDigestBinding {
             ("stepId", self.step_id.to_cbor()),
             ("actionId", self.action_id.to_cbor()),
             ("role", self.role.to_cbor()),
-            (
-                "privateActionDigest",
-                self.private_action_digest.to_cbor(),
-            ),
+            ("privateActionDigest", self.private_action_digest.to_cbor()),
         ])
     }
 }
@@ -208,9 +205,9 @@ pub fn validate_projection(
 
     let mut per_action = Vec::with_capacity(private_plan.actions.len());
     for step in public_steps {
-        let primary = primary_by_step.get(step.step_id.as_str()).ok_or_else(|| {
-            ProjectionError::StepWithoutPrimaryAction(step.step_id.to_string())
-        })?;
+        let primary = primary_by_step
+            .get(step.step_id.as_str())
+            .ok_or_else(|| ProjectionError::StepWithoutPrimaryAction(step.step_id.to_string()))?;
 
         let primary_digest = primary.digest().map_err(ProjectionError::Cbor)?;
         if primary_digest != step.private_action_digest {
@@ -238,21 +235,20 @@ pub fn validate_projection(
                     return Err(ProjectionError::PrivateTargetOutsidePublicTarget {
                         step: step.step_id.to_string(),
                         action: primary.action_id.to_string(),
-                    })
+                    });
                 }
             }
         }
 
         if let (Some(public_content), Some(private_content)) =
             (step.content_digest, primary.content_digest)
+            && public_content != private_content
         {
-            if public_content != private_content {
-                return Err(ProjectionError::ContentDigestMismatch {
-                    step: step.step_id.to_string(),
-                    public: public_content,
-                    private: private_content,
-                });
-            }
+            return Err(ProjectionError::ContentDigestMismatch {
+                step: step.step_id.to_string(),
+                public: public_content,
+                private: private_content,
+            });
         }
         if step.content_digest.is_some() && primary.content_digest.is_none() {
             return Err(ProjectionError::PrivateActionMissingContentDigest {
@@ -337,12 +333,18 @@ fn validate_effect_coverage(
                     })?;
                 persistent_claimed[index] = true;
             }
-            FlashStepKind::EnsureMode | FlashStepKind::Reboot | FlashStepKind::LoadEphemeralAgent => {
-                if let Some(index) = effect_set.transient.iter().enumerate().position(
-                    |(index, effect)| {
-                        !transient_claimed[index] && transient_effect_matches(effect, step)
-                    },
-                ) {
+            FlashStepKind::EnsureMode
+            | FlashStepKind::Reboot
+            | FlashStepKind::LoadEphemeralAgent => {
+                if let Some(index) =
+                    effect_set
+                        .transient
+                        .iter()
+                        .enumerate()
+                        .position(|(index, effect)| {
+                            !transient_claimed[index] && transient_effect_matches(effect, step)
+                        })
+                {
                     transient_claimed[index] = true;
                 } else {
                     return Err(ProjectionError::StepEffectNotDeclared {
@@ -501,7 +503,10 @@ impl fmt::Display for ProjectionError {
                 "private action {action} projects onto unknown public step {step}"
             ),
             ProjectionError::MultiplePrimaryActions(step) => {
-                write!(f, "public step {step} has more than one primary private action")
+                write!(
+                    f,
+                    "public step {step} has more than one primary private action"
+                )
             }
             ProjectionError::StepWithoutPrimaryAction(step) => {
                 write!(f, "public step {step} has no primary private action")

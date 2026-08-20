@@ -6,7 +6,7 @@
 //! three-state where `Unknown` is representable so it can be *rejected* rather
 //! than silently defaulted.
 
-use crate::digest::{digest_canonical, CanonicalCbor, CborError, CborValue, Domain, Sha256Digest};
+use crate::digest::{CanonicalCbor, CborError, CborValue, Domain, Sha256Digest, digest_canonical};
 use crate::ids::{PartitionId, RegionId};
 use core::fmt;
 
@@ -436,14 +436,14 @@ impl EffectSet {
                     if left_partition != right_partition {
                         continue;
                     }
-                    if let (Some(left_range), Some(right_range)) = (left.range(), right.range()) {
-                        if left_range.overlaps(right_range) {
-                            return Err(EffectError::OverlappingEffects {
-                                partition: left_partition.to_string(),
-                                first: *left_range,
-                                second: *right_range,
-                            });
-                        }
+                    if let (Some(left_range), Some(right_range)) = (left.range(), right.range())
+                        && left_range.overlaps(right_range)
+                    {
+                        return Err(EffectError::OverlappingEffects {
+                            partition: left_partition.to_string(),
+                            first: *left_range,
+                            second: *right_range,
+                        });
                     }
                 }
             }
@@ -493,7 +493,10 @@ impl fmt::Display for EffectError {
                 write!(f, "byte range {start}+{length} overflows u64")
             }
             EffectError::InvalidModeName(name) => {
-                write!(f, "device mode must be lowercase ascii/digits/hyphen: {name:?}")
+                write!(
+                    f,
+                    "device mode must be lowercase ascii/digits/hyphen: {name:?}"
+                )
             }
             EffectError::InvalidAgentStage(name) => write!(f, "invalid agent stage {name:?}"),
             EffectError::UnknownDataImpact(axes) => write!(

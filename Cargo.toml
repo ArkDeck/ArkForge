@@ -1,5 +1,5 @@
 [workspace]
-resolver = "2"
+resolver = "3"
 members = [
     "crates/arkforge-core",
     "crates/arkforge-usb",
@@ -15,10 +15,10 @@ members = [
 
 [workspace.package]
 version = "0.1.0"
-edition = "2021"
-rust-version = "1.68"
+edition = "2024"
+rust-version = "1.97.1"
 license = "Apache-2.0"
-repository = "https://github.com/fuhanfeng/ArkForge"
+repository = "https://github.com/ArkDeck/ArkForge"
 
 # ArkForge carries no third-party runtime dependencies. Every primitive the
 # security model rests on (SHA-256, RFC 8949 deterministic CBOR, DEFLATE, tar,

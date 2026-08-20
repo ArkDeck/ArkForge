@@ -13,7 +13,7 @@
 use arkforge_artifact::{dayu200, fixture};
 use arkforge_authority_api::authority_side::mint_integrity_tag;
 use arkforge_authority_api::{
-    ControllerPairingSecret, PairingEpoch, PermitIntegrityTag, StepPermit,
+    ControllerPairingSecret, CurrentFacts, PairingEpoch, PermitIntegrityTag, StepPermit,
 };
 use arkforge_core::digest::sha256;
 use arkforge_core::identity::{
@@ -22,7 +22,7 @@ use arkforge_core::identity::{
 use arkforge_core::ids::{
     AttemptId, ControllerSessionId, JobId, OpaqueId, PermitId, PlanId, StepId,
 };
-use arkforge_core::plan::{FlashPlanEnvelope, PlanMaterialization};
+use arkforge_core::plan::{ExecutionPurpose, FlashPlanEnvelope, PlanMaterialization};
 use arkforge_core::profile::{self, DeviceProfile};
 use arkforge_core::projection::StoredProviderPlan;
 use arkforge_core::{AuthorityBindingRef, AuthorityNamespace, Sha256Digest};
@@ -35,8 +35,8 @@ use arkforge_provider::{
     FlashIntent, FlashProvider, MaterializeRequest, MaturityRegistry, ProbeContext,
 };
 use arkforge_transport::replay::TranscriptTransport;
-use arkforge_transport::{transcript, DeviceTransport, TypedDiscoveryFilter};
-use arkforged::jobs::{canonical_facts_digest, JobRegistry, JobStop};
+use arkforge_transport::{DeviceObservation, DeviceTransport, TypedDiscoveryFilter, transcript};
+use arkforged::jobs::{AdmissionFacts, JobRegistry, JobStop, canonical_facts_digest};
 use std::path::PathBuf;
 
 const PROFILE_SOURCE: &str = include_str!("../../../profiles/dayu200.yaml");
@@ -70,6 +70,7 @@ struct Fixture {
     envelope: FlashPlanEnvelope,
     private_plan: StoredProviderPlan,
     profile: DeviceProfile,
+    observations: Vec<DeviceObservation>,
 }
 
 /// Materializes a real plan from the real fixture archive.
@@ -127,6 +128,7 @@ fn plan_fixture() -> Fixture {
 
     let request = MaterializeRequest {
         plan_id: PlanId::new("PLAN-ADMISSION").unwrap(),
+        execution_purpose: ExecutionPurpose::PrimaryFlash,
         intent: FlashIntent::FullRestore,
         artifact: &manifest,
         artifact_id: OpaqueId::new("ART-ADMISSION").unwrap(),
@@ -150,6 +152,7 @@ fn plan_fixture() -> Fixture {
         envelope: *envelope,
         private_plan: materialized.private_plan.unwrap(),
         profile,
+        observations,
     }
 }
 
@@ -164,6 +167,51 @@ fn binding() -> AuthorityBindingRef {
 
 fn secret() -> ControllerPairingSecret {
     ControllerPairingSecret::new(EPOCH, SECRET.to_vec())
+}
+
+fn admission_facts(fixture: &Fixture, mode: &str, at: u64) -> AdmissionFacts {
+    let observed_mode = match mode {
+        "rockusb-loader" => "updater",
+        other => other,
+    };
+    let mut observation = fixture
+        .observations
+        .iter()
+        .find(|observation| observation.mode.as_str() == observed_mode)
+        .or_else(|| fixture.observations.first())
+        .unwrap_or_else(|| panic!("fixture has no observations"))
+        .clone();
+    if observation.mode.as_str() != mode {
+        observation.mode = arkforge_core::DeviceMode::new(mode).unwrap();
+    }
+    observation.observed_at_epoch_ms = at;
+    AdmissionFacts {
+        observation,
+        transport_session_digest: sha256(format!("session-{mode}").as_bytes()),
+        provider_facts_digest: sha256(b"provider-facts"),
+        toolchain_facts_digest: sha256(b"toolchain-facts"),
+        artifact_facts_digest: sha256(b"artifact-facts"),
+    }
+}
+
+fn current_facts(
+    snapshot: &arkforge_ipc::messages::StepAdmissionSnapshot,
+    now: u64,
+) -> CurrentFacts {
+    let digest = |bytes: &[u8]| {
+        let mut array = [0u8; 32];
+        array.copy_from_slice(bytes);
+        Sha256Digest::from_bytes(array)
+    };
+    CurrentFacts {
+        now_epoch_ms: now,
+        device_facts_digest: digest(&snapshot.admitted_device_facts_sha256),
+        transport_session_digest: Some(digest(&snapshot.transport_session_sha256)),
+        saw_detach_since_snapshot: false,
+        provider_facts_digest: sha256(b"provider-facts"),
+        toolchain_facts_digest: sha256(b"toolchain-facts"),
+        artifact_facts_digest: sha256(b"artifact-facts"),
+    }
 }
 
 /// Mints a permit for the admission the daemon just published.
@@ -209,9 +257,30 @@ fn mint(
 
 /// The snapshot the job is currently waiting on.
 fn pending_snapshot(
-    registry: &JobRegistry,
+    registry: &mut JobRegistry,
+    fixture: &Fixture,
     job_id: &str,
+    at: u64,
 ) -> arkforge_ipc::messages::StepAdmissionSnapshot {
+    if registry
+        .job(job_id)
+        .is_some_and(|job| job.needs_admission())
+    {
+        let mode = registry
+            .job(job_id)
+            .and_then(|job| job.expected_mode(&fixture.envelope))
+            .map(|mode| mode.as_str().to_string())
+            .unwrap_or_else(|| "hdc-normal".to_string());
+        registry
+            .request_next_admission(
+                job_id,
+                &fixture.envelope,
+                &fixture.private_plan,
+                &admission_facts(fixture, &mode, at),
+                at,
+            )
+            .unwrap();
+    }
     registry
         .job(job_id)
         .unwrap()
@@ -231,7 +300,13 @@ fn a_job_walks_from_admission_to_a_durable_intent_to_a_control_receipt() {
     let mut registry = JobRegistry::new(&root.0);
 
     let job_id = registry
-        .start(&fixture.envelope, &fixture.private_plan, NOW)
+        .start(
+            &fixture.envelope,
+            &fixture.private_plan,
+            ControllerSessionId::new("SESSION-1").unwrap(),
+            &admission_facts(&fixture, "hdc-normal", NOW),
+            NOW,
+        )
         .unwrap();
 
     // The job publishes what it needs and stops. Nothing has been dispatched.
@@ -240,10 +315,13 @@ fn a_job_walks_from_admission_to_a_durable_intent_to_a_control_receipt() {
     let kinds: Vec<JobEventKind> = job.events_from(0).iter().map(|event| event.kind).collect();
     assert_eq!(
         kinds,
-        vec![JobEventKind::StateChanged, JobEventKind::StepAdmissionRequested]
+        vec![
+            JobEventKind::StateChanged,
+            JobEventKind::StepAdmissionRequested
+        ]
     );
 
-    let snapshot = pending_snapshot(&registry, &job_id);
+    let snapshot = pending_snapshot(&mut registry, &fixture, &job_id, NOW);
     assert_eq!(snapshot.job_id, job_id);
     assert!(snapshot.is_fresh_at(NOW));
 
@@ -259,6 +337,7 @@ fn a_job_walks_from_admission_to_a_durable_intent_to_a_control_receipt() {
             &fixture.envelope,
             &fixture.private_plan,
             &fixture.profile,
+            Some(current_facts(&snapshot, NOW + 10)),
             NOW + 10,
         )
         .unwrap();
@@ -308,8 +387,11 @@ fn a_job_walks_from_admission_to_a_durable_intent_to_a_control_receipt() {
 
     // Step two is a device probe, which this build cannot dispatch. The job
     // stops there having said so, rather than pretending it ran.
-    let snapshot = pending_snapshot(&registry, &job_id);
-    assert_ne!(snapshot.step_id, control.step_id, "the job moved to the next step");
+    let snapshot = pending_snapshot(&mut registry, &fixture, &job_id, NOW);
+    assert_ne!(
+        snapshot.step_id, control.step_id,
+        "the job moved to the next step"
+    );
     let (permit, tag, epoch) = mint(&snapshot, "PERMIT-2", NOW + 60_000);
     registry
         .submit_permit(
@@ -321,6 +403,7 @@ fn a_job_walks_from_admission_to_a_durable_intent_to_a_control_receipt() {
             &fixture.envelope,
             &fixture.private_plan,
             &fixture.profile,
+            Some(current_facts(&snapshot, NOW + 30)),
             NOW + 30,
         )
         .unwrap();
@@ -347,9 +430,15 @@ fn an_authority_refusal_cancels_safely() {
     let fixture = plan_fixture();
     let mut registry = JobRegistry::new(&root.0);
     let job_id = registry
-        .start(&fixture.envelope, &fixture.private_plan, NOW)
+        .start(
+            &fixture.envelope,
+            &fixture.private_plan,
+            ControllerSessionId::new("SESSION-1").unwrap(),
+            &admission_facts(&fixture, "hdc-normal", NOW),
+            NOW,
+        )
         .unwrap();
-    let snapshot = pending_snapshot(&registry, &job_id);
+    let snapshot = pending_snapshot(&mut registry, &fixture, &job_id, NOW);
 
     registry
         .submit_permit(
@@ -361,6 +450,7 @@ fn an_authority_refusal_cancels_safely() {
             &fixture.envelope,
             &fixture.private_plan,
             &fixture.profile,
+            Some(current_facts(&snapshot, NOW + 10)),
             NOW + 10,
         )
         .unwrap();
@@ -373,6 +463,83 @@ fn an_authority_refusal_cancels_safely() {
     ));
 }
 
+#[test]
+fn restart_rehydrates_a_pre_intent_job_as_cancelled_safe() {
+    let root = TempRoot::new("restart-safe");
+    let fixture = plan_fixture();
+    let job_id = {
+        let mut registry = JobRegistry::new(&root.0);
+        registry
+            .start(
+                &fixture.envelope,
+                &fixture.private_plan,
+                ControllerSessionId::new("SESSION-1").unwrap(),
+                &admission_facts(&fixture, "hdc-normal", NOW),
+                NOW,
+            )
+            .unwrap()
+    };
+
+    let registry = JobRegistry::open(&root.0).unwrap();
+    let job = registry.job(&job_id).expect("job survives restart");
+    assert_eq!(job.state(), JobState::CancelledSafe);
+    assert_eq!(
+        job.events_from(0).last().unwrap().job_state,
+        "cancelledSafe"
+    );
+}
+
+#[test]
+fn restart_rehydrates_an_unsettled_intent_as_outcome_unknown_without_replay() {
+    let root = TempRoot::new("restart-unknown");
+    let fixture = plan_fixture();
+    let job_id = {
+        let mut registry = JobRegistry::new(&root.0);
+        let job_id = registry
+            .start(
+                &fixture.envelope,
+                &fixture.private_plan,
+                ControllerSessionId::new("SESSION-1").unwrap(),
+                &admission_facts(&fixture, "hdc-normal", NOW),
+                NOW,
+            )
+            .unwrap();
+        let snapshot = pending_snapshot(&mut registry, &fixture, &job_id, NOW);
+        let (permit, tag, epoch) = mint(&snapshot, "PERMIT-RESTART", NOW + 60_000);
+        registry
+            .submit_permit(
+                &job_id,
+                &snapshot.request_id,
+                Some((permit, tag, epoch)),
+                "",
+                &secret(),
+                &fixture.envelope,
+                &fixture.private_plan,
+                &fixture.profile,
+                Some(current_facts(&snapshot, NOW + 1)),
+                NOW + 1,
+            )
+            .unwrap();
+        job_id
+    };
+
+    let mut registry = JobRegistry::open(&root.0).unwrap();
+    let job = registry.job(&job_id).expect("job survives restart");
+    assert_eq!(job.state(), JobState::OutcomeUnknown);
+    let outcome = job
+        .events_from(0)
+        .last()
+        .unwrap()
+        .facts
+        .iter()
+        .find(|fact| fact.key == "outcome")
+        .unwrap()
+        .value
+        .clone();
+    assert!(registry.take_pending_dispatch().is_none());
+    assert_eq!(outcome, "outcomeUnknown");
+}
+
 /// architecture.md 8.3. A permit signed against facts that are no longer in
 /// front of the device is not accepted late; a fresh snapshot is published and
 /// the authority signs again.
@@ -382,9 +549,15 @@ fn a_permit_that_arrives_after_its_snapshot_expired_is_refused_and_re_asked() {
     let fixture = plan_fixture();
     let mut registry = JobRegistry::new(&root.0);
     let job_id = registry
-        .start(&fixture.envelope, &fixture.private_plan, NOW)
+        .start(
+            &fixture.envelope,
+            &fixture.private_plan,
+            ControllerSessionId::new("SESSION-1").unwrap(),
+            &admission_facts(&fixture, "hdc-normal", NOW),
+            NOW,
+        )
         .unwrap();
-    let snapshot = pending_snapshot(&registry, &job_id);
+    let snapshot = pending_snapshot(&mut registry, &fixture, &job_id, NOW);
     let (permit, tag, epoch) = mint(&snapshot, "PERMIT-LATE", NOW + 600_000);
 
     let late = NOW + arkforged::jobs::SNAPSHOT_LIFETIME_MS + 1;
@@ -398,13 +571,14 @@ fn a_permit_that_arrives_after_its_snapshot_expired_is_refused_and_re_asked() {
             &fixture.envelope,
             &fixture.private_plan,
             &fixture.profile,
+            Some(current_facts(&snapshot, late)),
             late,
         )
         .unwrap_err();
     assert_eq!(error.code(), "SNAPSHOT_EXPIRED");
 
     // A fresh snapshot was published, so the authority has something to sign.
-    let fresh = pending_snapshot(&registry, &job_id);
+    let fresh = pending_snapshot(&mut registry, &fixture, &job_id, late);
     assert_ne!(fresh.observed_at_epoch_ms, snapshot.observed_at_epoch_ms);
     assert!(fresh.is_fresh_at(late));
 }
@@ -416,9 +590,15 @@ fn a_permit_for_another_action_is_rejected() {
     let fixture = plan_fixture();
     let mut registry = JobRegistry::new(&root.0);
     let job_id = registry
-        .start(&fixture.envelope, &fixture.private_plan, NOW)
+        .start(
+            &fixture.envelope,
+            &fixture.private_plan,
+            ControllerSessionId::new("SESSION-1").unwrap(),
+            &admission_facts(&fixture, "hdc-normal", NOW),
+            NOW,
+        )
         .unwrap();
-    let snapshot = pending_snapshot(&registry, &job_id);
+    let snapshot = pending_snapshot(&mut registry, &fixture, &job_id, NOW);
 
     let mut wrong = snapshot.clone();
     wrong.private_action_sha256 = sha256(b"some other action").as_bytes().to_vec();
@@ -434,13 +614,14 @@ fn a_permit_for_another_action_is_rejected() {
             &fixture.envelope,
             &fixture.private_plan,
             &fixture.profile,
+            Some(current_facts(&snapshot, NOW + 10)),
             NOW + 10,
         )
         .unwrap_err();
     assert_eq!(error.code(), "PERMIT_REJECTED");
     // Nothing was recorded: the job is still waiting for the same admission.
     assert_eq!(
-        pending_snapshot(&registry, &job_id).request_id,
+        pending_snapshot(&mut registry, &fixture, &job_id, NOW).request_id,
         snapshot.request_id
     );
 }
@@ -453,9 +634,15 @@ fn a_submission_answering_the_wrong_request_is_refused() {
     let fixture = plan_fixture();
     let mut registry = JobRegistry::new(&root.0);
     let job_id = registry
-        .start(&fixture.envelope, &fixture.private_plan, NOW)
+        .start(
+            &fixture.envelope,
+            &fixture.private_plan,
+            ControllerSessionId::new("SESSION-1").unwrap(),
+            &admission_facts(&fixture, "hdc-normal", NOW),
+            NOW,
+        )
         .unwrap();
-    let snapshot = pending_snapshot(&registry, &job_id);
+    let snapshot = pending_snapshot(&mut registry, &fixture, &job_id, NOW);
     let (permit, tag, epoch) = mint(&snapshot, "PERMIT-1", NOW + 60_000);
 
     let error = registry
@@ -468,6 +655,7 @@ fn a_submission_answering_the_wrong_request_is_refused() {
             &fixture.envelope,
             &fixture.private_plan,
             &fixture.profile,
+            Some(current_facts(&snapshot, NOW + 10)),
             NOW + 10,
         )
         .unwrap_err();
@@ -483,9 +671,15 @@ fn a_control_receipt_carrying_a_forbidden_fact_is_refused_whole() {
     let fixture = plan_fixture();
     let mut registry = JobRegistry::new(&root.0);
     let job_id = registry
-        .start(&fixture.envelope, &fixture.private_plan, NOW)
+        .start(
+            &fixture.envelope,
+            &fixture.private_plan,
+            ControllerSessionId::new("SESSION-1").unwrap(),
+            &admission_facts(&fixture, "hdc-normal", NOW),
+            NOW,
+        )
         .unwrap();
-    let snapshot = pending_snapshot(&registry, &job_id);
+    let snapshot = pending_snapshot(&mut registry, &fixture, &job_id, NOW);
     let (permit, tag, epoch) = mint(&snapshot, "PERMIT-1", NOW + 60_000);
     registry
         .submit_permit(
@@ -497,6 +691,7 @@ fn a_control_receipt_carrying_a_forbidden_fact_is_refused_whole() {
             &fixture.envelope,
             &fixture.private_plan,
             &fixture.profile,
+            Some(current_facts(&snapshot, NOW + 10)),
             NOW + 10,
         )
         .unwrap();
@@ -530,7 +725,11 @@ fn a_control_receipt_carrying_a_forbidden_fact_is_refused_whole() {
                 NOW + 20,
             )
             .unwrap_err();
-        assert_eq!(error.code(), "RECEIPT_CARRIES_FORBIDDEN_FACTS", "{forbidden}");
+        assert_eq!(
+            error.code(),
+            "RECEIPT_CARRIES_FORBIDDEN_FACTS",
+            "{forbidden}"
+        );
     }
 }
 
@@ -542,9 +741,15 @@ fn an_unconfirmed_control_action_is_unknown_rather_than_failed() {
     let fixture = plan_fixture();
     let mut registry = JobRegistry::new(&root.0);
     let job_id = registry
-        .start(&fixture.envelope, &fixture.private_plan, NOW)
+        .start(
+            &fixture.envelope,
+            &fixture.private_plan,
+            ControllerSessionId::new("SESSION-1").unwrap(),
+            &admission_facts(&fixture, "hdc-normal", NOW),
+            NOW,
+        )
         .unwrap();
-    let snapshot = pending_snapshot(&registry, &job_id);
+    let snapshot = pending_snapshot(&mut registry, &fixture, &job_id, NOW);
     let (permit, tag, epoch) = mint(&snapshot, "PERMIT-1", NOW + 60_000);
     registry
         .submit_permit(
@@ -556,6 +761,7 @@ fn an_unconfirmed_control_action_is_unknown_rather_than_failed() {
             &fixture.envelope,
             &fixture.private_plan,
             &fixture.profile,
+            Some(current_facts(&snapshot, NOW + 10)),
             NOW + 10,
         )
         .unwrap();
@@ -605,8 +811,13 @@ fn an_unconfirmed_control_action_is_unknown_rather_than_failed() {
         .rev()
         .find(|event| event.kind == JobEventKind::OutcomeClassified)
         .expect("the classification was published");
-    assert!(classified.facts.iter().any(|fact| fact.key == "reason"
-        && fact.value == "no device rebound within the deadline"));
+    assert!(
+        classified
+            .facts
+            .iter()
+            .any(|fact| fact.key == "reason"
+                && fact.value == "no device rebound within the deadline")
+    );
 }
 
 /// The evidence digest of an accepted receipt is the canonical digest of its
@@ -618,9 +829,15 @@ fn an_accepted_receipt_whose_evidence_disagrees_with_its_facts_is_refused() {
     let fixture = plan_fixture();
     let mut registry = JobRegistry::new(&root.0);
     let job_id = registry
-        .start(&fixture.envelope, &fixture.private_plan, NOW)
+        .start(
+            &fixture.envelope,
+            &fixture.private_plan,
+            ControllerSessionId::new("SESSION-1").unwrap(),
+            &admission_facts(&fixture, "hdc-normal", NOW),
+            NOW,
+        )
         .unwrap();
-    let snapshot = pending_snapshot(&registry, &job_id);
+    let snapshot = pending_snapshot(&mut registry, &fixture, &job_id, NOW);
     let (permit, tag, epoch) = mint(&snapshot, "PERMIT-1", NOW + 60_000);
     registry
         .submit_permit(
@@ -632,6 +849,7 @@ fn an_accepted_receipt_whose_evidence_disagrees_with_its_facts_is_refused() {
             &fixture.envelope,
             &fixture.private_plan,
             &fixture.profile,
+            Some(current_facts(&snapshot, NOW + 10)),
             NOW + 10,
         )
         .unwrap();
@@ -731,9 +949,15 @@ fn an_unanswered_control_request_expires_into_outcome_unknown() {
     let fixture = plan_fixture();
     let mut registry = JobRegistry::new(&root.0);
     let job_id = registry
-        .start(&fixture.envelope, &fixture.private_plan, NOW)
+        .start(
+            &fixture.envelope,
+            &fixture.private_plan,
+            ControllerSessionId::new("SESSION-1").unwrap(),
+            &admission_facts(&fixture, "hdc-normal", NOW),
+            NOW,
+        )
         .unwrap();
-    let snapshot = pending_snapshot(&registry, &job_id);
+    let snapshot = pending_snapshot(&mut registry, &fixture, &job_id, NOW);
     let (permit, tag, epoch) = mint(&snapshot, "PERMIT-1", NOW + 60_000);
     registry
         .submit_permit(
@@ -745,6 +969,7 @@ fn an_unanswered_control_request_expires_into_outcome_unknown() {
             &fixture.envelope,
             &fixture.private_plan,
             &fixture.profile,
+            Some(current_facts(&snapshot, NOW + 10)),
             NOW + 10,
         )
         .unwrap();
@@ -759,9 +984,11 @@ fn an_unanswered_control_request_expires_into_outcome_unknown() {
         .unwrap();
 
     // Before the deadline the sweep classifies nothing.
-    assert!(registry
-        .expire_stale_controls(control.deadline_epoch_ms)
-        .is_empty());
+    assert!(
+        registry
+            .expire_stale_controls(control.deadline_epoch_ms)
+            .is_empty()
+    );
 
     let expired = registry.expire_stale_controls(control.deadline_epoch_ms + 1);
     assert_eq!(expired, vec![job_id.clone()]);
@@ -778,15 +1005,19 @@ fn an_unanswered_control_request_expires_into_outcome_unknown() {
         .rev()
         .find(|event| event.kind == JobEventKind::OutcomeClassified)
         .expect("the expiry was published");
-    assert!(classified
-        .facts
-        .iter()
-        .any(|fact| fact.key == "reason" && fact.value.contains("expired unanswered")));
+    assert!(
+        classified
+            .facts
+            .iter()
+            .any(|fact| fact.key == "reason" && fact.value.contains("expired unanswered"))
+    );
 
     // The sweep settles each job once.
-    assert!(registry
-        .expire_stale_controls(control.deadline_epoch_ms + 2)
-        .is_empty());
+    assert!(
+        registry
+            .expire_stale_controls(control.deadline_epoch_ms + 2)
+            .is_empty()
+    );
 }
 
 /// architecture.md 13.4. Once an intent is durable there is an unresolved
@@ -797,13 +1028,25 @@ fn a_job_with_a_durable_intent_cannot_be_cancelled_safely() {
     let fixture = plan_fixture();
     let mut registry = JobRegistry::new(&root.0);
     let job_id = registry
-        .start(&fixture.envelope, &fixture.private_plan, NOW)
+        .start(
+            &fixture.envelope,
+            &fixture.private_plan,
+            ControllerSessionId::new("SESSION-1").unwrap(),
+            &admission_facts(&fixture, "hdc-normal", NOW),
+            NOW,
+        )
         .unwrap();
 
     // Before any permit, cancelling is safe.
-    let mut early = JobRegistry::new(&root.0.join("early"));
+    let mut early = JobRegistry::new(root.0.join("early"));
     let early_id = early
-        .start(&fixture.envelope, &fixture.private_plan, NOW)
+        .start(
+            &fixture.envelope,
+            &fixture.private_plan,
+            ControllerSessionId::new("SESSION-1").unwrap(),
+            &admission_facts(&fixture, "hdc-normal", NOW),
+            NOW,
+        )
         .unwrap();
     assert_eq!(
         early.cancel(&early_id, NOW + 1).unwrap(),
@@ -811,7 +1054,7 @@ fn a_job_with_a_durable_intent_cannot_be_cancelled_safely() {
     );
 
     // After one, it is not.
-    let snapshot = pending_snapshot(&registry, &job_id);
+    let snapshot = pending_snapshot(&mut registry, &fixture, &job_id, NOW);
     let (permit, tag, epoch) = mint(&snapshot, "PERMIT-1", NOW + 60_000);
     registry
         .submit_permit(
@@ -823,6 +1066,7 @@ fn a_job_with_a_durable_intent_cannot_be_cancelled_safely() {
             &fixture.envelope,
             &fixture.private_plan,
             &fixture.profile,
+            Some(current_facts(&snapshot, NOW + 10)),
             NOW + 10,
         )
         .unwrap();
@@ -839,9 +1083,15 @@ fn a_permit_round_trips_through_its_canonical_bytes() {
     let fixture = plan_fixture();
     let mut registry = JobRegistry::new(&root.0);
     let job_id = registry
-        .start(&fixture.envelope, &fixture.private_plan, NOW)
+        .start(
+            &fixture.envelope,
+            &fixture.private_plan,
+            ControllerSessionId::new("SESSION-1").unwrap(),
+            &admission_facts(&fixture, "hdc-normal", NOW),
+            NOW,
+        )
         .unwrap();
-    let snapshot = pending_snapshot(&registry, &job_id);
+    let snapshot = pending_snapshot(&mut registry, &fixture, &job_id, NOW);
     let (permit, _, _) = mint(&snapshot, "PERMIT-1", NOW + 60_000);
 
     let bytes = permit.signing_body().unwrap();
@@ -962,7 +1212,9 @@ impl arkforge_provider::rockchip_execute::RockUsbPort for ScriptedPort {
         >,
         arkforge_provider::rockchip_execute::RockUsbPortFailure,
     > {
-        self.operations.borrow_mut().push("readPartitionTable".into());
+        self.operations
+            .borrow_mut()
+            .push("readPartitionTable".into());
         Ok(arkforge_provider::rockchip_execute::RockUsbObservation {
             value: Self::table(),
             evidence_digest: sha256(b"scripted native GPT"),
@@ -1002,25 +1254,25 @@ impl arkforge_provider::rockchip_execute::RockUsbPort for ScriptedPort {
         arkforge_provider::rockchip_execute::RockUsbMutationReceipt,
         arkforge_provider::rockchip_execute::RockUsbPortFailure,
     > {
-        let bytes = std::fs::read(&image.path)
-            .map_err(|error| arkforge_provider::rockchip_execute::RockUsbPortFailure::BeforeIo(
-                error.to_string(),
-            ))?;
+        let bytes = std::fs::read(&image.path).map_err(|error| {
+            arkforge_provider::rockchip_execute::RockUsbPortFailure::BeforeIo(error.to_string())
+        })?;
         self.operations.borrow_mut().push("writePartition".into());
         self.written.borrow_mut().push(partition.to_string());
-        Ok(arkforge_provider::rockchip_execute::RockUsbMutationReceipt {
-            semantic_success: true,
-            evidence_digest: sha256(b"scripted native WRITE_LBA"),
-            duration_ms: 1,
-            detail: "native WRITE_LBA confirmed".into(),
-            progress: Some(arkforge_provider::rockchip_execute::RockUsbWriteProgress {
-                payload_bytes: bytes.len() as u64,
-                wire_sectors: bytes.len() as u64 / 512
-                    + u64::from(bytes.len() % 512 != 0),
-                chunks: 1,
-                payload_digest: sha256(&bytes),
-            }),
-        })
+        Ok(
+            arkforge_provider::rockchip_execute::RockUsbMutationReceipt {
+                semantic_success: true,
+                evidence_digest: sha256(b"scripted native WRITE_LBA"),
+                duration_ms: 1,
+                detail: "native WRITE_LBA confirmed".into(),
+                progress: Some(arkforge_provider::rockchip_execute::RockUsbWriteProgress {
+                    payload_bytes: bytes.len() as u64,
+                    wire_sectors: bytes.len() as u64 / 512 + u64::from(bytes.len() % 512 != 0),
+                    chunks: 1,
+                    payload_digest: sha256(&bytes),
+                }),
+            },
+        )
     }
 
     fn reset_device(
@@ -1030,13 +1282,15 @@ impl arkforge_provider::rockchip_execute::RockUsbPort for ScriptedPort {
         arkforge_provider::rockchip_execute::RockUsbPortFailure,
     > {
         self.operations.borrow_mut().push("resetDevice".into());
-        Ok(arkforge_provider::rockchip_execute::RockUsbMutationReceipt {
-            semantic_success: true,
-            evidence_digest: sha256(b"scripted native DEVICE_RESET"),
-            duration_ms: 1,
-            detail: "native DEVICE_RESET confirmed".into(),
-            progress: None,
-        })
+        Ok(
+            arkforge_provider::rockchip_execute::RockUsbMutationReceipt {
+                semantic_success: true,
+                evidence_digest: sha256(b"scripted native DEVICE_RESET"),
+                duration_ms: 1,
+                detail: "native DEVICE_RESET confirmed".into(),
+                progress: None,
+            },
+        )
     }
 }
 
@@ -1084,7 +1338,7 @@ fn walk_to_completion(
                     && event
                         .receipt
                         .as_ref()
-                        .map_or(false, |receipt| receipt.step_id == control.step_id)
+                        .is_some_and(|receipt| receipt.step_id == control.step_id)
             });
             if !already_answered {
                 let facts = vec![KeyValue {
@@ -1098,9 +1352,7 @@ fn walk_to_completion(
                             request_id: control.request_id.clone(),
                             action: control.action,
                             accepted: true,
-                            evidence_sha256: canonical_facts_digest(&facts)
-                                .as_bytes()
-                                .to_vec(),
+                            evidence_sha256: canonical_facts_digest(&facts).as_bytes().to_vec(),
                             facts,
                             failure_reason: String::new(),
                         },
@@ -1113,7 +1365,7 @@ fn walk_to_completion(
             }
         }
 
-        let snapshot = pending_snapshot(registry, job_id);
+        let snapshot = pending_snapshot(registry, fixture, job_id, clock);
         let (permit, tag, epoch) = mint(&snapshot, &format!("PERMIT-{round}"), clock + 60_000);
         registry
             .submit_permit(
@@ -1125,6 +1377,7 @@ fn walk_to_completion(
                 &fixture.envelope,
                 &fixture.private_plan,
                 &fixture.profile,
+                Some(current_facts(&snapshot, clock)),
                 clock,
             )
             .unwrap();
@@ -1153,7 +1406,13 @@ fn a_job_dispatches_every_step_and_reaches_a_verdict_on_each() {
     stage_archive_into(&root.0.join("store"));
 
     let job_id = registry
-        .start(&fixture.envelope, &fixture.private_plan, NOW)
+        .start(
+            &fixture.envelope,
+            &fixture.private_plan,
+            ControllerSessionId::new("SESSION-1").unwrap(),
+            &admission_facts(&fixture, "hdc-normal", NOW),
+            NOW,
+        )
         .unwrap();
     let receipts = walk_to_completion(&mut registry, &mut dispatcher, &fixture, &job_id);
 
@@ -1198,7 +1457,10 @@ fn a_job_dispatches_every_step_and_reaches_a_verdict_on_each() {
         .map(|receipt| receipt.verification_outcome.as_str())
         .collect();
     assert_eq!(verdicts.len(), 9, "one verdict per target");
-    assert!(verdicts.iter().all(|outcome| *outcome == "typedSkip"), "{verdicts:?}");
+    assert!(
+        verdicts.iter().all(|outcome| *outcome == "typedSkip"),
+        "{verdicts:?}"
+    );
     for receipt in &receipts {
         assert!(
             receipt.strength_is_consistent(),
@@ -1223,7 +1485,13 @@ fn a_dispatch_refused_before_native_usb_confirms_no_effect() {
     // No archive in the store, so staging cannot resolve — a refusal that
     // happens before native USB runs.
     let job_id = registry
-        .start(&fixture.envelope, &fixture.private_plan, NOW)
+        .start(
+            &fixture.envelope,
+            &fixture.private_plan,
+            ControllerSessionId::new("SESSION-1").unwrap(),
+            &admission_facts(&fixture, "hdc-normal", NOW),
+            NOW,
+        )
         .unwrap();
 
     let mut clock = NOW + 1;
@@ -1263,7 +1531,7 @@ fn a_dispatch_refused_before_native_usb_confirms_no_effect() {
                 event
                     .receipt
                     .as_ref()
-                    .map_or(false, |r| r.step_id == control.step_id)
+                    .is_some_and(|r| r.step_id == control.step_id)
             });
             if !answered {
                 registry
@@ -1285,7 +1553,7 @@ fn a_dispatch_refused_before_native_usb_confirms_no_effect() {
                 continue;
             }
         }
-        let snapshot = pending_snapshot(&registry, &job_id);
+        let snapshot = pending_snapshot(&mut registry, &fixture, &job_id, clock);
         let (permit, tag, epoch) = mint(&snapshot, &format!("PERMIT-R{round}"), clock + 60_000);
         registry
             .submit_permit(
@@ -1297,6 +1565,7 @@ fn a_dispatch_refused_before_native_usb_confirms_no_effect() {
                 &fixture.envelope,
                 &fixture.private_plan,
                 &fixture.profile,
+                Some(current_facts(&snapshot, clock)),
                 clock,
             )
             .unwrap();

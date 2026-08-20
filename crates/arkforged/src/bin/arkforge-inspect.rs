@@ -82,7 +82,11 @@ fn run(arguments: &[String]) -> Result<(), String> {
     let report = store.preflight(size).map_err(|error| error.to_string())?;
     println!(
         "preflight {} (store holds {}, volume free {})",
-        if report.accepted { "accepted" } else { "REFUSED" },
+        if report.accepted {
+            "accepted"
+        } else {
+            "REFUSED"
+        },
         report.store_bytes_in_use,
         report.volume_available_bytes
     );
@@ -135,7 +139,11 @@ fn run(arguments: &[String]) -> Result<(), String> {
     }
 
     if let Some(table) = &manifest.partition_table {
-        println!("\npartitions ({}) device={}", table.entries.len(), table.device);
+        println!(
+            "\npartitions ({}) device={}",
+            table.entries.len(),
+            table.device
+        );
         for entry in &table.entries {
             let extent = match entry.size_sectors {
                 Some(size) => format!("{size} sectors"),
@@ -187,10 +195,7 @@ fn run(arguments: &[String]) -> Result<(), String> {
             match member {
                 Some(member) => println!(
                     "  {:>1} {:<12} <- {:<18} {:>12} bytes  present",
-                    target.write_order,
-                    target.partition,
-                    member.path,
-                    member.size_bytes
+                    target.write_order, target.partition, member.path, member.size_bytes
                 ),
                 None => println!(
                     "  {:>1} {:<12} <- {:<18} MISSING",

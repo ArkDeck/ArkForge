@@ -55,7 +55,10 @@ impl CanonicalCbor for AuthorityBindingRef {
         CborValue::map(vec![
             ("authorityNamespace", self.authority_namespace.to_cbor()),
             ("bindingId", self.binding_id.to_cbor()),
-            ("bindingRevision", CborValue::Unsigned(self.binding_revision)),
+            (
+                "bindingRevision",
+                CborValue::Unsigned(self.binding_revision),
+            ),
             (
                 "stableIdentityDigest",
                 self.stable_identity_digest.to_cbor(),
