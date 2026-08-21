@@ -51,32 +51,13 @@ pub trait VolumeSpaceProbe: fmt::Debug + Send + Sync {
     fn available_bytes(&self, path: &Path) -> io::Result<u64>;
 }
 
-/// Reads free space from `df -Pk`, the POSIX-specified output format.
+/// Reads caller-available space through ArkForge's audited host boundary.
 #[derive(Debug, Default, Clone, Copy)]
 pub struct SystemVolumeSpaceProbe;
 
 impl VolumeSpaceProbe for SystemVolumeSpaceProbe {
     fn available_bytes(&self, path: &Path) -> io::Result<u64> {
-        let output = std::process::Command::new("df")
-            .arg("-Pk")
-            .arg(path)
-            .output()?;
-        if !output.status.success() {
-            return Err(io::Error::other("df reported a failure"));
-        }
-        let text = String::from_utf8_lossy(&output.stdout);
-        // POSIX `df -P`: header line, then one line per filesystem with
-        // "Filesystem 1024-blocks Used Available Capacity Mounted-on".
-        let line = text
-            .lines()
-            .nth(1)
-            .ok_or_else(|| io::Error::other("df produced no data line"))?;
-        let available_kb: u64 = line
-            .split_whitespace()
-            .nth(3)
-            .and_then(|field| field.parse().ok())
-            .ok_or_else(|| io::Error::other("df data line has no available column"))?;
-        Ok(available_kb.saturating_mul(1024))
+        arkforge_platform::volume_available_bytes(path)
     }
 }
 

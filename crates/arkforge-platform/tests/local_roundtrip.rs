@@ -1,5 +1,6 @@
 use arkforge_platform::{
     LocalChannel, LocalEndpoint, LocalListener, LocalStream, fill_random, replace_file,
+    volume_available_bytes,
 };
 use std::io::{Read, Write};
 use std::path::PathBuf;
@@ -72,4 +73,5 @@ fn random_and_replace_are_real_host_primitives() {
     replace_file(&replacement, &target).unwrap();
     assert_eq!(std::fs::read(&target).unwrap(), b"new");
     assert!(!replacement.exists());
+    assert!(volume_available_bytes(&root.0).unwrap() > 0);
 }

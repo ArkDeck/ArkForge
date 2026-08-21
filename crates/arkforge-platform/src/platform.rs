@@ -157,6 +157,12 @@ unsafe extern "system" {
     ) -> Bool;
     fn LocalFree(memory: *mut c_void) -> *mut c_void;
     fn MoveFileExW(existing: *const u16, replacement: *const u16, flags: Dword) -> Bool;
+    fn GetDiskFreeSpaceExW(
+        directory_name: *const u16,
+        free_bytes_available_to_caller: *mut u64,
+        total_number_of_bytes: *mut u64,
+        total_number_of_free_bytes: *mut u64,
+    ) -> Bool;
 }
 
 #[link(name = "advapi32")]
@@ -550,6 +556,24 @@ pub fn replace_file(source: &Path, target: &Path) -> io::Result<()> {
         Err(last_error())
     } else {
         Ok(())
+    }
+}
+
+pub fn volume_available_bytes(path: &Path) -> io::Result<u64> {
+    let path = wide(path.as_os_str());
+    let mut available = 0u64;
+    if unsafe {
+        GetDiskFreeSpaceExW(
+            path.as_ptr(),
+            &mut available,
+            ptr::null_mut(),
+            ptr::null_mut(),
+        )
+    } == 0
+    {
+        Err(last_error())
+    } else {
+        Ok(available)
     }
 }
 

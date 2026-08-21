@@ -88,12 +88,15 @@ fn the_dependency_direction_matches_the_architecture() {
     let graph = dependency_graph();
     let allowed: BTreeMap<&str, BTreeSet<&str>> = BTreeMap::from([
         ("arkforge-core", BTreeSet::new()),
-        // Win32 named-pipe/ACL/CSPRNG FFI is confined to this leaf.
+        // Win32 named-pipe/ACL/CSPRNG/volume FFI is confined to this leaf.
         ("arkforge-platform", BTreeSet::new()),
         // CHG-2026-063: the sole IOKit/unsafe containment crate is a leaf.
         ("arkforge-usb", BTreeSet::new()),
         ("arkforge-authority-api", BTreeSet::from(["arkforge-core"])),
-        ("arkforge-artifact", BTreeSet::from(["arkforge-core"])),
+        (
+            "arkforge-artifact",
+            BTreeSet::from(["arkforge-core", "arkforge-platform"]),
+        ),
         ("arkforge-transport", BTreeSet::from(["arkforge-core"])),
         (
             "arkforge-provider",

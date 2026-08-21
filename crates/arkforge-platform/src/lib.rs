@@ -139,6 +139,12 @@ pub fn replace_file(source: &Path, target: &Path) -> std::io::Result<()> {
     platform::replace_file(source, target)
 }
 
+/// Returns bytes available to the current caller on the volume containing an
+/// existing path. Quota-aware host APIs are used rather than total free space.
+pub fn volume_available_bytes(path: &Path) -> std::io::Result<u64> {
+    platform::volume_available_bytes(path)
+}
+
 /// The legacy filesystem name used only on Unix for stale-socket cleanup.
 pub fn unix_socket_path(runtime_dir: &Path, channel: LocalChannel) -> Option<PathBuf> {
     platform::unix_socket_path(runtime_dir, channel.name())
@@ -236,6 +242,27 @@ mod platform {
 
     pub fn replace_file(source: &Path, target: &Path) -> std::io::Result<()> {
         std::fs::rename(source, target)
+    }
+
+    pub fn volume_available_bytes(path: &Path) -> std::io::Result<u64> {
+        let output = std::process::Command::new("df")
+            .arg("-Pk")
+            .arg(path)
+            .output()?;
+        if !output.status.success() {
+            return Err(std::io::Error::other("df reported a failure"));
+        }
+        let text = String::from_utf8_lossy(&output.stdout);
+        let line = text
+            .lines()
+            .nth(1)
+            .ok_or_else(|| std::io::Error::other("df produced no data line"))?;
+        let available_kb: u64 = line
+            .split_whitespace()
+            .nth(3)
+            .and_then(|field| field.parse().ok())
+            .ok_or_else(|| std::io::Error::other("df data line has no available column"))?;
+        Ok(available_kb.saturating_mul(1024))
     }
 
     pub fn unix_socket_path(runtime_dir: &Path, channel: &str) -> Option<PathBuf> {

@@ -335,7 +335,8 @@ flowchart LR
 新增两个消费边界：`arkforge-client` 收拢跨语言一致的 typed IPC client，
 `arkforge-standalone` 收拢 CLI 与未来 ArkFlash 共用的本地 authority、daemon lifecycle
 与 managed HDC control。平台 FFI 只允许存在于两个叶子：`arkforge-usb` 隔离
-IOKit/WinUSB，`arkforge-platform` 隔离 Unix socket / Windows Named Pipe、ACL 与 CSPRNG：
+IOKit/WinUSB，`arkforge-platform` 隔离 Unix socket / Windows Named Pipe、ACL、CSPRNG
+与 volume-space primitive：
 
 ~~~text
 arkforge/
@@ -375,6 +376,8 @@ engine
 ipc / daemon
 
 ipc + platform-local-ipc ← client ← standalone ← CLI / ArkFlash backend
+
+artifact → core + platform-volume-space
 
 arkdeck-adapter → authority-api + ipc client
 ~~~
