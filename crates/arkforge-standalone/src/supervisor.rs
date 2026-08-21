@@ -2814,7 +2814,11 @@ mod tests {
 
     #[test]
     fn daemon_options_require_exact_hdc_path_and_digest_together() {
-        assert!(DaemonOptions::parse(&["--hdc".into(), "/bin/hdc".into()]).is_err());
+        let absolute_hdc = std::env::current_exe()
+            .unwrap()
+            .to_string_lossy()
+            .into_owned();
+        assert!(DaemonOptions::parse(&["--hdc".into(), absolute_hdc.clone()]).is_err());
         assert!(DaemonOptions::parse(&["--expect-hdc-sha256".into(), "0".repeat(64),]).is_err());
         assert!(
             DaemonOptions::parse(&[
@@ -2828,7 +2832,7 @@ mod tests {
         assert!(
             DaemonOptions::parse(&[
                 "--hdc".into(),
-                "/bin/hdc".into(),
+                absolute_hdc,
                 "--expect-hdc-sha256".into(),
                 "0".repeat(64),
             ])

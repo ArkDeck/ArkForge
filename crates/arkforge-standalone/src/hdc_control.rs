@@ -818,7 +818,7 @@ mod tests {
 
     #[test]
     fn process_port_rehashes_the_exact_executable_before_every_call() {
-        let executable = PathBuf::from("/bin/echo");
+        let executable = std::env::current_exe().unwrap();
         let actual = arkforged::dispatch::executable_digest(&executable).unwrap();
         let mut exact = ProcessPort {
             executable: executable.clone(),
@@ -826,9 +826,13 @@ mod tests {
             expected_digest: actual,
         };
         let output = exact
-            .run(&["ok"], Instant::now() + Duration::from_secs(1))
+            .run(&["--list"], Instant::now() + Duration::from_secs(5))
             .unwrap();
-        assert_eq!(output, b"ok\n");
+        assert!(
+            String::from_utf8(output)
+                .unwrap()
+                .contains("process_port_rehashes_the_exact_executable_before_every_call")
+        );
 
         let mut changed = ProcessPort {
             executable,
@@ -836,7 +840,7 @@ mod tests {
             expected_digest: arkforge_core::digest::sha256(b"replaced executable"),
         };
         assert_eq!(
-            changed.run(&["must-not-run"], Instant::now() + Duration::from_secs(1)),
+            changed.run(&["--list"], Instant::now() + Duration::from_secs(5)),
             Err(ControlFailure::CommandChanged)
         );
     }
