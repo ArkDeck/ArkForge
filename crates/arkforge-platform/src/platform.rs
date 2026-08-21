@@ -308,7 +308,7 @@ impl Drop for Stream {
 
 pub struct Listener {
     endpoint: Endpoint,
-    first_instance: bool,
+    pending: Option<Handle>,
     nonblocking: bool,
 }
 
@@ -316,52 +316,37 @@ unsafe impl Send for Listener {}
 
 impl Listener {
     pub fn set_nonblocking(&mut self, nonblocking: bool) -> io::Result<()> {
+        if let Some(handle) = self.pending {
+            let mut mode = PIPE_READMODE_BYTE | if nonblocking { PIPE_NOWAIT } else { PIPE_WAIT };
+            if unsafe {
+                SetNamedPipeHandleState(handle, &mut mode, ptr::null_mut(), ptr::null_mut())
+            } == 0
+            {
+                return Err(last_error());
+            }
+        }
         self.nonblocking = nonblocking;
         Ok(())
     }
 
     pub fn accept(&mut self) -> io::Result<Stream> {
-        let name = wide(&self.endpoint.name);
-        let descriptor = SecurityDescriptor::current_user("GA", false)?;
-        let mut attributes = SecurityAttributes {
-            length: std::mem::size_of::<SecurityAttributes>() as Dword,
-            security_descriptor: descriptor.raw,
-            inherit_handle: 0,
+        let handle = match self.pending {
+            Some(handle) => handle,
+            None => create_pipe_instance(&self.endpoint, self.nonblocking, false)?,
         };
-        let mut open_mode = PIPE_ACCESS_DUPLEX;
-        if self.first_instance {
-            open_mode |= FILE_FLAG_FIRST_PIPE_INSTANCE;
-        }
-        let wait_mode = if self.nonblocking {
-            PIPE_NOWAIT
-        } else {
-            PIPE_WAIT
-        };
-        let handle = unsafe {
-            CreateNamedPipeW(
-                name.as_ptr(),
-                open_mode,
-                PIPE_TYPE_BYTE | PIPE_READMODE_BYTE | wait_mode | PIPE_REJECT_REMOTE_CLIENTS,
-                PIPE_UNLIMITED_INSTANCES,
-                PIPE_BUFFER_BYTES,
-                PIPE_BUFFER_BYTES,
-                0,
-                &mut attributes,
-            )
-        };
-        if handle == INVALID_HANDLE_VALUE {
-            return Err(last_error());
-        }
         let connected = unsafe { ConnectNamedPipe(handle, ptr::null_mut()) };
         let connect_error = unsafe { GetLastError() };
         if connected == 0 && connect_error != ERROR_PIPE_CONNECTED {
-            let _ = unsafe { CloseHandle(handle) };
             if self.nonblocking && connect_error == ERROR_PIPE_LISTENING {
+                self.pending = Some(handle);
                 return Err(io::Error::from(io::ErrorKind::WouldBlock));
             }
+            self.pending = None;
+            let _ = unsafe { CloseHandle(handle) };
             let error = io::Error::from_raw_os_error(connect_error as i32);
             return Err(error);
         }
+        self.pending = None;
         if self.nonblocking {
             let mut blocking_mode = PIPE_READMODE_BYTE | PIPE_WAIT;
             if unsafe {
@@ -379,11 +364,54 @@ impl Listener {
                 return Err(error);
             }
         }
-        self.first_instance = false;
         Ok(Stream {
             handle,
             server_end: true,
         })
+    }
+}
+
+impl Drop for Listener {
+    fn drop(&mut self) {
+        if let Some(handle) = self.pending.take() {
+            let _ = unsafe { CloseHandle(handle) };
+        }
+    }
+}
+
+fn create_pipe_instance(
+    endpoint: &Endpoint,
+    nonblocking: bool,
+    first_instance: bool,
+) -> io::Result<Handle> {
+    let name = wide(&endpoint.name);
+    let descriptor = SecurityDescriptor::current_user("GA", false)?;
+    let mut attributes = SecurityAttributes {
+        length: std::mem::size_of::<SecurityAttributes>() as Dword,
+        security_descriptor: descriptor.raw,
+        inherit_handle: 0,
+    };
+    let mut open_mode = PIPE_ACCESS_DUPLEX;
+    if first_instance {
+        open_mode |= FILE_FLAG_FIRST_PIPE_INSTANCE;
+    }
+    let wait_mode = if nonblocking { PIPE_NOWAIT } else { PIPE_WAIT };
+    let handle = unsafe {
+        CreateNamedPipeW(
+            name.as_ptr(),
+            open_mode,
+            PIPE_TYPE_BYTE | PIPE_READMODE_BYTE | wait_mode | PIPE_REJECT_REMOTE_CLIENTS,
+            PIPE_UNLIMITED_INSTANCES,
+            PIPE_BUFFER_BYTES,
+            PIPE_BUFFER_BYTES,
+            0,
+            &mut attributes,
+        )
+    };
+    if handle == INVALID_HANDLE_VALUE {
+        Err(last_error())
+    } else {
+        Ok(handle)
     }
 }
 
@@ -429,11 +457,13 @@ pub fn connect(endpoint: &Endpoint) -> io::Result<Stream> {
 }
 
 pub fn bind(endpoint: &Endpoint) -> io::Result<Listener> {
-    // The first actual instance uses FILE_FLAG_FIRST_PIPE_INSTANCE so a
-    // squatting process cannot pre-create the authority endpoint.
+    // Publish the first instance during bind, just as UnixListener::bind makes
+    // its socket connectable before accept. FILE_FLAG_FIRST_PIPE_INSTANCE also
+    // rejects a squatting process before bind reports success.
+    let pending = create_pipe_instance(endpoint, false, true)?;
     Ok(Listener {
         endpoint: endpoint.clone(),
-        first_instance: true,
+        pending: Some(pending),
         nonblocking: false,
     })
 }

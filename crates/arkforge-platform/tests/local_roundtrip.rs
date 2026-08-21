@@ -34,21 +34,21 @@ fn the_local_channel_round_trips_bytes() {
     let root = TempRoot::new("roundtrip");
     let endpoint = LocalEndpoint::for_runtime(&root.0, LocalChannel::Public);
     let mut listener = LocalListener::bind(&endpoint).unwrap();
-    let server = std::thread::spawn(move || {
-        let mut stream = listener.accept().unwrap();
-        let mut request = [0u8; 4];
-        stream.read_exact(&mut request).unwrap();
-        assert_eq!(&request, b"ping");
-        stream.write_all(b"pong").unwrap();
-        stream.flush().unwrap();
-    });
+    // A successful bind must publish the endpoint before accept is called.
+    // This order makes the Windows named-pipe listener contract deterministic
+    // instead of depending on which side wins a thread-scheduling race.
     let mut client = LocalStream::connect(&endpoint).unwrap();
+    let mut server = listener.accept().unwrap();
     client.write_all(b"ping").unwrap();
     client.flush().unwrap();
+    let mut request = [0u8; 4];
+    server.read_exact(&mut request).unwrap();
+    assert_eq!(&request, b"ping");
+    server.write_all(b"pong").unwrap();
+    server.flush().unwrap();
     let mut reply = [0u8; 4];
     client.read_exact(&mut reply).unwrap();
     assert_eq!(&reply, b"pong");
-    server.join().unwrap();
 }
 
 #[test]
