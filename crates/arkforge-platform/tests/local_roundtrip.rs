@@ -39,16 +39,21 @@ fn the_local_channel_round_trips_bytes() {
     // instead of depending on which side wins a thread-scheduling race.
     let mut client = LocalStream::connect(&endpoint).unwrap();
     let mut server = listener.accept().unwrap();
+    let server = std::thread::spawn(move || {
+        let mut request = [0u8; 4];
+        server.read_exact(&mut request).unwrap();
+        assert_eq!(&request, b"ping");
+        server.write_all(b"pong").unwrap();
+        // A Windows server-side FlushFileBuffers waits for the client to read
+        // buffered bytes, so keep the two connected ends concurrent.
+        server.flush().unwrap();
+    });
     client.write_all(b"ping").unwrap();
     client.flush().unwrap();
-    let mut request = [0u8; 4];
-    server.read_exact(&mut request).unwrap();
-    assert_eq!(&request, b"ping");
-    server.write_all(b"pong").unwrap();
-    server.flush().unwrap();
     let mut reply = [0u8; 4];
     client.read_exact(&mut reply).unwrap();
     assert_eq!(&reply, b"pong");
+    server.join().unwrap();
 }
 
 #[test]
