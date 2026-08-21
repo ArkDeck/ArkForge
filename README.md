@@ -1,45 +1,45 @@
 # ArkForge
 
-设备无关的刷机机械层与 Agent-native 命令行(Rust)。统一入口 `arkforge`
-负责显式计划、CLI authority、观察与恢复；独立 daemon `arkforged` 只负责固件
-解析、USB/芯片协议、分区擦写与验证。ArkDeck 可适配同一 mechanics 契约，但不再是
-CLI 直接刷机的运行时依赖。
+简体中文 · [English](README.en.md)
 
-项目主页：[github.com/ArkDeck/ArkForge](https://github.com/ArkDeck/ArkForge)
+**为 OpenHarmony 开发板提供安全、可审计、可恢复的固件刷写。**
 
-~~~text
-Authority（ArkDeck 或独立 arkforge.cli）决定：谁、对哪台设备、以哪个已发布
-Operation、在什么安全边界下执行。
+ArkForge 面向支持 OpenHarmony 的开发板，把不同的固件格式、芯片下载协议和 USB 传输方式收进一套一致的工作流，让开发者和 Agent 都能用同一种方式完成刷机：
 
-ArkForge 决定：该已授权语义计划如何通过具体固件格式、Provider 和 Transport 正确落地。
-~~~
-
-## 状态
-
-DAYU200 的设备枚举、Loader 切模、读写、复位、九分区完整覆写和逐步状态均由
-`arkforged` 的原生 RockUSB 实现；仓内没有 vendor 可执行调用路径。执行采用耐久
-journal、精确 StepPermit、同一 transport session 的 freshness 复核，重启后不会
-重放未决写入。DAYU200 profile 发布 1.0.0 complete-overwrite coverage；独立
-`arkforge.cli` supervisor 通过 owner-only controller IPC、typed HDC 与持久 epoch
-直接驱动 normal flash。原生 rescue 是另一套 plan/receipt 域，绝不自动 fallback。
-
-CLI authority 与 native rescue 的软件面已完成；production support registry 仍为空，
-等待受控 DAYU200 campaign 与维护者 exact-key review。`--hardware-campaign` 只开启
-具名 campaign evidence，不会发布生产支持。
-
-DAYU600 只有 inspect 与非可执行 PlanAssessment：PAC 格式、下载协议与数据影响
-全部未知(UNI-U01..U12)，17.5 的十八条证据门 0 条 PASS，见
-[证据账本](docs/evidence/ledger.md)。
-
-工具链钉在 `rust-toolchain.toml` 的 Rust 1.97.1 / Edition 2024。CI 执行：
-
-```bash
-cargo fmt --all -- --check
-cargo clippy --workspace --all-targets --all-features -- -D warnings
-cargo test --workspace --all-targets
+```text
+检查环境 → 识别设备与固件 → 评估影响 → 生成计划 → 明确确认 → 执行 → 验证与恢复
 ```
 
-构建后先让 Agent 读取契约并检查主机：
+它提供统一命令行 `arkforge`，也可以作为 ArkDeck 的底层刷写执行层。无论从哪个入口使用，ArkForge 都不会“找到一台设备就开始刷”，而是把目标设备、固件、Profile、数据影响和执行环境一起封进计划，再按计划逐步执行并留下可审计的收据。
+
+## 为什么需要 ArkForge
+
+支持 OpenHarmony 的开发板来自不同芯片平台，刷机能力往往散落在厂商工具、脚本、USB 协议和产品逻辑之间。ArkForge 把这些差异收敛到清晰的边界里：
+
+- **一个入口**：设备发现、固件导入、计划、执行、任务查询和救援都通过 `arkforge` 完成；
+- **原生执行**：DAYU200 直接使用仓内实现的 RockUSB 协议，不安装或调用 vendor 刷机工具；
+- **先计划，后执行**：破坏性操作必须绑定精确计划摘要和完整的数据影响确认 token；
+- **不会盲目重试**：持久日志（journal）记录每一步，结果不确定的写入不会在重启后自动重放；
+- **对 Agent 友好**：同一命令树同时生成给人看的帮助、稳定 JSON/JSONL、错误恢复建议和 shell completion；
+- **设备无关**：新设备通过 Artifact Parser、Provider、Transport 和数据化 Device Profile 接入，不把型号分支散落到上层产品；
+- **快而不放松校验**：最新执行管线会缓存已密封固件的解析结果、并行校验待写镜像，并避免对不可读区域进行无意义的整段回读。
+
+## 当前支持状态
+
+ArkForge 目前处于**硬件准入阶段**，还不是面向普通用户的一键刷机产品。
+
+| 设备 | 当前能力 | 状态 |
+| --- | --- | --- |
+| **DAYU200**（RK3568 / RockUSB） | 固件导入与检查、设备观察、九分区完整覆写、逐分区验证、任务恢复、原生 RockUSB 救援 | 原生刷写执行层已通过多次真机全量刷写；独立 CLI 授权链路与救援链路的软件实现已完成，仍等待各自的受控真机验收和维护者审核 |
+| **DAYU600**（uis7885 / PAC） | PAC 结构观察、Profile 候选和不可执行的 PlanAssessment | 仅研究与计划评估；18 条执行证据门当前 0 条通过，不提供刷写入口 |
+
+生产支持注册表目前仍为空。`--hardware-campaign` 只用于具名、受控的硬件验收，不是跳过安全门的 `--force`，也不会自动发布生产支持。
+
+详细进度见[实施任务台账](TASKS.md)和[证据账本](docs/evidence/ledger.md)。
+
+## 快速体验
+
+当前可执行 runtime 与发布打包面向 macOS，仓库固定使用 Rust 1.97.1 / Edition 2024。先构建工作区并查看当前主机能做什么：
 
 ```bash
 cargo build --workspace
@@ -47,96 +47,104 @@ target/debug/arkforge help --format json
 target/debug/arkforge --runtime-dir /tmp/arkforge doctor
 ```
 
-macOS 发布输入是同目录、分别签名的 `arkforge`/`arkforged` 二进制对；CLI 只启动
-自身旁边的 daemon。`packaging/macos/package-arkforge.sh` 不携带任何 vendor
-RockUSB 工具。
+启动本地 runtime 并查看设备：
 
 ```bash
 target/debug/arkforge --runtime-dir /tmp/arkforge daemon start
 target/debug/arkforge --runtime-dir /tmp/arkforge device list
 ```
 
-固件先进入内容寻址存储，再按返回的 artifact ID 离线检查：
+固件会先进入内容寻址存储，再按返回的 artifact ID 离线检查：
 
 ```bash
 target/debug/arkforge --runtime-dir /tmp/arkforge artifact import --file ./firmware.tar.gz
-target/debug/arkforge --runtime-dir /tmp/arkforge artifact inspect --artifact <artifact-id> --profile-file profiles/dayu200.yaml
+target/debug/arkforge --runtime-dir /tmp/arkforge artifact inspect \
+  --artifact <artifact-id> \
+  --profile-file profiles/dayu200.yaml
 ```
 
-Normal flash 的 runtime 还必须绑定绝对路径和预期摘要完全匹配的 HDC（发布包可由
-签名 tool manifest 提供）；受控首轮真机验证另加 `--hardware-campaign <id>`。
-工作流始终是 `assess → plan → apply`，plan 返回的摘要与 token 必须原样带回：
+正常刷写遵循固定的 `assess → plan → apply` 流程：
 
 ```bash
-target/debug/arkforge --runtime-dir /tmp/arkforge flash assess --artifact <artifact-id> --profile org.openharmony.dayu200@1.0.0 --device <observation-id> --intent full-restore
-target/debug/arkforge --runtime-dir /tmp/arkforge flash plan --artifact <artifact-id> --profile org.openharmony.dayu200@1.0.0 --device <observation-id> --intent full-restore
-target/debug/arkforge --runtime-dir /tmp/arkforge --output jsonl flash apply --plan <plan-id> --expect-plan-sha256 <sha256> --ack <returned-token>
+target/debug/arkforge --runtime-dir /tmp/arkforge flash assess \
+  --artifact <artifact-id> \
+  --profile org.openharmony.dayu200@1.0.0 \
+  --device <observation-id> \
+  --intent full-restore
+
+target/debug/arkforge --runtime-dir /tmp/arkforge flash plan \
+  --artifact <artifact-id> \
+  --profile org.openharmony.dayu200@1.0.0 \
+  --device <observation-id> \
+  --intent full-restore
 ```
 
-救援必须显式进入独立的原生 RockUSB 域，不安装也不调用外部设备工具：
+`plan` 不会修改设备。真正执行时，必须原样带回结果中的 plan ID、SHA-256 和全部 acknowledgement token。直接 CLI 刷写还要求 runtime 绑定摘要完全匹配的 HDC；在生产支持发布前，只能在明确授权的硬件 campaign 中执行。
+
+不要猜参数或复用历史命令，让 CLI 返回当前构建的完整契约：
 
 ```bash
-target/debug/arkforge --runtime-dir /tmp/arkforge rescue list
-target/debug/arkforge help rescue plan --format json
-```
-
-守护进程状态在重启后仍可查询：
-
-```bash
-target/debug/arkforge --runtime-dir /tmp/arkforge job list
-target/debug/arkforge --runtime-dir /tmp/arkforge job show --job <job-id>
-target/debug/arkforge --runtime-dir /tmp/arkforge job recovery guide --job <job-id>
-```
-
-Agent 可直接读取机器帮助，不需要推断 socket 或历史命令名：
-
-```bash
-target/debug/arkforge help --format json
 target/debug/arkforge help flash apply --format json
 target/debug/arkforge completion --shell zsh
 ```
 
-## 文档
+## 主要能力
 
-- 架构正本：[docs/architecture.md](docs/architecture.md)(状态 Proposed；ArkDeck 审计基线 `2849c5c1`)
-- 任务台账：[TASKS.md](TASKS.md)(AF-V1 完成；AF-V2 真机全量刷写已三过——2026-08-18 首过、08-19 原生复验、08-20 经 ArkDeck authority 完成 23/23 写入/回读/重启/postflight；AF-V3 软件半完成；AF-V4 阻塞于证据门)
-- 证据账本：[docs/evidence/ledger.md](docs/evidence/ledger.md)
-- 实施决定：[docs/decisions/](docs/decisions/)
-- 验收证据：[docs/evidence/](docs/evidence/)
+### 统一的 Agent-native CLI
 
-## 工程布局
+`arkforge` 覆盖完整生命周期：
 
 ```text
-crates/          九个边界 crate(architecture.md 4.2；含唯一 unsafe 的 arkforge-usb)
-adapters/        arkforge-arkdeck-adapter：published step 映射表
-profiles/        DeviceProfile 数据(schema 中性，设备在数据里)
-proto/           IPC 正本 schema
-transcripts/     golden transcript(GJ-4 campaign 收据链)
-packaging/macos/ 签名/entitlement/打包契约的发布输入(AFD-0003)
-fuzz/            见 fuzz/README.md
+doctor
+device      list / show / probe / wait
+artifact    import / inspect / list / show
+flash       assess / plan / apply
+job         list / show / watch / cancel / reconcile / recovery
+rescue      list / inspect / read / plan / apply
+daemon      run / start / stop / status
+signing     verify
+completion
+help
 ```
 
-依赖：**无第三方运行时依赖**。SHA-256、deterministic CBOR、DEFLATE、tar、
-Protobuf wire codec 均在仓内实现并对公开测试向量，理由见
-[AFD-0001](docs/decisions/AFD-0001-zero-dependency-core.md)。
+每一级命令都有稳定的人类帮助和 `arkforge.command-help/v1` JSON 描述。结构化输出不会混入颜色、进度条或提示符，错误会给出稳定 code、修复建议和下一条可执行命令。
 
-## 目标设备
+### 可审计的安全模型
 
-- DAYU200(Rockchip RK3568 / RockUSB)：首个生产垂直，仅由 arkforged 原生
-  RockUSB typed 端口完成枚举、读写与复位；
-- DAYU600(Unisoc uis7885 / PAC)：证据门(architecture.md 17.5)通过前仅 inspect 与非可执行 PlanAssessment。
-  当前 0/18 通过；`arkforge-artifact::pac` 是结构观测器而非 PAC parser。
+- 设备选择必须来自精确 observation；零台、多台或身份变化都会在 mutation 前拒绝；
+- 固件进入内容寻址存储，计划绑定 artifact、Profile、设备、toolchain、effects 和 authority；
+- 每个 mutation/destructive step 都需要一次性 StepPermit；
+- apply 必须匹配完整 plan digest 与 acknowledgement 集合，宽泛的 `--yes` 或 `--force` 不存在；
+- 任务 journal 在进程重启后仍可查询，`outcomeUnknown` 永不自动 replay；
+- normal flash 和 rescue 使用不同的 plan、receipt 与证据域，正常刷写失败时不会自动降级到救援。
 
-## 与 ArkDeck 的关系
+### 原生 RockUSB 与显式救援
 
-- 经 `arkforge-arkdeck-adapter` 接入；Core 不依赖 ArkDeck 类型；
-- ArkDeck Runtime 与 `arkforge.cli` 是彼此独立的 authority namespace/runtime，不能接管
-  对方已配对的 daemon；ArkDeck 后续按 canonical CLI/IPC 契约适配；
-- ArkForge 独占固件解析、计划 lowering、USB/RockUSB mechanics、耐久执行与状态投影；
-- CLI normal flash 的每个 mutation/destructive action 需要 exact StepPermit；
-  outcomeUnknown 永不 replay；native rescue 使用独立的一次性 intent/receipt；
-- 新 Operation/Provider/Profile 属 ArkDeck 明确要求 review 的变更，与真实产品能力同车交付。
+DAYU200 的枚举、Loader 切模、分区读写、复位和 read-domain-aware verification 都由 `arkforged` 的原生 RockUSB 实现。救援能力复用同一套 typed 协议，但只在显式 `arkforge rescue ...` 工作流中开放，不接受任意 USB request、raw LBA write、shell 或 vendor argv。
 
-## 命名
+### 独立运行，也能接入 ArkDeck
 
-原案名 ArkFlash；2026-08-14 定名 ArkForge。ArkFlash 名称保留给未来面向用户的刷机 UI 产品位。
+独立使用时，`arkforge` 的本地 supervisor 负责 authority：绑定目标、签发精确 permit，并通过 typed HDC 完成模式切换与 postflight。`arkforged` 只负责固件解析、协议、USB、写入、验证和耐久状态。
+
+接入 ArkDeck 时，ArkDeck 可以通过 `arkforge-arkdeck-adapter` 承担 authority。两套 runtime 使用独立 namespace，不能接管彼此已经配对的 daemon；ArkForge Core 也不依赖 ArkDeck 类型。
+
+## 开发与验证
+
+```bash
+cargo fmt --all -- --check
+cargo clippy --workspace --all-targets --all-features -- -D warnings
+cargo test --workspace --all-targets
+```
+
+工作区没有第三方 Rust 运行时依赖。SHA-256、deterministic CBOR、DEFLATE、tar 和 Protobuf wire codec 均在仓内实现并使用公开测试向量验证，设计理由见 [AFD-0001](docs/decisions/AFD-0001-zero-dependency-core.md)。
+
+macOS 发布物是一对位于同一目录、分别签名的 `arkforge` 和 `arkforged`。打包入口为 [`packaging/macos/package-arkforge.sh`](packaging/macos/package-arkforge.sh)，发布包不携带 vendor RockUSB 工具。
+
+## 进一步了解
+
+- [架构与安全边界](docs/architecture.md)
+- [Agent-native CLI 设计](docs/openspec/chg-agent-native-cli/proposal.md)
+- [CLI 验收矩阵](docs/openspec/chg-agent-native-cli/verification.md)
+- [实施任务台账](TASKS.md)
+- [真机与验收证据](docs/evidence/)
+- [架构决定记录](docs/decisions/)
