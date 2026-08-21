@@ -54,10 +54,11 @@ if ($null -eq $published) {
 $device = $null
 $deviceInstanceDigest = ''
 if (-not $SkipDevice) {
-    $device = Get-PnpDevice -PresentOnly | Where-Object { $_.InstanceId -like 'USB\VID_2207&PID_350A*' } | Select-Object -First 1
-    if ($null -eq $device) {
-        throw 'Connect exactly one DAYU200 in Loader mode, or use -SkipDevice for software-only acceptance.'
+    $devices = @(Get-PnpDevice -PresentOnly | Where-Object { $_.InstanceId -like 'USB\VID_2207&PID_350A*' })
+    if ($devices.Count -ne 1) {
+        throw "Expected exactly one DAYU200 in Loader mode, observed $($devices.Count); use -SkipDevice only for software acceptance."
     }
+    $device = $devices[0]
     $service = (Get-PnpDeviceProperty -InstanceId $device.InstanceId -KeyName 'DEVPKEY_Device_Service').Data
     if ($service -ine 'WinUSB') {
         throw "DAYU200 Loader is bound to $service, not WinUSB."
@@ -113,7 +114,16 @@ try {
             if ($denied.ExitCode -eq 0) {
                 throw 'A different Windows account connected to the owner-only ArkForge runtime.'
             }
-            $crossAccount = 'different-account connection refused'
+            $deniedErrorText = if (Test-Path -LiteralPath $deniedError) {
+                Get-Content -LiteralPath $deniedError -Raw
+            }
+            else {
+                ''
+            }
+            if ($deniedErrorText -notmatch '(?i)\bos error 5\b') {
+                throw "The different-account probe failed for an unexpected reason instead of ERROR_ACCESS_DENIED: $deniedErrorText"
+            }
+            $crossAccount = 'different-account named pipe access denied (Win32 error 5)'
         }
         finally {
             Remove-Item -LiteralPath $deniedOutput, $deniedError -Force -ErrorAction SilentlyContinue
@@ -142,6 +152,7 @@ $result = [ordered]@{
     hdcSelfTest = 'passed'
     publishedDriver = $installReceipt.publishedDriver
     driver = if ($SkipDevice) { 'published; physical device skipped' } else { 'published and DAYU200 Loader bound to WinUSB' }
+    deviceCount = if ($SkipDevice) { $null } else { 1 }
     deviceInstanceSha256 = $deviceInstanceDigest
     runtimeAclSha256 = $runtimeAclDigest
     runtimeAcl = 'owner-only'

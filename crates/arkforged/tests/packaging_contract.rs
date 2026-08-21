@@ -95,6 +95,10 @@ fn the_windows_release_refuses_unsigned_or_unbound_payloads() {
     assert!(ACCEPTANCE.contains("--require-release-signing"));
     assert!(ACCEPTANCE.contains("DEVPKEY_Device_Service"));
     assert!(ACCEPTANCE.contains("Runtime ACL is not owner-only"));
+    assert!(ACCEPTANCE.contains("$devices.Count -ne 1"));
+    assert!(!ACCEPTANCE.contains("Select-Object -First 1"));
+    assert!(ACCEPTANCE.contains("\\bos error 5\\b"));
+    assert!(ACCEPTANCE.contains("different-account named pipe access denied"));
 }
 
 #[test]

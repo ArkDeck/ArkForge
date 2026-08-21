@@ -38,8 +38,10 @@ $denied = Get-Credential -Message 'Enter a different Windows account for ACL rej
   -EvidencePath .\arkforge-windows-acceptance.json
 ```
 
-The full acceptance requires one DAYU200 already in Loader mode and credentials
-for a second Windows account which must be refused. Use `-SkipDevice
+The full acceptance requires exactly one DAYU200 already in Loader mode and
+credentials for a second Windows account whose Named Pipe connection must fail
+specifically with Win32 `ERROR_ACCESS_DENIED` (error 5). Any other failure is an
+acceptance failure, not ACL evidence. Use `-SkipDevice
 -SkipCrossAccount` only for software/package CI; that result is neither USB
 hardware nor ACL isolation acceptance. The test runs the signed HDC self-test,
 starts the signed runtime, validates the exact HDC binding, exercises same-user
