@@ -169,6 +169,7 @@ fn persist_manifest_cache(
         file.sync_all().map_err(|error| error.to_string())?;
         drop(file);
         set_mode(&temporary, 0o400)?;
+        prepare_manifest_cache_target(&target)?;
         replace_file(&temporary, &target).map_err(|error| error.to_string())?;
         sync_directory(&directory).map_err(|error| error.to_string())?;
         Ok(())
@@ -177,6 +178,27 @@ fn persist_manifest_cache(
         let _ = fs::remove_file(&temporary);
     }
     result
+}
+
+#[cfg(windows)]
+fn prepare_manifest_cache_target(target: &Path) -> Result<(), String> {
+    let metadata = match fs::symlink_metadata(target) {
+        Ok(metadata) => metadata,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(()),
+        Err(error) => return Err(error.to_string()),
+    };
+    if !metadata.file_type().is_file() || metadata.file_type().is_symlink() {
+        return Err("manifest cache replacement target is not a regular file".into());
+    }
+    // MoveFileExW refuses to replace a read-only destination. Clearing only
+    // this cache file's attribute keeps replacement atomic; a crash before the
+    // rename leaves a writable cache, which load_manifest_cache rejects.
+    set_mode(target, 0o600)
+}
+
+#[cfg(not(windows))]
+fn prepare_manifest_cache_target(_target: &Path) -> Result<(), String> {
+    Ok(())
 }
 
 fn decode_manifest_cache(
