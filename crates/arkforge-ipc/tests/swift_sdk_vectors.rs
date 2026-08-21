@@ -1,6 +1,6 @@
 use arkforge_ipc::messages::{
-    ErrorBody, Hello, JobEvent, JobEventKind, KeyValue, Request, Response,
-    SubmitManagedControlReceiptRequest, SubmitStepPermitRequest,
+    Assessment, ErrorBody, Hello, JobEvent, JobEventKind, KeyValue, MaterializePlanResponse,
+    Request, Response, SubmitManagedControlReceiptRequest, SubmitStepPermitRequest,
 };
 use arkforge_ipc::{Api, SessionKind, Status, wire};
 
@@ -47,12 +47,41 @@ fn materialize_plan_request_matches_the_swift_sdk() {
     wire::write_uint64(&mut encoded, 8, 7);
     wire::write_bytes(&mut encoded, 9, &[0xaa, 0xbb]);
     wire::write_string(&mut encoded, 10, "primary");
+    wire::write_bytes(&mut encoded, 11, &[0xde, 0xad]);
+    wire::write_string(&mut encoded, 12, "hardwareCampaign");
+    wire::write_string(&mut encoded, 13, "AFA-AC-8");
     assert_eq!(
         encoded,
         bytes(
             "0a01411201501a014f220b66756c6c526573746f72652a015432014e3a01424007\
-             4a02aabb52077072696d617279"
+             4a02aabb52077072696d6172795a02dead6210686172647761726543616d706169676e\
+             6a084146412d41432d38"
         )
+    );
+}
+
+#[test]
+fn materialize_assessment_support_fields_match_the_swift_sdk() {
+    let response = MaterializePlanResponse::Assessment(Assessment {
+        availability: "unavailable".into(),
+        unavailable_reason: "public".into(),
+        mechanics_maturity_key_sha256: "mechanics".into(),
+        mechanics_maturity_state: "hardwareCampaign".into(),
+        authority_support_key_sha256: "support".into(),
+        authority_support_state: "hardwareGated".into(),
+        ..Assessment::default()
+    });
+    assert_eq!(
+        response.encode(),
+        bytes(
+            "124a2a0b756e617661696c61626c6532067075626c696342096d656368616e696373\
+             4a10686172647761726543616d706169676e5207737570706f7274\
+             5a0d68617264776172654761746564"
+        )
+    );
+    assert_eq!(
+        MaterializePlanResponse::decode(&response.encode()).unwrap(),
+        response
     );
 }
 

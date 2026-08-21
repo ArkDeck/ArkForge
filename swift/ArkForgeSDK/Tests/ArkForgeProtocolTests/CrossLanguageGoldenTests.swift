@@ -31,12 +31,31 @@ final class CrossLanguageGoldenTests: XCTestCase {
       artifactID: "A", profileID: "P", observationID: "O",
       intent: "fullRestore", toolchainID: "T", authorityNamespace: "N",
       bindingID: "B", bindingRevision: 7, stableIdentitySHA256: [0xaa, 0xbb],
-      executionPurpose: "primary")
+      executionPurpose: "primary", authoritySupportKeySHA256: [0xde, 0xad],
+      authoritySupportState: "hardwareCampaign", authoritySupportDetail: "AFA-AC-8")
     XCTAssertEqual(
       request.encoded,
       bytes(
         "0a01411201501a014f220b66756c6c526573746f72652a015432014e3a01424007"
-          + "4a02aabb52077072696d617279"))
+          + "4a02aabb52077072696d6172795a02dead6210686172647761726543616d706169676e"
+          + "6a084146412d41432d38"))
+  }
+
+  func testAssessmentSupportFieldsMatchRustVector() throws {
+    let response = try ArkForgeMaterializePlanResponse.decode(
+      bytes(
+        "124a2a0b756e617661696c61626c6532067075626c696342096d656368616e696373"
+          + "4a10686172647761726543616d706169676e5207737570706f7274"
+          + "5a0d68617264776172654761746564"))
+    guard case .assessment(let assessment) = response else {
+      return XCTFail("expected the Rust assessment vector")
+    }
+    XCTAssertEqual(assessment.availability, "unavailable")
+    XCTAssertEqual(assessment.unavailableReason, "public")
+    XCTAssertEqual(assessment.mechanicsMaturityKeySHA256, "mechanics")
+    XCTAssertEqual(assessment.mechanicsMaturityState, "hardwareCampaign")
+    XCTAssertEqual(assessment.authoritySupportKeySHA256, "support")
+    XCTAssertEqual(assessment.authoritySupportState, "hardwareGated")
   }
 
   func testPermitAndManagedReceiptMatchRustVectors() {

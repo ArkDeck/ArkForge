@@ -211,6 +211,12 @@ public struct ArkForgeExecutablePlan: Sendable, Equatable {
   public let publicProjectionSHA256: String
   public let expiresAtEpochMS: UInt64
   public let executionPurpose: String
+  public let mechanicsMaturityKeySHA256: String
+  public let mechanicsMaturityState: String
+  public let mechanicsMaturityCampaign: String
+  public let authoritySupportKeySHA256: String
+  public let authoritySupportState: String
+  public let authoritySupportCampaign: String
 
   static func decode(_ body: [UInt8], within reader: ProtobufReader) throws
     -> ArkForgeExecutablePlan
@@ -222,6 +228,12 @@ public struct ArkForgeExecutablePlan: Sendable, Equatable {
     var projectionDigest = ""
     var expiresAt: UInt64 = 0
     var executionPurpose = ""
+    var mechanicsMaturityKeySHA256 = ""
+    var mechanicsMaturityState = ""
+    var mechanicsMaturityCampaign = ""
+    var authoritySupportKeySHA256 = ""
+    var authoritySupportState = ""
+    var authoritySupportCampaign = ""
     while let field = try nested.next() {
       switch field.field {
       case 1: planID = try field.value.asString(field: 1)
@@ -230,6 +242,12 @@ public struct ArkForgeExecutablePlan: Sendable, Equatable {
       case 4: projectionDigest = try field.value.asString(field: 4)
       case 9: expiresAt = try field.value.asUInt64()
       case 10: executionPurpose = try field.value.asString(field: 10)
+      case 11: mechanicsMaturityKeySHA256 = try field.value.asString(field: 11)
+      case 12: mechanicsMaturityState = try field.value.asString(field: 12)
+      case 13: mechanicsMaturityCampaign = try field.value.asString(field: 13)
+      case 14: authoritySupportKeySHA256 = try field.value.asString(field: 14)
+      case 15: authoritySupportState = try field.value.asString(field: 15)
+      case 16: authoritySupportCampaign = try field.value.asString(field: 16)
       default: break
       }
     }
@@ -237,7 +255,13 @@ public struct ArkForgeExecutablePlan: Sendable, Equatable {
       planID: planID, planSHA256: planSHA256,
       providerExecutionPlanSHA256: providerDigest,
       publicProjectionSHA256: projectionDigest, expiresAtEpochMS: expiresAt,
-      executionPurpose: executionPurpose)
+      executionPurpose: executionPurpose,
+      mechanicsMaturityKeySHA256: mechanicsMaturityKeySHA256,
+      mechanicsMaturityState: mechanicsMaturityState,
+      mechanicsMaturityCampaign: mechanicsMaturityCampaign,
+      authoritySupportKeySHA256: authoritySupportKeySHA256,
+      authoritySupportState: authoritySupportState,
+      authoritySupportCampaign: authoritySupportCampaign)
   }
 }
 
@@ -251,6 +275,10 @@ public struct ArkForgePlanAssessment: Sendable, Equatable {
   public let availability: String
   public let unavailableReason: String
   public let unknowns: [String: String]
+  public let mechanicsMaturityKeySHA256: String
+  public let mechanicsMaturityState: String
+  public let authoritySupportKeySHA256: String
+  public let authoritySupportState: String
 
   static func decode(_ body: [UInt8], within reader: ProtobufReader) throws
     -> ArkForgePlanAssessment
@@ -259,6 +287,10 @@ public struct ArkForgePlanAssessment: Sendable, Equatable {
     var availability = ""
     var reason = ""
     var unknowns: [String: String] = [:]
+    var mechanicsMaturityKeySHA256 = ""
+    var mechanicsMaturityState = ""
+    var authoritySupportKeySHA256 = ""
+    var authoritySupportState = ""
     while let field = try nested.next() {
       switch field.field {
       case 3:
@@ -266,11 +298,19 @@ public struct ArkForgePlanAssessment: Sendable, Equatable {
         unknowns[pair.key] = pair.value
       case 5: availability = try field.value.asString(field: 5)
       case 6: reason = try field.value.asString(field: 6)
+      case 8: mechanicsMaturityKeySHA256 = try field.value.asString(field: 8)
+      case 9: mechanicsMaturityState = try field.value.asString(field: 9)
+      case 10: authoritySupportKeySHA256 = try field.value.asString(field: 10)
+      case 11: authoritySupportState = try field.value.asString(field: 11)
       default: break
       }
     }
     return ArkForgePlanAssessment(
-      availability: availability, unavailableReason: reason, unknowns: unknowns)
+      availability: availability, unavailableReason: reason, unknowns: unknowns,
+      mechanicsMaturityKeySHA256: mechanicsMaturityKeySHA256,
+      mechanicsMaturityState: mechanicsMaturityState,
+      authoritySupportKeySHA256: authoritySupportKeySHA256,
+      authoritySupportState: authoritySupportState)
   }
 }
 
@@ -315,12 +355,19 @@ public struct ArkForgeMaterializePlanRequest: Sendable {
   public let bindingRevision: UInt64
   public let stableIdentitySHA256: [UInt8]
   public let executionPurpose: String
+  /// Independent release gate supplied by the controller authority. Public
+  /// sessions leave these fields empty; the daemon supplies a hardware-gated
+  /// assessment and never trusts public authority claims.
+  public let authoritySupportKeySHA256: [UInt8]
+  public let authoritySupportState: String
+  public let authoritySupportDetail: String
 
   public init(
     artifactID: String, profileID: String, observationID: String,
     intent: String, toolchainID: String, authorityNamespace: String,
     bindingID: String, bindingRevision: UInt64, stableIdentitySHA256: [UInt8],
-    executionPurpose: String
+    executionPurpose: String, authoritySupportKeySHA256: [UInt8] = [],
+    authoritySupportState: String = "", authoritySupportDetail: String = ""
   ) {
     self.artifactID = artifactID
     self.profileID = profileID
@@ -332,6 +379,9 @@ public struct ArkForgeMaterializePlanRequest: Sendable {
     self.bindingRevision = bindingRevision
     self.stableIdentitySHA256 = stableIdentitySHA256
     self.executionPurpose = executionPurpose
+    self.authoritySupportKeySHA256 = authoritySupportKeySHA256
+    self.authoritySupportState = authoritySupportState
+    self.authoritySupportDetail = authoritySupportDetail
   }
 
   public var encoded: Data {
@@ -346,6 +396,9 @@ public struct ArkForgeMaterializePlanRequest: Sendable {
     writer.uint64(8, bindingRevision)
     writer.bytes(9, stableIdentitySHA256)
     writer.string(10, executionPurpose)
+    writer.bytes(11, authoritySupportKeySHA256)
+    writer.string(12, authoritySupportState)
+    writer.string(13, authoritySupportDetail)
     return writer.data
   }
 }
