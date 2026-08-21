@@ -13,7 +13,7 @@
 | AF-V3 | DAYU600 evidence + plan-only | AF-V1(共用 API 面) | 🟡 软件半完成([验收证据](docs/evidence/AF-V3-acceptance.md))；证据半需真机 |
 | AF-V4 | DAYU600 production execute | AF-V3 + AF-V2(engine) + 17.5 证据门全 PASS | ⛔ 阻塞：18 条证据门 0 条 PASS |
 | AF-P1 | ArkFlash/CLI 消费边界抽离 | AF-V2 软件面 | ✅ `arkforge-client`、`arkforge-standalone`、application v1 DTO/错误/进度/mock 已落地；CLI help/行为基线一致 |
-| AF-W1 | Windows host enablement | AF-P1 | 🟡 Named Pipe、owner ACL、WinUSB、HDC digest+Authenticode、签名包与安装验收脚本已落地并通过 MSVC 全 workspace 交叉检查；余：Windows x64 实机、微软签名 catalog、跨账户与 DAYU200 受控验收 |
+| AF-W1 | Windows host enablement | AF-P1 | 🟡 Named Pipe、owner ACL、WinUSB、HDC digest+Authenticode、签名包与安装验收脚本已落地并通过 MSVC 全 workspace 交叉检查；Windows 原生 CI 与受保护 self-hosted 验收 workflow 已固化，强制证书、微软签名 catalog、HDC 自检、跨账户拒绝、DAYU200 WinUSB 与证据归档；余：在合格 Windows x64 runner 上真实跑绿该 workflow |
 
 ## 全局规矩(摘自 architecture.md 7.4 / 21)
 

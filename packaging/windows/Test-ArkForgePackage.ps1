@@ -1,7 +1,10 @@
 [CmdletBinding()]
 param(
     [string]$InstallRoot = (Join-Path $env:ProgramFiles 'ArkForge'),
-    [switch]$SkipDevice
+    [switch]$SkipDevice,
+    [System.Management.Automation.PSCredential]$DeniedCredential,
+    [switch]$SkipCrossAccount,
+    [string]$EvidencePath = ''
 )
 
 Set-StrictMode -Version Latest
@@ -48,6 +51,8 @@ $published = Get-WindowsDriver -Online | Where-Object { $_.Driver -eq $installRe
 if ($null -eq $published) {
     throw "Published driver $($installReceipt.publishedDriver) is missing."
 }
+$device = $null
+$deviceInstanceDigest = ''
 if (-not $SkipDevice) {
     $device = Get-PnpDevice -PresentOnly | Where-Object { $_.InstanceId -like 'USB\VID_2207&PID_350A*' } | Select-Object -First 1
     if ($null -eq $device) {
@@ -57,12 +62,24 @@ if (-not $SkipDevice) {
     if ($service -ine 'WinUSB') {
         throw "DAYU200 Loader is bound to $service, not WinUSB."
     }
+    $instanceBytes = [Text.Encoding]::UTF8.GetBytes($device.InstanceId)
+    $deviceInstanceDigest = [Convert]::ToHexString([Security.Cryptography.SHA256]::HashData($instanceBytes)).ToLowerInvariant()
 }
 
 $runtime = Join-Path $env:LOCALAPPDATA ('ArkForge-Acceptance-' + [guid]::NewGuid().ToString('N'))
 $arkforge = Join-Path $root ($manifest.arkforge.Replace('/', '\'))
 $hdc = Join-Path $root ($manifest.hdc.path.Replace('/', '\'))
+$crossAccount = 'skipped'
+$runtimeAclDigest = ''
 try {
+    $hdcProbe = Start-Process -FilePath $hdc -ArgumentList @('-v') -PassThru -WindowStyle Hidden
+    if (-not $hdcProbe.WaitForExit(10000)) {
+        Stop-Process -Id $hdcProbe.Id -Force -ErrorAction SilentlyContinue
+        throw 'The signed HDC executable did not complete its version self-test within 10 seconds.'
+    }
+    if ($hdcProbe.ExitCode -ne 0) {
+        throw "The signed HDC executable failed its version self-test with exit code $($hdcProbe.ExitCode)."
+    }
     & $arkforge --runtime-dir $runtime daemon start --hdc $hdc --expect-hdc-sha256 $manifest.hdc.sha256 --require-release-signing
     if ($LASTEXITCODE -ne 0) { throw "daemon start failed with exit code $LASTEXITCODE" }
     & $arkforge --runtime-dir $runtime daemon status
@@ -76,6 +93,32 @@ try {
     if (-not $acl.Sddl.Contains($currentSid) -or $acl.Sddl -match ';;;(WD|BU|AU)\)') {
         throw "Runtime ACL is not owner-only: $($acl.Sddl)"
     }
+    $aclBytes = [Text.Encoding]::UTF8.GetBytes($acl.Sddl)
+    $runtimeAclDigest = [Convert]::ToHexString([Security.Cryptography.SHA256]::HashData($aclBytes)).ToLowerInvariant()
+
+    if ($SkipCrossAccount) {
+        $crossAccount = 'skipped by explicit software-only option'
+    }
+    elseif ($null -eq $DeniedCredential) {
+        throw 'Full ACL acceptance requires -DeniedCredential for a different Windows account; use -SkipCrossAccount only for software CI.'
+    }
+    else {
+        $deniedOutput = Join-Path $env:TEMP ('arkforge-denied-' + [guid]::NewGuid().ToString('N') + '.out')
+        $deniedError = "$deniedOutput.err"
+        try {
+            $denied = Start-Process -FilePath $arkforge `
+                -ArgumentList @('--runtime-dir', ('"' + $runtime + '"'), 'daemon', 'status') `
+                -Credential $DeniedCredential -Wait -PassThru -WindowStyle Hidden `
+                -RedirectStandardOutput $deniedOutput -RedirectStandardError $deniedError
+            if ($denied.ExitCode -eq 0) {
+                throw 'A different Windows account connected to the owner-only ArkForge runtime.'
+            }
+            $crossAccount = 'different-account connection refused'
+        }
+        finally {
+            Remove-Item -LiteralPath $deniedOutput, $deniedError -Force -ErrorAction SilentlyContinue
+        }
+    }
 }
 finally {
     & $arkforge --runtime-dir $runtime daemon stop 2>$null | Out-Null
@@ -84,11 +127,35 @@ finally {
     }
 }
 
-[ordered]@{
+$result = [ordered]@{
     schema = 'arkforge.windows-acceptance/v1'
+    acceptedAtUtc = [DateTime]::UtcNow.ToString('o')
+    osVersion = [Environment]::OSVersion.VersionString
+    architecture = [Runtime.InteropServices.RuntimeInformation]::OSArchitecture.ToString()
     software = 'passed'
     authenticode = 'passed'
+    certificateThumbprint = $trustedManifest.certificateThumbprint
+    packageReceiptSha256 = $installReceipt.packageReceiptSha256
+    arkforgeSha256 = (Get-FileHash -LiteralPath $arkforge -Algorithm SHA256).Hash.ToLowerInvariant()
+    arkforgedSha256 = (Get-FileHash -LiteralPath (Join-Path $root ($manifest.arkforged.Replace('/', '\'))) -Algorithm SHA256).Hash.ToLowerInvariant()
+    hdcSha256 = $manifest.hdc.sha256
+    hdcSelfTest = 'passed'
+    publishedDriver = $installReceipt.publishedDriver
     driver = if ($SkipDevice) { 'published; physical device skipped' } else { 'published and DAYU200 Loader bound to WinUSB' }
-    namedPipe = 'same-user start/status/stop passed; local-only and owner SID are enforced by the platform backend'
+    deviceInstanceSha256 = $deviceInstanceDigest
+    runtimeAclSha256 = $runtimeAclDigest
+    runtimeAcl = 'owner-only'
+    namedPipe = 'same-user start/status/stop passed'
+    crossAccount = $crossAccount
     destructiveFlash = 'not run'
-} | ConvertTo-Json
+}
+$json = $result | ConvertTo-Json
+if ($EvidencePath) {
+    $evidenceFullPath = [System.IO.Path]::GetFullPath($EvidencePath)
+    $evidenceParent = Split-Path -Parent $evidenceFullPath
+    if ($evidenceParent) {
+        New-Item -ItemType Directory -Path $evidenceParent -Force | Out-Null
+    }
+    $json | Set-Content -LiteralPath $evidenceFullPath -Encoding UTF8
+}
+$json

@@ -1,0 +1,71 @@
+name: Windows production acceptance
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  accept:
+    runs-on: [self-hosted, Windows, X64, arkforge-dayu200]
+    environment: windows-production
+    timeout-minutes: 90
+    env:
+      ARKFORGE_CERT_THUMBPRINT: ${{ vars.ARKFORGE_CERT_THUMBPRINT }}
+      ARKFORGE_TIMESTAMP_URL: ${{ vars.ARKFORGE_TIMESTAMP_URL }}
+      ARKFORGE_HDC_PATH: ${{ vars.ARKFORGE_HDC_PATH }}
+      ARKFORGE_DRIVER_PACKAGE: ${{ vars.ARKFORGE_DRIVER_PACKAGE }}
+      ARKFORGE_DENIED_ACCOUNT: ${{ vars.ARKFORGE_DENIED_ACCOUNT }}
+      ARKFORGE_DENIED_PASSWORD: ${{ secrets.ARKFORGE_DENIED_PASSWORD }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Require production acceptance inputs
+        shell: pwsh
+        run: |
+          $required = @(
+            'ARKFORGE_CERT_THUMBPRINT', 'ARKFORGE_TIMESTAMP_URL', 'ARKFORGE_HDC_PATH',
+            'ARKFORGE_DRIVER_PACKAGE', 'ARKFORGE_DENIED_ACCOUNT', 'ARKFORGE_DENIED_PASSWORD'
+          )
+          $missing = @($required | Where-Object { -not [Environment]::GetEnvironmentVariable($_) })
+          if ($missing.Count -gt 0) { throw "Missing windows-production inputs: $($missing -join ', ')" }
+      - name: Build signed package
+        shell: pwsh
+        run: |
+          $package = Join-Path $env:RUNNER_TEMP ('arkforge-release-' + [guid]::NewGuid().ToString('N'))
+          $install = Join-Path $env:RUNNER_TEMP ('arkforge-install-' + [guid]::NewGuid().ToString('N'))
+          $evidence = Join-Path $env:RUNNER_TEMP 'arkforge-windows-acceptance.json'
+          "ARKFORGE_ACCEPTANCE_PACKAGE=$package" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+          "ARKFORGE_ACCEPTANCE_INSTALL=$install" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+          "ARKFORGE_ACCEPTANCE_EVIDENCE=$evidence" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+          & .\packaging\windows\package-arkforge.ps1 `
+            -CertificateThumbprint $env:ARKFORGE_CERT_THUMBPRINT `
+            -TimestampUrl $env:ARKFORGE_TIMESTAMP_URL `
+            -HdcPath $env:ARKFORGE_HDC_PATH `
+            -DriverPackageDirectory $env:ARKFORGE_DRIVER_PACKAGE `
+            -OutputDirectory $package
+      - name: Install signed package and run physical acceptance
+        shell: pwsh
+        run: |
+          & (Join-Path $env:ARKFORGE_ACCEPTANCE_PACKAGE 'Install-ArkForge.ps1') `
+            -InstallRoot $env:ARKFORGE_ACCEPTANCE_INSTALL
+          $secure = ConvertTo-SecureString $env:ARKFORGE_DENIED_PASSWORD -AsPlainText -Force
+          $credential = [Management.Automation.PSCredential]::new($env:ARKFORGE_DENIED_ACCOUNT, $secure)
+          & (Join-Path $env:ARKFORGE_ACCEPTANCE_PACKAGE 'Test-ArkForgePackage.ps1') `
+            -InstallRoot $env:ARKFORGE_ACCEPTANCE_INSTALL `
+            -DeniedCredential $credential `
+            -EvidencePath $env:ARKFORGE_ACCEPTANCE_EVIDENCE
+      - name: Upload acceptance evidence
+        uses: actions/upload-artifact@v4
+        with:
+          name: arkforge-windows-production-acceptance-${{ github.sha }}
+          path: ${{ env.ARKFORGE_ACCEPTANCE_EVIDENCE }}
+          if-no-files-found: error
+      - name: Uninstall acceptance package
+        if: always()
+        shell: pwsh
+        run: |
+          $uninstaller = Join-Path $env:ARKFORGE_ACCEPTANCE_PACKAGE 'Uninstall-ArkForge.ps1'
+          if (Test-Path -LiteralPath $uninstaller) {
+            & $uninstaller -InstallRoot $env:ARKFORGE_ACCEPTANCE_INSTALL -Confirm:$false
+          }

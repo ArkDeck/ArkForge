@@ -33,15 +33,28 @@ Install and accept from an elevated PowerShell:
 
 ```powershell
 .\Install-ArkForge.ps1
-.\Test-ArkForgePackage.ps1
+$denied = Get-Credential -Message 'Enter a different Windows account for ACL rejection'
+.\Test-ArkForgePackage.ps1 -DeniedCredential $denied `
+  -EvidencePath .\arkforge-windows-acceptance.json
 ```
 
-The full acceptance requires one DAYU200 already in Loader mode. Use
-`-SkipDevice` only for software/package CI; that result is not USB hardware
-acceptance. The test starts the signed runtime, validates the HDC binding,
-exercises same-user Named Pipe status, checks the owner-only runtime ACL, and
-requires the device to be bound to WinUSB. Destructive flashing remains a
-separate, explicitly acknowledged hardware campaign.
+The full acceptance requires one DAYU200 already in Loader mode and credentials
+for a second Windows account which must be refused. Use `-SkipDevice
+-SkipCrossAccount` only for software/package CI; that result is neither USB
+hardware nor ACL isolation acceptance. The test runs the signed HDC self-test,
+starts the signed runtime, validates the exact HDC binding, exercises same-user
+Named Pipe status, rejects a different account, checks the owner-only runtime
+ACL, and requires the device to be bound to WinUSB. `-EvidencePath` records the
+exact package, executable, HDC, driver, ACL and redacted device identity facts.
+Destructive flashing remains a separate, explicitly acknowledged hardware
+campaign.
+
+Every push and pull request runs the Rust workspace natively on
+`windows-latest`. The `Windows production acceptance` workflow is manual,
+requires the protected `windows-production` environment, and runs only on a
+self-hosted runner labelled `arkforge-dayu200`. It will not downgrade missing
+certificate, Microsoft-signed catalog, HDC, second-account or physical-device
+inputs into a software pass.
 
 Uninstall uses the exact published driver name recorded by installation and
 preserves per-user runtime journals:
