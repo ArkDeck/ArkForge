@@ -953,13 +953,7 @@ fn handle_materialize_for(
         return Ok(MaterializePlanResponse::Assessment(first_assessment));
     }
     if kind.assessment_only {
-        if matches!(
-            first_assessment.mechanics_maturity_state.as_str(),
-            "productionVerified" | "hardwareCampaign"
-        ) {
-            first_assessment.availability = "available".into();
-            first_assessment.unavailable_reason.clear();
-        }
+        close_resolved_authority_blocker(&mut first_assessment);
         return Ok(MaterializePlanResponse::Assessment(first_assessment));
     }
     let support_detail = support_state
@@ -997,6 +991,24 @@ fn handle_materialize_for(
         )?;
     }
     Ok(response)
+}
+
+fn close_resolved_authority_blocker(assessment: &mut arkforge_ipc::messages::Assessment) {
+    assessment
+        .unknowns
+        .retain(|unknown| unknown.key != "RK-A01");
+    assessment
+        .evidence_requirements
+        .retain(|requirement| requirement.key != "EVR-RK-A01");
+    if assessment.unknowns.is_empty()
+        && matches!(
+            assessment.mechanics_maturity_state.as_str(),
+            "productionVerified" | "hardwareCampaign"
+        )
+    {
+        assessment.availability = "available".into();
+        assessment.unavailable_reason.clear();
+    }
 }
 
 fn parse_mechanics_key(value: &str) -> Result<Sha256Digest, CliError> {
@@ -1660,16 +1672,6 @@ fn answer_admission(
             "The durable target lineage does not belong to this sealed plan.",
         );
     }
-    let current_stable =
-        current_stable_identity(public, &lineage.current_device_id, &record.profile_id)?;
-    if current_stable.as_bytes() != lineage.current_stable_identity_sha256.as_slice() {
-        return submit_permit_refusal(
-            controller,
-            snapshot,
-            epoch,
-            "The exact target binding no longer matches the current observation and probe facts.",
-        );
-    }
     let admitted_device = recompute_admitted_device_digest(snapshot)?;
     if admitted_device.as_bytes() != snapshot.admitted_device_facts_sha256.as_slice() {
         return submit_permit_refusal(
@@ -1689,6 +1691,27 @@ fn answer_admission(
             snapshot,
             epoch,
             "The admission snapshot expired before the authority could permit it.",
+        );
+    }
+    let Some(lineage) =
+        resolve_lineage_for_admission(runtime_dir, public, snapshot, &record, &lineage)?
+    else {
+        return submit_permit_refusal(
+            controller,
+            snapshot,
+            epoch,
+            "The exact target lineage does not match one unique current observation.",
+        );
+    };
+    target_lineages.insert(snapshot.job_id.clone(), lineage.clone());
+    let current_stable =
+        current_stable_identity(public, &lineage.current_device_id, &record.profile_id)?;
+    if current_stable.as_bytes() != lineage.current_stable_identity_sha256.as_slice() {
+        return submit_permit_refusal(
+            controller,
+            snapshot,
+            epoch,
+            "The exact target binding no longer matches the current observation and probe facts.",
         );
     }
     let submission = load_or_create_permit(
@@ -1711,6 +1734,95 @@ fn answer_admission(
         ));
     }
     Ok(())
+}
+
+fn resolve_lineage_for_admission(
+    runtime_dir: &Path,
+    public: &mut PublicClient,
+    snapshot: &StepAdmissionSnapshot,
+    record: &AuthorityPlanRecord,
+    lineage: &ActiveTargetLineage,
+) -> Result<Option<ActiveTargetLineage>, CliError> {
+    let observations = public.device_list()?;
+    if let Some(current) = observations
+        .iter()
+        .find(|observation| observation.observation_id == lineage.current_device_id)
+    {
+        return Ok(observation_matches_admission(current, snapshot).then(|| lineage.clone()));
+    }
+
+    // A transport-dispatched reset does not return a managed-control rebound
+    // observation to the supervisor. Advance the authority's durable lineage
+    // only across the exact mode edge sealed immediately before this step and
+    // only to the unique live observation that reproduces every typed identity
+    // field in the daemon's admission snapshot.
+    if !prior_reboot_authorizes_rebind(&record.plan, snapshot) {
+        return Ok(None);
+    }
+    let mut matches = observations
+        .iter()
+        .filter(|observation| observation_matches_admission(observation, snapshot));
+    let Some(rebound) = matches.next() else {
+        return Ok(None);
+    };
+    if matches.next().is_some() {
+        return Ok(None);
+    }
+    let probe = public.device_probe(&rebound.observation_id, &record.profile_id)?;
+    if !observation_matches_admission(&probe.observation, snapshot) {
+        return Ok(None);
+    }
+    let advanced = ActiveTargetLineage {
+        plan_id: lineage.plan_id.clone(),
+        current_device_id: rebound.observation_id.clone(),
+        current_stable_identity_sha256: stable_identity_digest(rebound, &probe).as_bytes().to_vec(),
+        topology_sha256: lineage.topology_sha256.clone(),
+        revision: lineage.revision.saturating_add(1),
+    };
+    persist_job_lineage(runtime_dir, &snapshot.job_id, &advanced)?;
+    Ok(Some(advanced))
+}
+
+fn prior_reboot_authorizes_rebind(plan: &ExecutablePlan, snapshot: &StepAdmissionSnapshot) -> bool {
+    let Some(index) = plan
+        .public_steps
+        .iter()
+        .position(|step| step.step_id == snapshot.step_id)
+    else {
+        return false;
+    };
+    let Some(previous) = index
+        .checked_sub(1)
+        .and_then(|previous| plan.public_steps.get(previous))
+    else {
+        return false;
+    };
+    let current = &plan.public_steps[index];
+    previous.kind == "reboot"
+        && !previous.expected_mode_before.is_empty()
+        && previous.expected_mode_before != previous.expected_mode_after
+        && previous.expected_mode_after == snapshot.observed_mode
+        && current.expected_mode_before == snapshot.observed_mode
+        && current.expected_mode_after == snapshot.observed_mode
+        && digest_bytes(&snapshot.private_action_sha256, "private action digest")
+            .is_ok_and(|digest| digest.to_hex() == current.private_action_sha256)
+}
+
+fn observation_matches_admission(
+    observation: &DeviceObservationView,
+    snapshot: &StepAdmissionSnapshot,
+) -> bool {
+    observation.mode == snapshot.observed_mode
+        && digest_bytes(&snapshot.topology_sha256, "topology digest")
+            .is_ok_and(|digest| digest.to_hex() == observation.topology_sha256)
+        && digest_bytes(&snapshot.descriptor_sha256, "descriptor digest")
+            .is_ok_and(|digest| digest.to_hex() == observation.descriptor_sha256)
+        && digest_bytes(&snapshot.serial_sha256, "serial digest")
+            .is_ok_and(|digest| digest.to_hex() == observation.serial_sha256)
+        && observation.serial_evidence_kind == snapshot.serial_evidence_kind
+        && observation.protocol_identity == snapshot.protocol_identity
+        && observation.identity_strength == snapshot.identity_strength
+        && observation.malformed_descriptor == snapshot.malformed_descriptor
 }
 
 fn submit_permit_refusal(
@@ -1905,21 +2017,70 @@ fn stable_identity_digest(
     probe: &DeviceProbeView,
 ) -> Sha256Digest {
     let mut stable = Vec::new();
-    stable.extend_from_slice(observation.observation_id.as_bytes());
-    stable.extend_from_slice(observation.mode.as_bytes());
-    stable.extend_from_slice(observation.topology_sha256.as_bytes());
-    stable.extend_from_slice(observation.descriptor_sha256.as_bytes());
-    stable.extend_from_slice(observation.serial_sha256.as_bytes());
-    stable.extend_from_slice(observation.serial_evidence_kind.as_bytes());
-    stable.extend_from_slice(observation.identity_strength.as_bytes());
-    for fact in &observation.protocol_identity {
-        stable.extend_from_slice(fact.key.as_bytes());
-        stable.push(0);
-        stable.extend_from_slice(fact.value.as_bytes());
-        stable.push(0xff);
+    stable.extend_from_slice(b"arkforge.cli-stable-identity/v2");
+    append_stable_observation(&mut stable, "discovery", observation);
+    append_stable_observation(&mut stable, "same-handle-probe", &probe.observation);
+    append_stable_field(&mut stable, "probe.profile", probe.profile_id.as_bytes());
+    for fact in &probe.protocol_facts {
+        append_stable_field(&mut stable, "probe.fact.key", fact.key.as_bytes());
+        append_stable_field(&mut stable, "probe.fact.value", fact.value.as_bytes());
     }
-    stable.extend_from_slice(probe.facts_sha256.as_bytes());
     sha256(&stable)
+}
+
+fn append_stable_observation(
+    stable: &mut Vec<u8>,
+    source: &str,
+    observation: &DeviceObservationView,
+) {
+    append_stable_field(stable, "observation.source", source.as_bytes());
+    append_stable_field(
+        stable,
+        "observation.id",
+        observation.observation_id.as_bytes(),
+    );
+    append_stable_field(stable, "observation.mode", observation.mode.as_bytes());
+    append_stable_field(
+        stable,
+        "observation.topology",
+        observation.topology_sha256.as_bytes(),
+    );
+    append_stable_field(
+        stable,
+        "observation.descriptor",
+        observation.descriptor_sha256.as_bytes(),
+    );
+    append_stable_field(
+        stable,
+        "observation.serial",
+        observation.serial_sha256.as_bytes(),
+    );
+    append_stable_field(
+        stable,
+        "observation.serial-evidence-kind",
+        observation.serial_evidence_kind.as_bytes(),
+    );
+    append_stable_field(
+        stable,
+        "observation.identity-strength",
+        observation.identity_strength.as_bytes(),
+    );
+    append_stable_field(
+        stable,
+        "observation.malformed-descriptor",
+        &[u8::from(observation.malformed_descriptor)],
+    );
+    for fact in &observation.protocol_identity {
+        append_stable_field(stable, "observation.fact.key", fact.key.as_bytes());
+        append_stable_field(stable, "observation.fact.value", fact.value.as_bytes());
+    }
+}
+
+fn append_stable_field(stable: &mut Vec<u8>, label: &str, value: &[u8]) {
+    stable.extend_from_slice(&(label.len() as u64).to_be_bytes());
+    stable.extend_from_slice(label.as_bytes());
+    stable.extend_from_slice(&(value.len() as u64).to_be_bytes());
+    stable.extend_from_slice(value);
 }
 
 fn recompute_admitted_device_digest(
@@ -2415,6 +2576,179 @@ fn internal(context: &str, error: impl std::fmt::Display) -> CliError {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use arkforge_ipc::messages::KeyValue;
+
+    fn stable_observation(observed_at_epoch_ms: u64) -> DeviceObservationView {
+        DeviceObservationView {
+            observation_id: "USB-2207-5000-01120000".into(),
+            observed_at_epoch_ms,
+            mode: "hdc-normal".into(),
+            topology_sha256: sha256(b"topology").to_hex(),
+            descriptor_sha256: sha256(b"descriptor").to_hex(),
+            identity_strength: "serialAndTopology".into(),
+            malformed_descriptor: false,
+            protocol_identity: vec![KeyValue {
+                key: "profile".into(),
+                value: "org.openharmony.dayu200".into(),
+            }],
+            serial_sha256: sha256(b"serial").to_hex(),
+            serial_evidence_kind: "descriptor".into(),
+        }
+    }
+
+    fn stable_probe(observed_at_epoch_ms: u64, facts_sha256: &str) -> DeviceProbeView {
+        DeviceProbeView {
+            observation: stable_observation(observed_at_epoch_ms),
+            protocol_facts: vec![KeyValue {
+                key: "transport".into(),
+                value: "arkforge.transport.usb".into(),
+            }],
+            profile_id: "org.openharmony.dayu200".into(),
+            facts_sha256: facts_sha256.into(),
+        }
+    }
+
+    fn admission_for(observation: &DeviceObservationView) -> StepAdmissionSnapshot {
+        StepAdmissionSnapshot {
+            step_id: "STEP-022".into(),
+            private_action_sha256: sha256(b"postflight action").as_bytes().to_vec(),
+            observed_mode: observation.mode.clone(),
+            topology_sha256: Sha256Digest::parse_hex(&observation.topology_sha256)
+                .unwrap()
+                .as_bytes()
+                .to_vec(),
+            descriptor_sha256: Sha256Digest::parse_hex(&observation.descriptor_sha256)
+                .unwrap()
+                .as_bytes()
+                .to_vec(),
+            serial_sha256: Sha256Digest::parse_hex(&observation.serial_sha256)
+                .unwrap()
+                .as_bytes()
+                .to_vec(),
+            serial_evidence_kind: observation.serial_evidence_kind.clone(),
+            protocol_identity: observation.protocol_identity.clone(),
+            identity_strength: observation.identity_strength.clone(),
+            malformed_descriptor: observation.malformed_descriptor,
+            ..StepAdmissionSnapshot::default()
+        }
+    }
+
+    fn pending_authority_assessment() -> arkforge_ipc::messages::Assessment {
+        arkforge_ipc::messages::Assessment {
+            availability: "unavailable".into(),
+            unavailable_reason: "pending authority support".into(),
+            mechanics_maturity_state: "hardwareCampaign".into(),
+            unknowns: vec![KeyValue {
+                key: "RK-A01".into(),
+                value: "authority implementation is hardwareGated".into(),
+            }],
+            evidence_requirements: vec![KeyValue {
+                key: "EVR-RK-A01".into(),
+                value: "close authority support".into(),
+            }],
+            ..arkforge_ipc::messages::Assessment::default()
+        }
+    }
+
+    #[test]
+    fn stable_identity_ignores_fresh_probe_time_but_binds_explicit_identity_facts() {
+        let discovery = stable_observation(100);
+        let first = stable_probe(101, &sha256(b"full observation at 101").to_hex());
+        let fresh = stable_probe(202, &sha256(b"full observation at 202").to_hex());
+
+        assert_eq!(
+            stable_identity_digest(&discovery, &first),
+            stable_identity_digest(&discovery, &fresh),
+            "a timestamp-only fresh probe must preserve the sealed target binding"
+        );
+
+        let mut replaced = fresh.clone();
+        replaced.observation.descriptor_sha256 = sha256(b"replacement descriptor").to_hex();
+        assert_ne!(
+            stable_identity_digest(&discovery, &first),
+            stable_identity_digest(&discovery, &replaced),
+            "same-handle replacement evidence must still invalidate the binding"
+        );
+
+        let mut changed_protocol = fresh;
+        changed_protocol.protocol_facts[0].value = "arkforge.transport.replacement".into();
+        assert_ne!(
+            stable_identity_digest(&discovery, &first),
+            stable_identity_digest(&discovery, &changed_protocol),
+            "provider protocol facts remain effect-relevant binding material"
+        );
+    }
+
+    #[test]
+    fn postflight_rebind_requires_the_immediately_prior_sealed_reboot_edge() {
+        let observation = stable_observation(100);
+        let snapshot = admission_for(&observation);
+        let mut plan = ExecutablePlan {
+            public_steps: vec![
+                arkforge_ipc::messages::PublicStep {
+                    step_id: "STEP-021".into(),
+                    kind: "reboot".into(),
+                    expected_mode_before: "rockusb-loader".into(),
+                    expected_mode_after: "hdc-normal".into(),
+                    ..arkforge_ipc::messages::PublicStep::default()
+                },
+                arkforge_ipc::messages::PublicStep {
+                    step_id: "STEP-022".into(),
+                    kind: "postflightProbe".into(),
+                    expected_mode_before: "hdc-normal".into(),
+                    expected_mode_after: "hdc-normal".into(),
+                    private_action_sha256: sha256(b"postflight action").to_hex(),
+                    ..arkforge_ipc::messages::PublicStep::default()
+                },
+            ],
+            ..ExecutablePlan::default()
+        };
+
+        assert!(prior_reboot_authorizes_rebind(&plan, &snapshot));
+
+        plan.public_steps[0].kind = "verifyTarget".into();
+        assert!(!prior_reboot_authorizes_rebind(&plan, &snapshot));
+        plan.public_steps[0].kind = "reboot".into();
+        plan.public_steps[0].expected_mode_after = "rockusb-loader".into();
+        assert!(!prior_reboot_authorizes_rebind(&plan, &snapshot));
+    }
+
+    #[test]
+    fn postflight_rebind_matches_every_typed_identity_field_but_not_probe_time() {
+        let observation = stable_observation(100);
+        let snapshot = admission_for(&observation);
+        let mut fresh = observation.clone();
+        fresh.observation_id = "USB-2207-5000-fresh".into();
+        fresh.observed_at_epoch_ms = 200;
+
+        assert!(observation_matches_admission(&fresh, &snapshot));
+
+        fresh.descriptor_sha256 = sha256(b"replacement descriptor").to_hex();
+        assert!(!observation_matches_admission(&fresh, &snapshot));
+        fresh = observation.clone();
+        fresh.protocol_identity[0].value = "org.openharmony.replacement".into();
+        assert!(!observation_matches_admission(&fresh, &snapshot));
+    }
+
+    #[test]
+    fn assessment_closes_only_the_resolved_authority_blocker() {
+        let mut ready = pending_authority_assessment();
+        close_resolved_authority_blocker(&mut ready);
+        assert_eq!(ready.availability, "available");
+        assert!(ready.unavailable_reason.is_empty());
+        assert!(ready.unknowns.is_empty());
+        assert!(ready.evidence_requirements.is_empty());
+
+        let mut still_blocked = pending_authority_assessment();
+        still_blocked.unknowns.push(KeyValue {
+            key: "RK-V10".into(),
+            value: "device mode is not declared".into(),
+        });
+        close_resolved_authority_blocker(&mut still_blocked);
+        assert_eq!(still_blocked.availability, "unavailable");
+        assert_eq!(still_blocked.unknowns.len(), 1);
+        assert_eq!(still_blocked.unknowns[0].key, "RK-V10");
+    }
 
     #[test]
     fn daemon_options_require_exact_hdc_path_and_digest_together() {

@@ -465,6 +465,9 @@ impl CanonicalCbor for ProfileCandidate {
 pub struct PlanAssessment {
     pub provider_candidates: Vec<ProviderCandidate>,
     pub profile_candidates: Vec<ProfileCandidate>,
+    /// The complete public workflow projection that would be sealed if every
+    /// named blocker were closed. It carries no plan id, permit, or authority.
+    pub would_be_steps: Vec<PublicFlashStep>,
     pub known_effects: EffectSet,
     pub unknowns: Vec<ExecutionUnknown>,
     pub evidence_requirements: Vec<EvidenceRequirement>,
@@ -489,6 +492,15 @@ impl CanonicalCbor for PlanAssessment {
                     self.profile_candidates
                         .iter()
                         .map(|c| c.to_cbor())
+                        .collect(),
+                ),
+            ),
+            (
+                "wouldBeSteps",
+                CborValue::array(
+                    self.would_be_steps
+                        .iter()
+                        .map(|step| step.to_cbor())
                         .collect(),
                 ),
             ),
@@ -809,6 +821,7 @@ mod tests {
         let assessment = PlanAssessment {
             provider_candidates: vec![],
             profile_candidates: vec![],
+            would_be_steps: vec![],
             known_effects: EffectSet::read_only(),
             unknowns: vec![ExecutionUnknown {
                 id: OpaqueId::new("UNI-U01").unwrap(),

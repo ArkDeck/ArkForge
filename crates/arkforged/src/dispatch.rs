@@ -25,18 +25,58 @@ use crate::jobs::{DispatchOutcome, PendingDispatch};
 use arkforge_artifact::cas::{CasQuota, ContentAddressedStore};
 use arkforge_artifact::dayu200;
 use arkforge_artifact::staging::stage_members;
+use arkforge_core::Sha256Digest;
+use arkforge_core::digest::Sha256;
 use arkforge_core::outcome::ActionDisposition;
 use arkforge_provider::rockchip_execute::{
     ExecutionError, ExecutionSession, RockUsbDevice, RockUsbLocation, RockUsbMutationReceipt,
     RockUsbObservation, RockUsbPort, RockUsbPortFailure, RockUsbWriteProgress, StagedImage,
-    StoredAction, execute_action,
+    StoredAction, ValidatedImage, execute_action,
 };
-use arkforge_provider::rockusb_protocol::{RockUsbBulkIo, RockUsbProtocol};
+use arkforge_provider::rockusb_protocol::{
+    LOGICAL_BLOCK_BYTES, ROCKUSB_TRANSFER_CHUNK_SECTORS, RockUsbBulkIo, RockUsbProtocol,
+};
 use core::fmt;
 use std::collections::{BTreeMap, BTreeSet};
+use std::fs;
 use std::io::Read;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU32, Ordering};
+use std::time::{Instant, SystemTime};
+
+const STAGING_CACHE_DIR: &str = "cache";
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct ExpectedImage {
+    size_bytes: u64,
+    sha256: Sha256Digest,
+}
+
+#[derive(Debug)]
+struct StagingUse {
+    images: BTreeMap<String, StagedImage>,
+    bytes: u64,
+    source: &'static str,
+    cache_hit: bool,
+}
+
+#[derive(Debug, Clone)]
+pub struct PendingPreparation {
+    pub job_id: String,
+    pub plan_actions: Vec<arkforge_core::projection::PrivateActionRecord>,
+    pub profile: arkforge_core::profile::DeviceProfile,
+    pub artifact_digest: Sha256Digest,
+}
+
+#[derive(Debug, Clone, Copy)]
+struct StagingStats {
+    duration_ms: u64,
+    bytes: u64,
+    source: &'static str,
+    cache_hit: bool,
+    ready_at: Instant,
+    preparation_mode: &'static str,
+}
 
 /// Runs private actions for one daemon's jobs.
 #[derive(Debug)]
@@ -47,6 +87,8 @@ pub struct Dispatcher<'a> {
     sessions: BTreeMap<String, ExecutionSession>,
     /// Jobs whose images are already on disk, so staging happens once.
     staged: BTreeSet<String>,
+    staging_stats: BTreeMap<String, StagingStats>,
+    preparation_failures: BTreeMap<String, DispatchFailure>,
 }
 
 impl<'a> Dispatcher<'a> {
@@ -61,6 +103,34 @@ impl<'a> Dispatcher<'a> {
             port,
             sessions: BTreeMap::new(),
             staged: BTreeSet::new(),
+            staging_stats: BTreeMap::new(),
+            preparation_failures: BTreeMap::new(),
+        }
+    }
+
+    /// Starts host-only staging and full image validation as soon as the job
+    /// exists. This runs concurrently with the authority's HDC Loader switch;
+    /// no device I/O or permit is involved in preparation.
+    pub fn prepare(&mut self, work: &PendingPreparation) {
+        if self.staged.contains(&work.job_id)
+            || self.preparation_failures.contains_key(&work.job_id)
+        {
+            return;
+        }
+        match self.stage_job(
+            &work.job_id,
+            work.artifact_digest,
+            &work.plan_actions,
+            &work.profile,
+            "job-start-prewarm",
+        ) {
+            Ok(stats) => {
+                self.staging_stats.insert(work.job_id.clone(), stats);
+            }
+            Err(failure) => {
+                self.preparation_failures
+                    .insert(work.job_id.clone(), failure);
+            }
         }
     }
 
@@ -97,12 +167,20 @@ impl<'a> Dispatcher<'a> {
 
         // Images are staged on the first write and not before: a job that never
         // reaches one should not pay 4 GB of extraction to find that out.
-        if decoded
+        let is_write = decoded
             .iter()
-            .any(|action| matches!(action, StoredAction::WritePartition { .. }))
-        {
-            self.stage_if_needed(work)?;
+            .any(|action| matches!(action, StoredAction::WritePartition { .. }));
+        if is_write && let Some(failure) = self.preparation_failures.remove(&work.job_id) {
+            return Err(failure);
         }
+        let needs_staging = is_write && !self.staged.contains(&work.job_id);
+        let staging = if needs_staging {
+            Some(self.stage_if_needed(work)?)
+        } else if is_write {
+            self.staging_stats.remove(&work.job_id)
+        } else {
+            None
+        };
 
         let scratch = self.job_root(&work.job_id).join("scratch");
         std::fs::create_dir_all(&scratch)
@@ -126,65 +204,81 @@ impl<'a> Dispatcher<'a> {
         let outcome = last.ok_or_else(|| {
             DispatchFailure::BeforeAnyEffect("the step declares no private action".into())
         })?;
+        let mut facts: Vec<(String, String)> = outcome
+            .facts
+            .into_iter()
+            .map(|(key, value)| (key.to_string(), value))
+            .collect();
+        if let Some(staging) = staging {
+            facts.push(("stagingDurationMs".into(), staging.duration_ms.to_string()));
+            facts.push(("stagingBytes".into(), staging.bytes.to_string()));
+            facts.push(("stagingSource".into(), staging.source.into()));
+            facts.push(("stagingCacheHit".into(), staging.cache_hit.to_string()));
+            facts.push((
+                "preparationLeadMs".into(),
+                staging.ready_at.elapsed().as_millis().to_string(),
+            ));
+            facts.push(("preparationMode".into(), staging.preparation_mode.into()));
+        }
         Ok(DispatchOutcome {
             disposition: outcome.disposition,
-            facts: outcome
-                .facts
-                .into_iter()
-                .map(|(key, value)| (key.to_string(), value))
-                .collect(),
+            facts,
             evidence_digest: outcome.evidence_digest,
             verification: outcome.verification,
         })
     }
 
     /// Extracts the images this job's writes need, once.
-    fn stage_if_needed(&mut self, work: &PendingDispatch) -> Result<(), DispatchFailure> {
-        if self.staged.contains(&work.job_id) {
-            return Ok(());
-        }
-        let store = ContentAddressedStore::open(&self.store_root, CasQuota::dayu200_default())
-            .map_err(|error| DispatchFailure::BeforeAnyEffect(error.to_string()))?;
-        let object = store
-            .open_object(&work.artifact_digest)
-            .map_err(|error| DispatchFailure::BeforeAnyEffect(error.to_string()))?;
-        let manifest = dayu200::inspect(
-            store
-                .open_object(&work.artifact_digest)
-                .map_err(|error| DispatchFailure::BeforeAnyEffect(error.to_string()))?,
+    fn stage_if_needed(&mut self, work: &PendingDispatch) -> Result<StagingStats, DispatchFailure> {
+        self.stage_job(
+            &work.job_id,
+            work.artifact_digest,
+            &work.plan_actions,
+            &work.profile,
+            "first-write-fallback",
         )
-        .map_err(|error| DispatchFailure::BeforeAnyEffect(error.to_string()))?;
+    }
 
-        let wanted: BTreeSet<String> = work
-            .profile
-            .allowed_targets
-            .iter()
-            .filter_map(|target| target.source_member.clone())
-            .collect();
-        let directory = self.job_root(&work.job_id).join("staging");
-        std::fs::create_dir_all(&directory)
-            .map_err(|error| DispatchFailure::BeforeAnyEffect(error.to_string()))?;
-
-        let report = stage_members(object, &manifest, &wanted, &directory)
-            .map_err(|error| DispatchFailure::BeforeAnyEffect(error.to_string()))?;
+    fn stage_job(
+        &mut self,
+        job_id: &str,
+        artifact_digest: Sha256Digest,
+        plan_actions: &[arkforge_core::projection::PrivateActionRecord],
+        profile: &arkforge_core::profile::DeviceProfile,
+        preparation_mode: &'static str,
+    ) -> Result<StagingStats, DispatchFailure> {
+        if self.staged.contains(job_id) {
+            return Err(DispatchFailure::BeforeAnyEffect(format!(
+                "{} was marked staged without a staging request",
+                job_id
+            )));
+        }
+        let started = Instant::now();
+        let expected = expected_images(plan_actions, profile)?;
+        let staging = materialize_staging_cache(
+            &self.store_root,
+            &self.work_root.join(STAGING_CACHE_DIR),
+            artifact_digest,
+            &expected,
+        )?;
 
         let session = self
             .sessions
-            .entry(work.job_id.clone())
+            .entry(job_id.to_string())
             .or_insert_with(|| ExecutionSession::new(BTreeMap::new()));
-        for (name, member) in report.members {
-            session.stage(
-                name,
-                StagedImage {
-                    member: member.member,
-                    path: member.path,
-                    size_bytes: member.size_bytes,
-                    sha256: member.sha256,
-                },
-            );
+        for (name, image) in &staging.images {
+            session.stage(name.clone(), image.clone());
         }
-        self.staged.insert(work.job_id.clone());
-        Ok(())
+        session.begin_parallel_staged_validation();
+        self.staged.insert(job_id.to_string());
+        Ok(StagingStats {
+            duration_ms: started.elapsed().as_millis() as u64,
+            bytes: staging.bytes,
+            source: staging.source,
+            cache_hit: staging.cache_hit,
+            ready_at: Instant::now(),
+            preparation_mode,
+        })
     }
 
     fn job_root(&self, job_id: &str) -> PathBuf {
@@ -198,6 +292,8 @@ impl<'a> Dispatcher<'a> {
     pub fn release(&mut self, job_id: &str) -> Result<(), String> {
         self.sessions.remove(job_id);
         self.staged.remove(job_id);
+        self.staging_stats.remove(job_id);
+        self.preparation_failures.remove(job_id);
         let root = self.job_root(job_id);
         if !root.exists() {
             return Ok(());
@@ -208,6 +304,288 @@ impl<'a> Dispatcher<'a> {
     pub fn work_root(&self) -> &Path {
         &self.work_root
     }
+}
+
+fn expected_images(
+    plan_actions: &[arkforge_core::projection::PrivateActionRecord],
+    profile: &arkforge_core::profile::DeviceProfile,
+) -> Result<BTreeMap<String, ExpectedImage>, DispatchFailure> {
+    let mut expected = BTreeMap::new();
+    for record in plan_actions {
+        let action = StoredAction::decode(record)
+            .map_err(|error| DispatchFailure::BeforeAnyEffect(error.to_string()))?;
+        let StoredAction::WritePartition { member, .. } = action else {
+            continue;
+        };
+        let range = record.declared_range.ok_or_else(|| {
+            DispatchFailure::BeforeAnyEffect(format!(
+                "write input {member} has no declared byte range"
+            ))
+        })?;
+        let digest = record.content_digest.ok_or_else(|| {
+            DispatchFailure::BeforeAnyEffect(format!(
+                "write input {member} has no declared content digest"
+            ))
+        })?;
+        let image = ExpectedImage {
+            size_bytes: range.length,
+            sha256: digest,
+        };
+        if let Some(prior) = expected.insert(member.clone(), image.clone())
+            && prior != image
+        {
+            return Err(DispatchFailure::BeforeAnyEffect(format!(
+                "write input {member} has contradictory declarations"
+            )));
+        }
+    }
+    let profile_members: BTreeSet<String> = profile
+        .allowed_targets
+        .iter()
+        .filter_map(|target| target.source_member.clone())
+        .collect();
+    let plan_members: BTreeSet<String> = expected.keys().cloned().collect();
+    if expected.is_empty() || plan_members != profile_members {
+        return Err(DispatchFailure::BeforeAnyEffect(format!(
+            "validated plan write inputs {plan_members:?} disagree with profile inputs \
+             {profile_members:?}"
+        )));
+    }
+    Ok(expected)
+}
+
+fn materialize_staging_cache(
+    store_root: &Path,
+    cache_root: &Path,
+    artifact_digest: Sha256Digest,
+    expected: &BTreeMap<String, ExpectedImage>,
+) -> Result<StagingUse, DispatchFailure> {
+    create_cache_directory(cache_root)?;
+    let key = staging_cache_key(artifact_digest, expected);
+    let directory = cache_root.join(&key);
+    if directory.exists() {
+        return load_staging_cache(&directory, expected, true);
+    }
+
+    let nonce = SystemTime::now()
+        .duration_since(SystemTime::UNIX_EPOCH)
+        .map(|duration| duration.as_nanos())
+        .unwrap_or(0);
+    let temporary = cache_root.join(format!(".{key}-{}-{nonce}.part", std::process::id()));
+    fs::create_dir(&temporary).map_err(cache_io)?;
+    set_cache_permissions(&temporary, 0o700)?;
+
+    let build = (|| -> Result<(), DispatchFailure> {
+        let store = ContentAddressedStore::open(store_root, CasQuota::dayu200_default())
+            .map_err(|error| DispatchFailure::BeforeAnyEffect(error.to_string()))?;
+        let manifest = dayu200::inspect(
+            store
+                .open_object(&artifact_digest)
+                .map_err(|error| DispatchFailure::BeforeAnyEffect(error.to_string()))?,
+        )
+        .map_err(|error| DispatchFailure::BeforeAnyEffect(error.to_string()))?;
+        let wanted: BTreeSet<String> = expected.keys().cloned().collect();
+        let report = stage_members(
+            store
+                .open_object(&artifact_digest)
+                .map_err(|error| DispatchFailure::BeforeAnyEffect(error.to_string()))?,
+            &manifest,
+            &wanted,
+            &temporary,
+        )
+        .map_err(|error| DispatchFailure::BeforeAnyEffect(error.to_string()))?;
+        if report.members.len() != expected.len() {
+            return Err(DispatchFailure::BeforeAnyEffect(format!(
+                "staging cache produced {} inputs, expected {}",
+                report.members.len(),
+                expected.len()
+            )));
+        }
+        for (name, required) in expected {
+            let staged = report.members.get(name).ok_or_else(|| {
+                DispatchFailure::BeforeAnyEffect(format!(
+                    "staging cache did not produce required input {name}"
+                ))
+            })?;
+            if staged.size_bytes != required.size_bytes || staged.sha256 != required.sha256 {
+                return Err(DispatchFailure::BeforeAnyEffect(format!(
+                    "staged input {name} is {} bytes hashing to {}; the validated plan requires \
+                     {} bytes hashing to {}",
+                    staged.size_bytes, staged.sha256, required.size_bytes, required.sha256
+                )));
+            }
+            set_cache_permissions(&staged.path, 0o400)?;
+        }
+        sync_cache_directory(&temporary)?;
+        set_cache_permissions(&temporary, 0o500)?;
+        Ok(())
+    })();
+    if let Err(error) = build {
+        let _ = make_cache_removable(&temporary);
+        let _ = fs::remove_dir_all(&temporary);
+        return Err(error);
+    }
+
+    match fs::rename(&temporary, &directory) {
+        Ok(()) => sync_cache_directory(cache_root)?,
+        Err(error) if directory.exists() => {
+            let _ = make_cache_removable(&temporary);
+            let _ = fs::remove_dir_all(&temporary);
+            if !directory.is_dir() {
+                return Err(cache_io(error));
+            }
+        }
+        Err(error) => {
+            let _ = make_cache_removable(&temporary);
+            let _ = fs::remove_dir_all(&temporary);
+            return Err(cache_io(error));
+        }
+    }
+    load_staging_cache(&directory, expected, false)
+}
+
+fn load_staging_cache(
+    directory: &Path,
+    expected: &BTreeMap<String, ExpectedImage>,
+    cache_hit: bool,
+) -> Result<StagingUse, DispatchFailure> {
+    if !directory.is_dir() {
+        return Err(DispatchFailure::BeforeAnyEffect(format!(
+            "staging cache {} is not a directory",
+            directory.display()
+        )));
+    }
+    let observed: BTreeSet<String> = fs::read_dir(directory)
+        .map_err(cache_io)?
+        .map(|entry| {
+            entry.map_err(cache_io).and_then(|entry| {
+                entry.file_name().into_string().map_err(|_| {
+                    DispatchFailure::BeforeAnyEffect(format!(
+                        "staging cache {} contains a non-UTF-8 name",
+                        directory.display()
+                    ))
+                })
+            })
+        })
+        .collect::<Result<_, _>>()?;
+    let wanted: BTreeSet<String> = expected.keys().cloned().collect();
+    if observed != wanted {
+        return Err(DispatchFailure::BeforeAnyEffect(format!(
+            "staging cache entries {observed:?} disagree with required inputs {wanted:?}"
+        )));
+    }
+
+    let mut images = BTreeMap::new();
+    let mut bytes = 0u64;
+    for (name, required) in expected {
+        let name_path = Path::new(name);
+        if name_path.file_name().and_then(|value| value.to_str()) != Some(name) {
+            return Err(DispatchFailure::BeforeAnyEffect(format!(
+                "staging input name {name:?} is not one plain path component"
+            )));
+        }
+        let path = directory.join(name);
+        let metadata = fs::symlink_metadata(&path).map_err(cache_io)?;
+        if !metadata.file_type().is_file() || metadata.len() != required.size_bytes {
+            return Err(DispatchFailure::BeforeAnyEffect(format!(
+                "cached input {name} is not a regular {}-byte file",
+                required.size_bytes
+            )));
+        }
+        ensure_cache_read_only(&path, &metadata)?;
+        bytes = bytes.checked_add(required.size_bytes).ok_or_else(|| {
+            DispatchFailure::BeforeAnyEffect("staging input byte count overflows u64".into())
+        })?;
+        images.insert(
+            name.clone(),
+            StagedImage {
+                member: name.clone(),
+                path,
+                size_bytes: required.size_bytes,
+                sha256: required.sha256,
+            },
+        );
+    }
+    Ok(StagingUse {
+        images,
+        bytes,
+        source: if cache_hit {
+            "content-addressed-cache"
+        } else {
+            "artifact-extraction"
+        },
+        cache_hit,
+    })
+}
+
+fn staging_cache_key(
+    artifact_digest: Sha256Digest,
+    expected: &BTreeMap<String, ExpectedImage>,
+) -> String {
+    let mut hasher = Sha256::new();
+    hasher.update(b"arkforge-staging-cache-v1\0");
+    hasher.update(artifact_digest.to_hex().as_bytes());
+    hasher.update(b"\0");
+    for (name, image) in expected {
+        hasher.update(name.as_bytes());
+        hasher.update(b"\0");
+        hasher.update(&image.size_bytes.to_be_bytes());
+        hasher.update(image.sha256.to_hex().as_bytes());
+        hasher.update(b"\0");
+    }
+    hasher.finalize().to_hex()
+}
+
+fn create_cache_directory(path: &Path) -> Result<(), DispatchFailure> {
+    fs::create_dir_all(path).map_err(cache_io)?;
+    set_cache_permissions(path, 0o700)
+}
+
+fn sync_cache_directory(path: &Path) -> Result<(), DispatchFailure> {
+    fs::File::open(path)
+        .and_then(|directory| directory.sync_all())
+        .map_err(cache_io)
+}
+
+fn cache_io(error: std::io::Error) -> DispatchFailure {
+    DispatchFailure::BeforeAnyEffect(format!("staging cache I/O failed: {error}"))
+}
+
+#[cfg(unix)]
+fn set_cache_permissions(path: &Path, mode: u32) -> Result<(), DispatchFailure> {
+    use std::os::unix::fs::PermissionsExt;
+    fs::set_permissions(path, fs::Permissions::from_mode(mode)).map_err(cache_io)
+}
+
+#[cfg(not(unix))]
+fn set_cache_permissions(_path: &Path, _mode: u32) -> Result<(), DispatchFailure> {
+    Ok(())
+}
+
+#[cfg(unix)]
+fn ensure_cache_read_only(path: &Path, metadata: &fs::Metadata) -> Result<(), DispatchFailure> {
+    use std::os::unix::fs::PermissionsExt;
+    if metadata.permissions().mode() & 0o222 != 0 {
+        return Err(DispatchFailure::BeforeAnyEffect(format!(
+            "cached input {} remains writable",
+            path.display()
+        )));
+    }
+    Ok(())
+}
+
+#[cfg(not(unix))]
+fn ensure_cache_read_only(_path: &Path, _metadata: &fs::Metadata) -> Result<(), DispatchFailure> {
+    Ok(())
+}
+
+fn make_cache_removable(path: &Path) -> Result<(), DispatchFailure> {
+    set_cache_permissions(path, 0o700)?;
+    for entry in fs::read_dir(path).map_err(cache_io)? {
+        let entry = entry.map_err(cache_io)?;
+        set_cache_permissions(&entry.path(), 0o600)?;
+    }
+    Ok(())
 }
 
 /// Why a dispatch did not produce a receipt, and what that implies.
@@ -513,36 +891,25 @@ impl RockUsbPort for NativeRockUsbPort {
         &self,
         partition: &str,
         begin_sector: u64,
-        image: &StagedImage,
+        image: &mut ValidatedImage,
     ) -> Result<RockUsbMutationReceipt, RockUsbPortFailure> {
         if partition.is_empty() {
             return Err(RockUsbPortFailure::BeforeIo(
                 "native WRITE_LBA target has an empty partition name".into(),
             ));
         }
-        // Open and size the already revalidated staging file before claiming
-        // USB. A local path failure cannot become an unknown device effect.
-        let mut file = std::fs::File::open(&image.path).map_err(|error| {
-            RockUsbPortFailure::BeforeIo(format!("{}: {error}", image.path.display()))
-        })?;
-        let observed_bytes = file
-            .metadata()
-            .map_err(|error| {
-                RockUsbPortFailure::BeforeIo(format!("{}: {error}", image.path.display()))
-            })?
-            .len();
-        if observed_bytes != image.size_bytes {
-            return Err(RockUsbPortFailure::BeforeIo(format!(
-                "{} is {observed_bytes} bytes; the staged input is exactly {} bytes",
-                image.path.display(),
-                image.size_bytes
-            )));
-        }
-        let total_bytes = image.size_bytes;
+        // Validation retained the exact open file description. Recheck its
+        // inode fingerprint and rewind it before claiming USB; a pathname swap
+        // or chmod/write now remains a confirmed-no-effect refusal.
+        let staged = image.staged().clone();
+        let file = image
+            .prepare_for_write()
+            .map_err(RockUsbPortFailure::BeforeIo)?;
+        let total_bytes = staged.size_bytes;
         if total_bytes == 0 {
             return Err(RockUsbPortFailure::BeforeIo(format!(
                 "{} is empty; refusing a zero-length WRITE_LBA",
-                image.path.display()
+                staged.path.display()
             )));
         }
         let total_sectors = total_bytes / 512 + u64::from(!total_bytes.is_multiple_of(512));
@@ -567,7 +934,7 @@ impl RockUsbPort for NativeRockUsbPort {
 
         let started = std::time::Instant::now();
         let mut hasher = arkforge_core::digest::Sha256::new();
-        let mut buffer = vec![0u8; 128 * 512];
+        let mut buffer = vec![0u8; ROCKUSB_TRANSFER_CHUNK_SECTORS as usize * LOGICAL_BLOCK_BYTES];
         let mut remaining = total_bytes;
         let mut position = begin_sector;
         let mut chunks = 0u64;
@@ -584,13 +951,13 @@ impl RockUsbPort for NativeRockUsbPort {
             let mut filled = 0usize;
             while filled < wanted {
                 let read = file.read(&mut buffer[filled..wanted]).map_err(|error| {
-                    local_failure(format!("{}: {error}", image.path.display()), chunks)
+                    local_failure(format!("{}: {error}", staged.path.display()), chunks)
                 })?;
                 if read == 0 {
                     return Err(local_failure(
                         format!(
                             "{} became shorter while native WRITE_LBA was reading it",
-                            image.path.display()
+                            staged.path.display()
                         ),
                         chunks,
                     ));
@@ -607,26 +974,27 @@ impl RockUsbPort for NativeRockUsbPort {
         }
         let mut extra = [0u8; 1];
         let extra_read = file.read(&mut extra).map_err(|error| {
-            RockUsbPortFailure::AfterIo(format!("{}: {error}", image.path.display()))
+            RockUsbPortFailure::AfterIo(format!("{}: {error}", staged.path.display()))
         })?;
         if extra_read != 0 {
             return Err(RockUsbPortFailure::AfterIo(format!(
                 "{} grew while native WRITE_LBA was reading it",
-                image.path.display()
+                staged.path.display()
             )));
         }
 
         let payload_digest = hasher.finalize();
-        if payload_digest != image.sha256 {
+        if payload_digest != staged.sha256 {
             return Err(RockUsbPortFailure::AfterIo(format!(
                 "native WRITE_LBA payload hashes to {payload_digest}; staged input is {}",
-                image.sha256
+                staged.sha256
             )));
         }
         let progress = RockUsbWriteProgress {
             payload_bytes: total_bytes,
             wire_sectors: total_sectors,
             chunks,
+            chunk_sectors: ROCKUSB_TRANSFER_CHUNK_SECTORS,
             payload_digest,
         };
         let detail = format!(
@@ -687,42 +1055,139 @@ pub fn executable_digest(path: &Path) -> Result<arkforge_core::Sha256Digest, Str
 #[cfg(test)]
 mod tests {
     use super::*;
+    use arkforge_artifact::fixture;
+
+    struct TempRoot(PathBuf);
+
+    impl TempRoot {
+        fn new(label: &str) -> Self {
+            let nonce = SystemTime::now()
+                .duration_since(SystemTime::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos();
+            let path = std::env::temp_dir().join(format!(
+                "arkforge-dispatch-{label}-{}-{nonce}",
+                std::process::id()
+            ));
+            fs::create_dir_all(&path).unwrap();
+            TempRoot(path)
+        }
+    }
+
+    impl Drop for TempRoot {
+        fn drop(&mut self) {
+            make_tree_removable(&self.0);
+            let _ = fs::remove_dir_all(&self.0);
+        }
+    }
+
+    fn make_tree_removable(path: &Path) {
+        if let Ok(metadata) = fs::symlink_metadata(path) {
+            if metadata.is_dir() {
+                let _ = set_cache_permissions(path, 0o700);
+                if let Ok(entries) = fs::read_dir(path) {
+                    for entry in entries.flatten() {
+                        make_tree_removable(&entry.path());
+                    }
+                }
+            } else {
+                let _ = set_cache_permissions(path, 0o600);
+            }
+        }
+    }
+
+    #[test]
+    fn a_published_staging_cache_is_reused_and_still_revalidated_before_write() {
+        let root = TempRoot::new("staging-cache");
+        let store_root = root.0.join("store");
+        let cache_root = root.0.join("work/cache");
+        let archive = fixture::dayu200_archive();
+        let store = ContentAddressedStore::open(&store_root, CasQuota::dayu200_default()).unwrap();
+        let imported = store
+            .import(archive.as_slice(), archive.len() as u64, None)
+            .unwrap();
+        let manifest = dayu200::inspect(archive.as_slice()).unwrap();
+        let mut expected = BTreeMap::new();
+        for name in ["uboot.img", "system.img"] {
+            let member = manifest.member(name).unwrap();
+            expected.insert(
+                name.to_string(),
+                ExpectedImage {
+                    size_bytes: member.size_bytes,
+                    sha256: member.sha256,
+                },
+            );
+        }
+
+        let first = materialize_staging_cache(&store_root, &cache_root, imported.digest, &expected)
+            .unwrap();
+        assert!(!first.cache_hit);
+        assert_eq!(first.source, "artifact-extraction");
+        for image in first.images.values() {
+            image.revalidate().unwrap();
+        }
+
+        let second =
+            materialize_staging_cache(&store_root, &cache_root, imported.digest, &expected)
+                .unwrap();
+        assert!(second.cache_hit);
+        assert_eq!(second.source, "content-addressed-cache");
+        assert_eq!(
+            first
+                .images
+                .values()
+                .map(|image| image.path.clone())
+                .collect::<Vec<_>>(),
+            second
+                .images
+                .values()
+                .map(|image| image.path.clone())
+                .collect::<Vec<_>>()
+        );
+
+        let image = second.images.get("uboot.img").unwrap();
+        set_cache_permissions(&image.path, 0o600).unwrap();
+        let mut corrupted = fs::read(&image.path).unwrap();
+        corrupted[0] ^= 0xff;
+        fs::write(&image.path, corrupted).unwrap();
+        set_cache_permissions(&image.path, 0o400).unwrap();
+        assert!(
+            image.revalidate().is_err(),
+            "a cache hit never bypasses the full pre-write hash"
+        );
+    }
 
     #[test]
     fn native_write_local_preconditions_are_checked_before_usb_io() {
         let port = NativeRockUsbPort::new();
+        let missing = StagedImage {
+            member: "uboot.img".into(),
+            path: PathBuf::from("/never-opened.img"),
+            size_bytes: 512,
+            sha256: arkforge_core::digest::sha256(b"missing"),
+        };
         assert!(matches!(
-            port.write_partition(
-                "uboot",
-                0x2000,
-                &StagedImage {
-                    member: "uboot.img".into(),
-                    path: PathBuf::from("/never-opened.img"),
-                    size_bytes: 512,
-                    sha256: arkforge_core::digest::sha256(b"missing"),
-                }
-            ),
-            Err(RockUsbPortFailure::BeforeIo(_))
+            missing.open_and_revalidate(),
+            Err(ExecutionError::StagingChanged(_))
         ));
-        let empty = std::env::temp_dir().join(format!(
+        let empty_path = std::env::temp_dir().join(format!(
             "arkforge-native-empty-write-{}",
             std::process::id()
         ));
-        std::fs::write(&empty, []).unwrap();
+        std::fs::write(&empty_path, []).unwrap();
+        let mut empty = StagedImage {
+            member: "uboot.img".into(),
+            path: empty_path.clone(),
+            size_bytes: 0,
+            sha256: arkforge_core::digest::sha256(b""),
+        }
+        .open_and_revalidate()
+        .unwrap();
         assert!(matches!(
-            port.write_partition(
-                "uboot",
-                0x2000,
-                &StagedImage {
-                    member: "uboot.img".into(),
-                    path: empty.clone(),
-                    size_bytes: 0,
-                    sha256: arkforge_core::digest::sha256(b""),
-                }
-            ),
+            port.write_partition("uboot", 0x2000, &mut empty),
             Err(RockUsbPortFailure::BeforeIo(_))
         ));
-        let _ = std::fs::remove_file(empty);
+        let _ = std::fs::remove_file(empty_path);
     }
 
     #[test]

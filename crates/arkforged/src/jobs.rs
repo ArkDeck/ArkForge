@@ -177,6 +177,10 @@ pub struct PendingDispatch {
     /// its primary run against a measurement nobody took — which is how a
     /// readback ends up classifying filler it has no way to interpret.
     pub actions: Vec<PrivateActionRecord>,
+    /// The whole validated private plan. The dispatcher uses only its declared
+    /// write inputs to bind a persistent staging-cache key; it never broadens
+    /// the effects of the current step from this list.
+    pub plan_actions: Vec<PrivateActionRecord>,
     /// The profile whose allowlist the write is checked against. Carried with
     /// the work so the dispatcher never has to reach back into the service for
     /// it — which is what keeps the lock uncontended while it runs.
@@ -201,6 +205,8 @@ pub struct DispatchOutcome {
 pub enum JobStop {
     /// Every step is done.
     Completed,
+    /// A read-only verification reached a conclusive negative verdict.
+    ConfirmedFailure { reason: String },
     /// The authority refused an admission. Safe: no intent was recorded.
     RefusedByAuthority { step_id: String, reason: String },
     /// The dispatcher ran the step and could not establish that it succeeded.
@@ -220,6 +226,7 @@ impl fmt::Display for JobStop {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             JobStop::Completed => f.write_str("every step completed"),
+            JobStop::ConfirmedFailure { reason } => f.write_str(reason),
             JobStop::RefusedByAuthority { step_id, reason } => {
                 write!(f, "the authority refused admission for {step_id}: {reason}")
             }
@@ -521,12 +528,24 @@ impl JobRegistry {
             job.pending = None;
             job.move_to(JobState::AwaitingPermit).ok();
             job.move_to(JobState::CancelledSafe)?;
-            let digest = job.journal.append(
+            job.journal.append(
                 JournalRecordKind::CancellationRequested,
                 now_epoch_ms,
                 1,
                 id(&snapshot.step_id)?,
                 vec![(id("refusal")?, refusal.to_string())],
+            )?;
+            let event_sequence = job.next_sequence();
+            let digest = job.journal.append(
+                JournalRecordKind::OutcomeClassified,
+                now_epoch_ms,
+                1,
+                id(&snapshot.step_id)?,
+                vec![
+                    (id("outcome")?, "cancelledSafe".into()),
+                    (id("reason")?, refusal.to_string()),
+                    (id("eventSequence")?, event_sequence.to_string()),
+                ],
             )?;
             job.stopped = Some(JobStop::RefusedByAuthority {
                 step_id: snapshot.step_id.clone(),
@@ -703,6 +722,7 @@ impl JobRegistry {
                         step_id: step_id.clone(),
                         permit_id,
                         actions,
+                        plan_actions: private_plan.actions.clone(),
                         profile: profile.clone(),
                         artifact_digest,
                         intent_digest,
@@ -779,14 +799,18 @@ impl JobRegistry {
                 request.deadline_epoch_ms,
                 now_epoch_ms
             );
-            let (Ok(subject), Ok(outcome_key), Ok(reason_key)) =
-                (id(&step_id), id("outcome"), id("reason"))
-            else {
+            let (Ok(subject), Ok(outcome_key), Ok(reason_key), Ok(event_sequence_key)) = (
+                id(&step_id),
+                id("outcome"),
+                id("reason"),
+                id("eventSequence"),
+            ) else {
                 continue;
             };
             // Durable first, state after: an expiry the journal cannot record
             // is left pending and retried on the next sweep, rather than moved
             // to a state the journal never explains.
+            let event_sequence = job.next_sequence();
             let Ok(digest) = job.journal.append(
                 JournalRecordKind::OutcomeClassified,
                 now_epoch_ms,
@@ -795,6 +819,7 @@ impl JobRegistry {
                 vec![
                     (outcome_key, "outcomeUnknown".to_string()),
                     (reason_key, reason.clone()),
+                    (event_sequence_key, event_sequence.to_string()),
                 ],
             ) else {
                 continue;
@@ -860,12 +885,16 @@ impl JobRegistry {
 
         if outcome.disposition != ActionDisposition::SemanticSuccess {
             job.move_to(JobState::OutcomeUnknown)?;
+            let event_sequence = job.next_sequence();
             let digest = job.journal.append(
                 JournalRecordKind::OutcomeClassified,
                 now_epoch_ms,
                 1,
                 id(&step_id)?,
-                vec![(id("outcome")?, outcome.disposition.as_str().to_string())],
+                vec![
+                    (id("outcome")?, outcome.disposition.as_str().to_string()),
+                    (id("eventSequence")?, event_sequence.to_string()),
+                ],
             )?;
             job.stopped = Some(JobStop::DispatchOutcomeUnknown {
                 step_id: step_id.clone(),
@@ -993,6 +1022,50 @@ impl JobRegistry {
             |_| {},
         );
 
+        if let Some(VerificationOutcome::Failed { classification, .. }) = &outcome.verification {
+            let reason = format!(
+                "{step_id} verification failed conclusively: {}",
+                classification.as_str()
+            );
+            let event_sequence = job.next_sequence();
+            let digest = job.journal.append(
+                JournalRecordKind::OutcomeClassified,
+                now_epoch_ms,
+                1,
+                id(&step_id)?,
+                vec![
+                    (id("outcome")?, "confirmedFailed".into()),
+                    (id("reason")?, reason.clone()),
+                    (id("failureClassification")?, classification.as_str().into()),
+                    (id("eventSequence")?, event_sequence.to_string()),
+                ],
+            )?;
+            job.move_to(JobState::ConfirmedFailed)?;
+            job.stopped = Some(JobStop::ConfirmedFailure {
+                reason: reason.clone(),
+            });
+            job.publish(
+                JobEventKind::OutcomeClassified,
+                now_epoch_ms,
+                digest,
+                |event| {
+                    event.facts.push(KeyValue {
+                        key: "outcome".into(),
+                        value: "confirmedFailed".into(),
+                    });
+                    event.facts.push(KeyValue {
+                        key: "reason".into(),
+                        value: reason,
+                    });
+                    event.facts.push(KeyValue {
+                        key: "failureClassification".into(),
+                        value: classification.as_str().into(),
+                    });
+                },
+            );
+            return Ok(());
+        }
+
         if job.cancellation_requested {
             finish_queued_cancellation(job, now_epoch_ms, checkpoint)
         } else {
@@ -1041,6 +1114,12 @@ impl JobRegistry {
                 found: request.action,
             });
         }
+        if request.accepted {
+            let missing = missing_expected_control_facts(&asked.expected_facts, &request.facts);
+            if !missing.is_empty() {
+                return Err(JobError::ControlFactsIncomplete(missing));
+            }
+        }
 
         let step_id = asked.step_id.clone();
         job.journal.append(
@@ -1066,6 +1145,7 @@ impl JobRegistry {
             // `permitConsuming` with both sides waiting on the other, which is
             // the deadlock that held the bench for three days.
             job.move_to(JobState::OutcomeUnknown)?;
+            let event_sequence = job.next_sequence();
             let digest = job.journal.append(
                 JournalRecordKind::OutcomeClassified,
                 now_epoch_ms,
@@ -1074,6 +1154,7 @@ impl JobRegistry {
                 vec![
                     (id("outcome")?, "outcomeUnknown".to_string()),
                     (id("reason")?, request.failure_reason.clone()),
+                    (id("eventSequence")?, event_sequence.to_string()),
                 ],
             )?;
             job.pending = None;
@@ -1261,6 +1342,7 @@ fn conclude_cancellation(
     _prior: Sha256Digest,
     reason: &str,
 ) -> Result<(), JobError> {
+    let event_sequence = job.next_sequence();
     let digest = job.journal.append(
         JournalRecordKind::OutcomeClassified,
         now_epoch_ms,
@@ -1269,6 +1351,7 @@ fn conclude_cancellation(
         vec![
             (id("outcome")?, "cancelledSafe".into()),
             (id("reason")?, reason.into()),
+            (id("eventSequence")?, event_sequence.to_string()),
         ],
     )?;
     job.pending = None;
@@ -1299,21 +1382,38 @@ fn advance(
     job: &mut Job,
     envelope: &FlashPlanEnvelope,
     now_epoch_ms: u64,
-    checkpoint: Sha256Digest,
+    _checkpoint: Sha256Digest,
 ) -> Result<(), JobError> {
     job.step_index += 1;
     if job.step_index >= envelope.public_steps.len() {
+        let reason = "every step completed";
+        let event_sequence = job.next_sequence();
+        let digest = job.journal.append(
+            JournalRecordKind::OutcomeClassified,
+            now_epoch_ms,
+            1,
+            id(&job.job_id)?,
+            vec![
+                (id("outcome")?, "succeeded".into()),
+                (id("reason")?, reason.into()),
+                (id("eventSequence")?, event_sequence.to_string()),
+            ],
+        )?;
         job.move_to(JobState::Postflight)?;
         job.move_to(JobState::Succeeded)?;
         job.stopped = Some(JobStop::Completed);
         job.publish(
             JobEventKind::OutcomeClassified,
             now_epoch_ms,
-            checkpoint,
+            digest,
             |event| {
                 event.facts.push(KeyValue {
                     key: "outcome".into(),
                     value: "succeeded".into(),
+                });
+                event.facts.push(KeyValue {
+                    key: "reason".into(),
+                    value: reason.into(),
                 });
             },
         );
@@ -1528,6 +1628,14 @@ pub fn canonical_facts_digest(facts: &[KeyValue]) -> Sha256Digest {
     sha256::sha256(&bytes)
 }
 
+fn missing_expected_control_facts(expected: &[KeyValue], observed: &[KeyValue]) -> Vec<String> {
+    expected
+        .iter()
+        .filter(|expected| !observed.contains(expected))
+        .map(|expected| expected.key.clone())
+        .collect()
+}
+
 fn digest_from(bytes: &[u8]) -> Option<Sha256Digest> {
     if bytes.len() != 32 {
         return None;
@@ -1575,20 +1683,39 @@ fn recover_job(path: &Path) -> Result<Job, JobError> {
     let total_steps = fact_value("totalSteps")
         .and_then(|value| value.parse().ok())
         .unwrap_or(step_index);
-    let last_classification = records
+    // The first durable terminal classification wins. A terminal result is an
+    // immutable fact; a later daemon must never replace it with a restart
+    // opinion, even if an older buggy build appended one.
+    let first_classification = records
         .iter()
-        .rev()
         .find(|record| record.kind == JournalRecordKind::OutcomeClassified)
         .and_then(|record| {
-            record
+            let outcome = record
                 .facts
                 .iter()
                 .find(|(key, _)| key.as_str() == "outcome")
-                .map(|(_, value)| (value.clone(), record.record_digest, record.at_epoch_ms))
+                .map(|(_, value)| value.clone())?;
+            let reason = record
+                .facts
+                .iter()
+                .find(|(key, _)| key.as_str() == "reason")
+                .map(|(_, value)| value.clone());
+            let event_sequence = record
+                .facts
+                .iter()
+                .find(|(key, _)| key.as_str() == "eventSequence")
+                .and_then(|(_, value)| value.parse::<u64>().ok());
+            Some((
+                outcome,
+                reason,
+                event_sequence,
+                record.record_digest,
+                record.at_epoch_ms,
+            ))
         });
 
-    let (state, outcome, reason, record_digest, at_epoch_ms) =
-        if let Some((outcome, digest, at)) = last_classification {
+    let (state, outcome, reason, record_digest, at_epoch_ms, event_sequence) =
+        if let Some((outcome, reason, event_sequence, digest, at)) = first_classification {
             let state = match outcome.as_str() {
                 "succeeded" => JobState::Succeeded,
                 "cancelledSafe" => JobState::CancelledSafe,
@@ -1599,9 +1726,10 @@ fn recover_job(path: &Path) -> Result<Job, JobError> {
             (
                 state,
                 outcome,
-                "replayed from durable journal".to_string(),
+                reason.unwrap_or_else(|| "replayed from durable journal".to_string()),
                 digest,
                 at,
+                event_sequence.unwrap_or(journal.len() as u64),
             )
         } else {
             let unresolved = !PermitLedger::from_journal(journal.journal())
@@ -1612,6 +1740,15 @@ fn recover_job(path: &Path) -> Result<Job, JobError> {
                     JobState::OutcomeUnknown,
                     "outcomeUnknown",
                     "daemon restarted with a durable external intent and no settled receipt",
+                )
+            } else if total_steps > 0 && step_index >= total_steps {
+                // Builds before durable terminal classifications published the
+                // success event only in memory. All declared checkpoints are
+                // sufficient to migrate that legacy journal to success once.
+                (
+                    JobState::Succeeded,
+                    "succeeded",
+                    "every step completed (migrated from legacy journal)",
                 )
             } else {
                 (
@@ -1624,6 +1761,7 @@ fn recover_job(path: &Path) -> Result<Job, JobError> {
                 .last()
                 .map(|record| record.at_epoch_ms.saturating_add(1))
                 .unwrap_or(0);
+            let event_sequence = journal.len() as u64 + 1;
             let digest = journal.append(
                 JournalRecordKind::OutcomeClassified,
                 at,
@@ -1632,13 +1770,24 @@ fn recover_job(path: &Path) -> Result<Job, JobError> {
                 vec![
                     (id("outcome")?, outcome.to_string()),
                     (id("reason")?, reason.to_string()),
+                    (id("eventSequence")?, event_sequence.to_string()),
                 ],
             )?;
-            (state, outcome.to_string(), reason.to_string(), digest, at)
+            (
+                state,
+                outcome.to_string(),
+                reason.to_string(),
+                digest,
+                at,
+                event_sequence,
+            )
         };
 
     let stopped = match state {
         JobState::Succeeded => Some(JobStop::Completed),
+        JobState::ConfirmedFailed => Some(JobStop::ConfirmedFailure {
+            reason: reason.clone(),
+        }),
         JobState::CancelledSafe => Some(JobStop::RefusedByAuthority {
             step_id: "daemon-restart".to_string(),
             reason: reason.clone(),
@@ -1653,7 +1802,7 @@ fn recover_job(path: &Path) -> Result<Job, JobError> {
     };
     let event = JobEvent {
         job_id: job_id.clone(),
-        sequence: journal.len() as u64,
+        sequence: event_sequence,
         kind: JobEventKind::OutcomeClassified,
         at_epoch_ms,
         journal_record_sha256: record_digest.as_bytes().to_vec(),
@@ -1713,6 +1862,7 @@ pub enum JobError {
     },
     TagNotADigest,
     ControlEvidenceMismatch,
+    ControlFactsIncomplete(Vec<String>),
     ReceiptCarriesForbiddenFacts(Vec<String>),
     UnknownControlAction(String),
     CancelWouldHideAnUnresolvedEffect,
@@ -1746,6 +1896,7 @@ impl JobError {
             JobError::ObservedModeMismatch { .. } => "OBSERVED_MODE_MISMATCH",
             JobError::TagNotADigest => "NOT_A_DIGEST",
             JobError::ControlEvidenceMismatch => "CONTROL_EVIDENCE_MISMATCH",
+            JobError::ControlFactsIncomplete(_) => "CONTROL_FACTS_INCOMPLETE",
             JobError::ReceiptCarriesForbiddenFacts(_) => "RECEIPT_CARRIES_FORBIDDEN_FACTS",
             JobError::UnknownControlAction(_) => "UNKNOWN_CONTROL_ACTION",
             JobError::CancelWouldHideAnUnresolvedEffect => "CANCEL_NOT_SAFE",
@@ -1805,6 +1956,11 @@ impl fmt::Display for JobError {
             JobError::TagNotADigest => f.write_str("a digest field is not 32 bytes"),
             JobError::ControlEvidenceMismatch => f.write_str(
                 "the receipt's evidence digest is not the canonical digest of its own facts",
+            ),
+            JobError::ControlFactsIncomplete(keys) => write!(
+                f,
+                "the accepted control receipt does not reproduce the requested fact(s): {}",
+                keys.join(", ")
             ),
             JobError::ReceiptCarriesForbiddenFacts(keys) => write!(
                 f,
@@ -1869,4 +2025,40 @@ pub fn read_pairing_secret_from_stdin(epoch: u64) -> Result<ControllerPairingSec
 /// The path a job's journal lives at, given the registry root.
 pub fn journal_path(root: &Path, job_id: &str) -> PathBuf {
     root.join(format!("{job_id}.journal"))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn accepted_control_facts_must_reproduce_every_expected_pair() {
+        let expected = vec![
+            KeyValue {
+                key: "const.ohos.fullname".into(),
+                value: "OpenHarmony-7.0.0.37".into(),
+            },
+            KeyValue {
+                key: "const.product.model".into(),
+                value: "ohos".into(),
+            },
+        ];
+        assert_eq!(
+            missing_expected_control_facts(&expected, &expected[..1]),
+            ["const.product.model"]
+        );
+        assert!(missing_expected_control_facts(&expected, &expected).is_empty());
+
+        let wrong_model = vec![
+            expected[0].clone(),
+            KeyValue {
+                key: "const.product.model".into(),
+                value: "replacement".into(),
+            },
+        ];
+        assert_eq!(
+            missing_expected_control_facts(&expected, &wrong_model),
+            ["const.product.model"]
+        );
+    }
 }

@@ -470,6 +470,21 @@ fn an_authority_refusal_cancels_safely() {
         job.stopped(),
         Some(JobStop::RefusedByAuthority { .. })
     ));
+    let terminal_sequence = job.last_sequence();
+    let journal_path = root.0.join(format!("{job_id}.journal"));
+    let terminal_journal_len = std::fs::metadata(&journal_path).unwrap().len();
+    drop(registry);
+
+    for _ in 0..2 {
+        let reopened = JobRegistry::open(&root.0).unwrap();
+        let recovered = reopened.job(&job_id).expect("refused job survives restart");
+        assert_eq!(recovered.state(), JobState::CancelledSafe);
+        assert_eq!(recovered.last_sequence(), terminal_sequence);
+        assert_eq!(
+            std::fs::metadata(&journal_path).unwrap().len(),
+            terminal_journal_len
+        );
+    }
 }
 
 #[test]
@@ -1238,6 +1253,7 @@ fn a_permit_round_trips_through_its_canonical_bytes() {
 struct ScriptedPort {
     operations: std::cell::RefCell<Vec<String>>,
     written: std::cell::RefCell<Vec<String>>,
+    full_read_face: bool,
 }
 
 impl ScriptedPort {
@@ -1353,8 +1369,10 @@ impl arkforge_provider::rockchip_execute::RockUsbPort for ScriptedPort {
         arkforge_provider::rockchip_execute::RockUsbPortFailure,
     > {
         self.operations.borrow_mut().push("readSectors".into());
-        let mut bytes = if begin_sector == 1 {
-            vec![0u8; sectors as usize * 512]
+        let mut bytes = if begin_sector == 1 || self.full_read_face {
+            (0..sectors as usize * 512)
+                .map(|index| (index % 251) as u8)
+                .collect()
         } else {
             vec![0xCC; sectors as usize * 512]
         };
@@ -1371,11 +1389,12 @@ impl arkforge_provider::rockchip_execute::RockUsbPort for ScriptedPort {
         &self,
         partition: &str,
         _begin_sector: u64,
-        image: &arkforge_provider::rockchip_execute::StagedImage,
+        image: &mut arkforge_provider::rockchip_execute::ValidatedImage,
     ) -> Result<
         arkforge_provider::rockchip_execute::RockUsbMutationReceipt,
         arkforge_provider::rockchip_execute::RockUsbPortFailure,
     > {
+        let image = image.staged();
         let bytes = std::fs::read(&image.path).map_err(|error| {
             arkforge_provider::rockchip_execute::RockUsbPortFailure::BeforeIo(error.to_string())
         })?;
@@ -1391,6 +1410,7 @@ impl arkforge_provider::rockchip_execute::RockUsbPort for ScriptedPort {
                     payload_bytes: bytes.len() as u64,
                     wire_sectors: bytes.len() as u64 / 512 + u64::from(bytes.len() % 512 != 0),
                     chunks: 1,
+                    chunk_sectors: 1,
                     payload_digest: sha256(&bytes),
                 }),
             },
@@ -1463,10 +1483,14 @@ fn walk_to_completion(
                         .is_some_and(|receipt| receipt.step_id == control.step_id)
             });
             if !already_answered {
-                let facts = vec![KeyValue {
-                    key: "mode".into(),
-                    value: "updater".into(),
-                }];
+                let facts = if control.expected_facts.is_empty() {
+                    vec![KeyValue {
+                        key: "mode".into(),
+                        value: "updater".into(),
+                    }]
+                } else {
+                    control.expected_facts.clone()
+                };
                 registry
                     .submit_control_receipt(
                         &SubmitManagedControlReceiptRequest {
@@ -1519,7 +1543,8 @@ fn walk_to_completion(
 fn a_job_dispatches_every_step_and_reaches_a_verdict_on_each() {
     let root = TempRoot::new("dispatch-walk");
     let fixture = plan_fixture();
-    let mut registry = JobRegistry::new(root.0.join("jobs"));
+    let jobs_root = root.0.join("jobs");
+    let mut registry = JobRegistry::new(&jobs_root);
     let port = ScriptedPort::default();
     let mut dispatcher =
         arkforged::dispatch::Dispatcher::new(root.0.join("store"), root.0.join("work"), &port);
@@ -1571,6 +1596,20 @@ fn a_job_dispatches_every_step_and_reaches_a_verdict_on_each() {
     assert_eq!(port.issued("readPartitionTable"), 1);
     assert_eq!(port.issued("resetDevice"), 1);
 
+    let postflight = receipts
+        .iter()
+        .find(|receipt| receipt.step_id == "STEP-023")
+        .expect("postflight publishes a receipt");
+    assert!(postflight.facts.iter().any(|fact| {
+        fact.key == "const.ohos.fullname" && fact.value == fixture::FIXTURE_BUILD_VERSION
+    }));
+    assert!(
+        postflight
+            .facts
+            .iter()
+            .any(|fact| fact.key == "const.product.model" && fact.value == "ohos")
+    );
+
     // Every readback landed outside the measured read window, so every one is a
     // typed skip — and a typed skip carries no strength (architecture.md 16.4).
     let verdicts: Vec<&str> = receipts
@@ -1592,6 +1631,80 @@ fn a_job_dispatches_every_step_and_reaches_a_verdict_on_each() {
             assert_eq!(receipt.typed_skip_reason, "skipped-lba-read-window");
         }
     }
+
+    // Success is itself a durable classification. Reopening the registry must
+    // neither reinterpret the completed job as a safe cancellation nor append
+    // another record. Repeat the check to catch restart-by-restart growth.
+    let terminal_sequence = job.events_from(0).last().unwrap().sequence;
+    let journal_path = jobs_root.join(format!("{job_id}.journal"));
+    let terminal_journal_len = std::fs::metadata(&journal_path).unwrap().len();
+    drop(registry);
+
+    for _ in 0..2 {
+        let reopened = JobRegistry::open(&jobs_root).unwrap();
+        let recovered = reopened
+            .job(&job_id)
+            .expect("completed job survives restart");
+        assert_eq!(recovered.state(), JobState::Succeeded);
+        assert_eq!(recovered.stopped(), Some(&JobStop::Completed));
+        assert_eq!(
+            recovered.events_from(0).last().unwrap().sequence,
+            terminal_sequence
+        );
+        assert_eq!(
+            std::fs::metadata(&journal_path).unwrap().len(),
+            terminal_journal_len,
+            "rehydrating a terminal job must not rewrite its journal"
+        );
+    }
+}
+
+#[test]
+fn a_conclusive_verification_failure_stops_before_reset_and_survives_restart() {
+    let root = TempRoot::new("verification-failed");
+    let fixture = plan_fixture();
+    let jobs_root = root.0.join("jobs");
+    let mut registry = JobRegistry::new(&jobs_root);
+    let port = ScriptedPort {
+        full_read_face: true,
+        ..ScriptedPort::default()
+    };
+    let mut dispatcher =
+        arkforged::dispatch::Dispatcher::new(root.0.join("store"), root.0.join("work"), &port);
+    stage_archive_into(&root.0.join("store"));
+
+    let job_id = registry
+        .start(
+            &fixture.envelope,
+            &fixture.private_plan,
+            ControllerSessionId::new("SESSION-1").unwrap(),
+            &admission_facts(&fixture, "hdc-normal", NOW),
+            NOW,
+        )
+        .unwrap();
+    let receipts = walk_to_completion(&mut registry, &mut dispatcher, &fixture, &job_id);
+    let job = registry.job(&job_id).unwrap();
+    assert_eq!(job.state(), JobState::ConfirmedFailed);
+    assert!(matches!(
+        job.stopped(),
+        Some(JobStop::ConfirmedFailure { .. })
+    ));
+    assert!(receipts.iter().any(|receipt| {
+        receipt.verification_outcome == "failed" && !receipt.failure_classification.is_empty()
+    }));
+    assert_eq!(port.writes().len(), 9, "writes finish before verification");
+    assert_eq!(port.issued("resetDevice"), 0, "failure blocks reset");
+
+    let terminal_sequence = job.last_sequence();
+    drop(registry);
+    let reopened = JobRegistry::open(&jobs_root).unwrap();
+    let recovered = reopened.job(&job_id).unwrap();
+    assert_eq!(recovered.state(), JobState::ConfirmedFailed);
+    assert_eq!(recovered.last_sequence(), terminal_sequence);
+    assert!(matches!(
+        recovered.stopped(),
+        Some(JobStop::ConfirmedFailure { .. })
+    ));
 }
 
 /// A refused staging precondition never reaches native USB, and the job says

@@ -11,7 +11,11 @@ use arkforge_artifact::manifest::{GrammarBranch, PartitionEntryFact, PartitionTa
 use core::fmt;
 
 pub const LOGICAL_BLOCK_BYTES: usize = 512;
-pub const ROCKUSB_TRANSFER_CHUNK_SECTORS: u16 = 128;
+/// One native RockUSB command transfers 8 MiB. The wire field permits a `u16`
+/// sector count; 16384 sectors stays well below that limit while amortizing the
+/// CBW/data/CSW round-trip 128-fold versus the historical rkdeveloptool
+/// host-side loop.
+pub const ROCKUSB_TRANSFER_CHUNK_SECTORS: u16 = 16384;
 
 const CBW_BYTES: usize = 31;
 const CSW_BYTES: usize = 13;
@@ -99,7 +103,7 @@ impl<'a> RockUsbProtocol<'a> {
         Ok(sectors as u64)
     }
 
-    /// Reads an exact sector range using 128-sector RockUSB transfer chunks.
+    /// Reads an exact sector range using bounded RockUSB transfer chunks.
     pub fn read_lba(
         &mut self,
         begin_sector: u64,
@@ -137,7 +141,7 @@ impl<'a> RockUsbProtocol<'a> {
         Ok(all)
     }
 
-    /// Writes bytes at an exact LBA using 128-sector RockUSB chunks. The final
+    /// Writes bytes at an exact LBA using bounded RockUSB chunks. The final
     /// partial sector is zero-filled, matching `write_lba`.
     pub fn write_lba(
         &mut self,
@@ -661,18 +665,22 @@ mod tests {
     }
 
     #[test]
-    fn write_lba_chunks_at_the_rockusb_128_sector_boundary() {
-        let payload = vec![0xabu8; 129 * LOGICAL_BLOCK_BYTES];
+    fn write_lba_chunks_at_the_configured_sector_boundary() {
+        let boundary = ROCKUSB_TRANSFER_CHUNK_SECTORS as usize;
+        let payload = vec![0xabu8; (boundary + 1) * LOGICAL_BLOCK_BYTES];
         let mut io = ScriptedIo::with_reads(vec![csw(5), csw(6)]);
         let mut protocol = RockUsbProtocol::new(&mut io, 5);
         let progress = protocol.write_lba(9, &payload).unwrap();
-        assert_eq!(progress.wire_sectors, 129);
+        assert_eq!(progress.wire_sectors, (boundary + 1) as u64);
         assert_eq!(progress.chunks, 2);
         let writes = io.writes.borrow();
         assert_eq!(writes.len(), 4);
         assert_eq!(&writes[0][17..21], &9u32.to_be_bytes());
-        assert_eq!(&writes[0][22..24], &128u16.to_be_bytes());
-        assert_eq!(&writes[2][17..21], &137u32.to_be_bytes());
+        assert_eq!(
+            &writes[0][22..24],
+            &ROCKUSB_TRANSFER_CHUNK_SECTORS.to_be_bytes()
+        );
+        assert_eq!(&writes[2][17..21], &(9 + boundary as u32).to_be_bytes());
         assert_eq!(&writes[2][22..24], &1u16.to_be_bytes());
     }
 

@@ -1124,11 +1124,11 @@ impl<B: RescueBackend> RescueManager<B> {
             size_bytes: image_size_bytes,
             sha256: image_digest,
         };
-        if let Err(error) = image.revalidate() {
-            return Err(confirmed_no_effect(error.to_string()));
-        }
+        let mut validated = image
+            .open_and_revalidate()
+            .map_err(|error| confirmed_no_effect(error.to_string()))?;
 
-        match port.write_partition(partition, begin_sector, &image) {
+        match port.write_partition(partition, begin_sector, &mut validated) {
             Ok(receipt)
                 if receipt.semantic_success
                     && receipt.progress.as_ref().is_some_and(|progress| {
@@ -1686,8 +1686,9 @@ mod tests {
             &self,
             _partition: &str,
             _begin_sector: u64,
-            image: &StagedImage,
+            image: &mut arkforge_provider::rockchip_execute::ValidatedImage,
         ) -> Result<RockUsbMutationReceipt, RockUsbPortFailure> {
+            let image = image.staged();
             let mut state = self.state.lock().unwrap();
             match state.behavior {
                 MutationBehavior::BeforeIo => {
@@ -1708,6 +1709,7 @@ mod tests {
                             payload_bytes: image.size_bytes,
                             wire_sectors: image.size_bytes.div_ceil(ROCKUSB_SECTOR_BYTES),
                             chunks: 1,
+                            chunk_sectors: 1,
                             payload_digest: image.sha256,
                         }),
                     })

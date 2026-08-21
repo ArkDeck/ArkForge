@@ -252,7 +252,7 @@ where
     std::thread::spawn(move || {
         let mut dispatcher = arkforged::dispatch::Dispatcher::new(store_root, work_root, &port);
         loop {
-            let work = {
+            let (preparation, work) = {
                 let Ok(mut guard) = dispatch_service.lock() else {
                     return;
                 };
@@ -266,10 +266,23 @@ where
                     );
                 }
                 guard.refresh_pending_admissions();
-                guard.take_pending_dispatch()
+                let preparation = guard.take_pending_preparation();
+                let work = if preparation.is_none() {
+                    guard.take_pending_dispatch()
+                } else {
+                    None
+                };
+                (preparation, work)
             };
+            if let Some(preparation) = preparation {
+                dispatcher.prepare(&preparation);
+                continue;
+            }
             let Some(work) = work else {
-                std::thread::sleep(std::time::Duration::from_millis(200));
+                // Native IOKit discovery has no subprocess cost. A short
+                // sweep keeps permit hand-offs and USB mode rebinds off the
+                // critical path while still yielding the dispatcher thread.
+                std::thread::sleep(std::time::Duration::from_millis(20));
                 continue;
             };
             let outcome = dispatcher.run(&work);

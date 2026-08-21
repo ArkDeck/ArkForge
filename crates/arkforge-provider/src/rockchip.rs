@@ -176,6 +176,7 @@ impl RockchipProvider {
                         profile.allowed_targets.len()
                     ),
                 }],
+                would_be_steps: built.public_steps,
                 known_effects: built.effect_set,
                 evidence_requirements: evidence_requirements(&blockers),
                 unknowns: blockers,

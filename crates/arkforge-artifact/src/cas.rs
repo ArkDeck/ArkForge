@@ -312,6 +312,10 @@ impl ContentAddressedStore {
             });
         }
         create_private_dir(object_path.parent().expect("object path has a parent"))?;
+        // Published CAS bytes are immutable inputs. Keeping the object
+        // read-only lets higher-level, content-bound indexes distinguish a
+        // sealed object from one that may have been edited since import.
+        set_private_permissions(&staging_path, 0o400)?;
         fs::rename(&staging_path, &object_path)?;
         Ok(ImportedObject {
             digest,
@@ -338,6 +342,27 @@ impl ContentAddressedStore {
         Ok(fs::metadata(self.object_path(digest))
             .map_err(|_| CasError::NotFound(*digest))?
             .len())
+    }
+
+    /// Makes a fully verified object immutable to ordinary writes.
+    ///
+    /// Older stores may contain objects imported before publication started
+    /// sealing them. A parser may call this only after it has re-hashed the
+    /// complete object and matched its content address.
+    pub fn seal_object(&self, digest: &Sha256Digest) -> Result<(), CasError> {
+        let path = self.object_path(digest);
+        fs::metadata(&path).map_err(|_| CasError::NotFound(*digest))?;
+        set_private_permissions(&path, 0o400)
+    }
+
+    /// Whether the object is a regular, non-symlink, read-only file.
+    pub fn object_is_sealed(&self, digest: &Sha256Digest) -> Result<bool, CasError> {
+        let metadata = fs::symlink_metadata(self.object_path(digest))
+            .map_err(|_| CasError::NotFound(*digest))?;
+        if !metadata.file_type().is_file() || metadata.file_type().is_symlink() {
+            return Ok(false);
+        }
+        Ok(is_read_only(&metadata))
     }
 
     /// Re-hashes an object and compares it with its own address.
@@ -523,6 +548,17 @@ fn set_private_permissions(_path: &Path, _mode: u32) -> Result<(), CasError> {
     // Windows ACLs are a Stage B item; see architecture.md 15.2, which keeps
     // the Windows transport surface out of AF-V1/AF-V2 acceptance.
     Ok(())
+}
+
+#[cfg(unix)]
+fn is_read_only(metadata: &fs::Metadata) -> bool {
+    use std::os::unix::fs::PermissionsExt;
+    metadata.permissions().mode() & 0o222 == 0
+}
+
+#[cfg(not(unix))]
+fn is_read_only(metadata: &fs::Metadata) -> bool {
+    metadata.permissions().readonly()
 }
 
 #[cfg(test)]
@@ -752,6 +788,7 @@ mod tests {
         let object = store.import(&b"good bytes"[..], 10, None).unwrap();
         let hex = object.digest.to_hex();
         let path = root.0.join(OBJECTS_DIR).join(&hex[..2]).join(&hex);
+        set_private_permissions(&path, 0o600).unwrap();
         fs::write(&path, b"tampered!!").unwrap();
         assert!(!store.verify_object(&object.digest).unwrap());
     }
@@ -766,6 +803,7 @@ mod tests {
         let hex = object.digest.to_hex();
         let path = root.0.join(OBJECTS_DIR).join(&hex[..2]).join(&hex);
         let mode = fs::metadata(&path).unwrap().permissions().mode() & 0o777;
-        assert_eq!(mode & 0o077, 0, "object mode {mode:o} exposes group/other");
+        assert_eq!(mode, 0o400, "published object mode {mode:o} is not sealed");
+        assert!(store.object_is_sealed(&object.digest).unwrap());
     }
 }

@@ -20,6 +20,9 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 const POLL_INTERVAL: Duration = Duration::from_millis(100);
 const OUTPUT_LIMIT: usize = 64 * 1024;
+const BUILD_PROPERTIES: [&str; 2] = ["const.ohos.fullname", "const.product.model"];
+const BUILD_PROPERTIES_QUERY: &str = "param get const.ohos.fullname; param get const.product.model";
+const DEVICE_SERIAL_PROPERTY: &str = "ohos.boot.sn";
 
 #[derive(Debug, Clone)]
 pub(super) struct ControlContext {
@@ -201,6 +204,9 @@ pub(super) struct HdcControlPort<R = ProcessPort> {
     runner: R,
     // Raw connect keys live only in this supervisor process.
     sessions: BTreeMap<String, String>,
+    // Production can resolve HDC's USB connect key from the already observed
+    // descriptor. Tests keep the process boundary fully scripted.
+    resolve_native_usb_target: bool,
 }
 
 impl HdcControlPort<ProcessPort> {
@@ -216,6 +222,7 @@ impl HdcControlPort<ProcessPort> {
                 expected_digest,
             },
             sessions: BTreeMap::new(),
+            resolve_native_usb_target: true,
         }
     }
 }
@@ -244,20 +251,16 @@ impl<R: CommandPort> HdcControlPort<R> {
             ManagedControlAction::RebootToNormal => {
                 self.reboot_to_normal(observations, request, context, deadline)
             }
-            ManagedControlAction::ReadProductFacts => self.read_property(
+            ManagedControlAction::ReadProductFacts => self.read_properties(
                 observations,
                 request,
                 context,
                 deadline,
-                "const.product.model",
+                &["const.product.model"],
             ),
-            ManagedControlAction::ReadBuildFacts => self.read_property(
-                observations,
-                request,
-                context,
-                deadline,
-                "const.ohos.fullname",
-            ),
+            ManagedControlAction::ReadBuildFacts => {
+                self.read_properties(observations, request, context, deadline, &BUILD_PROPERTIES)
+            }
         };
         match result {
             Ok((facts, rebound)) => ControlResult {
@@ -285,12 +288,30 @@ impl<R: CommandPort> HdcControlPort<R> {
         if normalized_mode(&before.mode) != "hdc-normal" {
             return Err(ControlFailure::WrongStartingMode);
         }
-        let connect_key = self.exact_target(&before.serial_sha256, deadline)?;
-        self.runner.run(
-            &["-t", connect_key.as_str(), "target", "boot", "loader"],
-            deadline,
-        )?;
-
+        // Official HDC selection semantics allow omitting `-t` only when one
+        // target is connected. Confirm that default target with a read-only
+        // serial query before allowing an unscoped mutation. A multi-target
+        // server either refuses the query or cannot match the sealed serial,
+        // in which case the exact `-t <connect-key>` path remains mandatory.
+        let default_target = self.unscoped_exact_target(&before.serial_sha256, deadline);
+        let (connect_key, target_selection) = if let Some(connect_key) = default_target {
+            self.runner.run(&["shell", "reboot", "loader"], deadline)?;
+            (connect_key, "single-default")
+        } else {
+            let connect_key =
+                self.exact_target(&before.serial_sha256, &context.topology_sha256, deadline)?;
+            self.runner.run(
+                &["-t", connect_key.as_str(), "shell", "reboot", "loader"],
+                deadline,
+            )?;
+            (connect_key, "exact-connect-key")
+        };
+        // DAYU200's board support and flashing instructions use the device-side
+        // reboot command. On real RK3568 hardware this reaches the RockUSB
+        // Loader in about four seconds; HDC's generic `target boot loader`
+        // control path takes about seventeen seconds for the same transition.
+        // Keep this a fixed argv template: neither the caller nor the Profile
+        // can inject a shell fragment here.
         let rebound = loop {
             if Instant::now() >= deadline {
                 return Err(ControlFailure::NoUniqueLoaderRebind);
@@ -301,12 +322,12 @@ impl<R: CommandPort> HdcControlPort<R> {
             let detached = !current
                 .iter()
                 .any(|item| item.observation_id == before.observation_id);
-            let hdc_detached = !self
-                .list_targets(deadline)?
-                .iter()
-                .any(|row| row.connect_key == connect_key && row.state == "Connected");
+            // The exact normal USB observation disappearing and the unique
+            // Loader observation appearing on the sealed topology are direct
+            // OS evidence that the physical HDC transport detached. Asking
+            // the HDC server for its stale target table here adds seconds and
+            // is weaker evidence than the USB transition itself.
             if detached
-                && hdc_detached
                 && let Some(rebound) = unique_mode_on_topology(
                     observations,
                     &current,
@@ -320,7 +341,12 @@ impl<R: CommandPort> HdcControlPort<R> {
             std::thread::sleep(POLL_INTERVAL);
         };
         self.sessions.insert(request.job_id.clone(), connect_key);
-        Ok((lineage_facts("Loader", &rebound, context), Some(rebound)))
+        let mut facts = lineage_facts("Loader", &rebound, context);
+        facts.push(KeyValue {
+            key: "hdcTargetSelection".into(),
+            value: target_selection.into(),
+        });
+        Ok((facts, Some(rebound)))
     }
 
     fn reboot_to_normal<O: ObservationPort>(
@@ -348,83 +374,208 @@ impl<R: CommandPort> HdcControlPort<R> {
             }
             std::thread::sleep(POLL_INTERVAL);
         };
-        let connect_key = self.exact_target(&rebound.serial_sha256, deadline)?;
+        let connect_key =
+            self.exact_target(&rebound.serial_sha256, &context.topology_sha256, deadline)?;
         self.sessions.insert(request.job_id.clone(), connect_key);
         Ok((lineage_facts("Normal", &rebound, context), Some(rebound)))
     }
 
-    fn read_property<O: ObservationPort>(
+    fn read_properties<O: ObservationPort>(
         &mut self,
         observations: &mut O,
         request: &ManagedControlRequest,
         context: &ControlContext,
         deadline: Instant,
-        property: &str,
+        properties: &[&str],
     ) -> Result<(Vec<KeyValue>, Option<DeviceObservationView>), ControlFailure> {
+        if request
+            .expected_facts
+            .iter()
+            .any(|fact| !properties.contains(&fact.key.as_str()))
+        {
+            return Err(ControlFailure::PropertyMismatch);
+        }
         let current = exact_observation(observations, &context.current_device_id)?;
         if normalized_mode(&current.mode) != "hdc-normal" {
             return Err(ControlFailure::WrongStartingMode);
         }
-        let connect_key = self.exact_target(&current.serial_sha256, deadline)?;
+        // The exact raw connect key selected before Loader entry stays private
+        // in this process. Reuse it only when its device-facts digest matches
+        // the newly rebound normal observation. This removes a redundant HDC
+        // target-list round trip at the end of every flash without weakening
+        // exact-device binding.
+        let connect_key = self
+            .sessions
+            .get(&request.job_id)
+            .filter(|connect_key| {
+                digest_in_domain(Domain::DeviceFacts, connect_key.as_bytes()).to_hex()
+                    == current.serial_sha256
+            })
+            .cloned()
+            .map(Ok)
+            .unwrap_or_else(|| {
+                self.exact_target(&current.serial_sha256, &context.topology_sha256, deadline)
+            })?;
         self.sessions
             .insert(request.job_id.clone(), connect_key.clone());
-        let stdout = self.runner.run(
-            &[
-                "-t",
-                connect_key.as_str(),
-                "shell",
-                "param",
-                "get",
-                property,
-            ],
-            deadline,
-        )?;
-        let value = parse_property(&stdout, property)?;
-        if let Some(expected) = request
-            .expected_facts
-            .iter()
-            .find(|fact| fact.key == property)
-            .map(|fact| fact.value.as_str())
-            && value != expected
-        {
-            return Err(ControlFailure::PropertyMismatch);
-        }
-        Ok((
-            vec![KeyValue {
-                key: property.to_string(),
+        let values = if properties == BUILD_PROPERTIES.as_slice() {
+            loop {
+                let stdout = self.run_read_command(
+                    &["-t", connect_key.as_str(), "shell", BUILD_PROPERTIES_QUERY],
+                    deadline,
+                )?;
+                match parse_property_lines(&stdout, properties) {
+                    Err(ControlFailure::PropertyEmpty) if Instant::now() < deadline => {
+                        std::thread::sleep(POLL_INTERVAL);
+                    }
+                    result => break result?,
+                }
+            }
+        } else {
+            let mut values = Vec::with_capacity(properties.len());
+            for property in properties {
+                let value = loop {
+                    let stdout = self.run_read_command(
+                        &[
+                            "-t",
+                            connect_key.as_str(),
+                            "shell",
+                            "param",
+                            "get",
+                            property,
+                        ],
+                        deadline,
+                    )?;
+                    match parse_property(&stdout, property) {
+                        Err(ControlFailure::PropertyEmpty) if Instant::now() < deadline => {
+                            std::thread::sleep(POLL_INTERVAL);
+                        }
+                        result => break result?,
+                    }
+                };
+                values.push(value);
+            }
+            values
+        };
+        let mut facts = Vec::with_capacity(properties.len());
+        for (property, value) in properties.iter().zip(values) {
+            if let Some(expected) = request
+                .expected_facts
+                .iter()
+                .find(|fact| fact.key == *property)
+                .map(|fact| fact.value.as_str())
+                && value != expected
+            {
+                return Err(ControlFailure::PropertyMismatch);
+            }
+            facts.push(KeyValue {
+                key: (*property).to_string(),
                 value,
-            }],
-            None,
-        ))
+            });
+        }
+        Ok((facts, None))
+    }
+
+    /// HDC can publish a target as `Connected` shortly before its command
+    /// channel accepts work. Retry only the closed, read-only property
+    /// templates; mutating commands are never replayed here.
+    fn run_read_command(
+        &mut self,
+        arguments: &[&str],
+        deadline: Instant,
+    ) -> Result<Vec<u8>, ControlFailure> {
+        loop {
+            match self.runner.run(arguments, deadline) {
+                Err(ControlFailure::CommandFailed) if Instant::now() < deadline => {
+                    std::thread::sleep(POLL_INTERVAL);
+                }
+                Ok(stdout) if transient_hdc_reply(&stdout) && Instant::now() < deadline => {
+                    std::thread::sleep(POLL_INTERVAL);
+                }
+                result => return result,
+            }
+        }
+    }
+
+    /// Returns the raw connect key only when HDC's default target is exactly
+    /// the sealed USB serial. This is a bounded, read-only capability probe:
+    /// it never retries a multi-device refusal and never guesses a target.
+    fn unscoped_exact_target(&mut self, serial_sha256: &str, deadline: Instant) -> Option<String> {
+        let probe_deadline = deadline.min(Instant::now() + Duration::from_secs(2));
+        let stdout = self
+            .runner
+            .run(
+                &["shell", "param", "get", DEVICE_SERIAL_PROPERTY],
+                probe_deadline,
+            )
+            .ok()?;
+        if transient_hdc_reply(&stdout) {
+            return None;
+        }
+        let connect_key = parse_property(&stdout, DEVICE_SERIAL_PROPERTY).ok()?;
+        if connect_key.is_empty()
+            || connect_key.len() > 128
+            || !connect_key
+                .bytes()
+                .all(|byte| byte.is_ascii() && !byte.is_ascii_whitespace())
+            || digest_in_domain(Domain::DeviceFacts, connect_key.as_bytes()).to_hex()
+                != serial_sha256
+        {
+            return None;
+        }
+        Some(connect_key)
     }
 
     fn exact_target(
         &mut self,
         serial_sha256: &str,
+        topology_sha256: &str,
         deadline: Instant,
     ) -> Result<String, ControlFailure> {
         if serial_sha256.is_empty() {
             return Err(ControlFailure::NoExactHdcTarget);
         }
-        let matches = self
-            .list_targets(deadline)?
-            .into_iter()
-            .filter(|row| row.transport == "USB" && row.state == "Connected")
-            .filter(|row| {
-                digest_in_domain(Domain::DeviceFacts, row.connect_key.as_bytes()).to_hex()
-                    == serial_sha256
-            })
-            .collect::<Vec<_>>();
-        match matches.as_slice() {
-            [one] => Ok(one.connect_key.clone()),
-            [] => Err(ControlFailure::NoExactHdcTarget),
-            _ => Err(ControlFailure::AmbiguousHdcTarget),
+        // HDC's USB connect key is the device descriptor serial. Resolve it
+        // from native IOKit using both the sealed serial digest and topology
+        // digest. This avoids a measured ~3.3s `hdc list targets -v` round
+        // trip before DAYU200 enters Loader. `hdc -t` still performs the final
+        // exact-target enforcement; ambiguous or malformed descriptors never
+        // become command arguments.
+        if self.resolve_native_usb_target
+            && let Some(connect_key) = native_usb_connect_key(serial_sha256, topology_sha256)?
+        {
+            return Ok(connect_key);
+        }
+        loop {
+            let matches = self
+                .list_targets(deadline)?
+                .into_iter()
+                .filter(|row| row.transport == "USB" && row.state == "Connected")
+                .filter(|row| {
+                    digest_in_domain(Domain::DeviceFacts, row.connect_key.as_bytes()).to_hex()
+                        == serial_sha256
+                })
+                .collect::<Vec<_>>();
+            match matches.as_slice() {
+                [one] => return Ok(one.connect_key.clone()),
+                [] if Instant::now() < deadline => std::thread::sleep(POLL_INTERVAL),
+                [] => return Err(ControlFailure::NoExactHdcTarget),
+                _ => return Err(ControlFailure::AmbiguousHdcTarget),
+            }
         }
     }
 
     fn list_targets(&mut self, deadline: Instant) -> Result<Vec<TargetRow>, ControlFailure> {
         parse_target_list(&self.runner.run(&["list", "targets", "-v"], deadline)?)
     }
+}
+
+fn native_usb_connect_key(
+    serial_sha256: &str,
+    topology_sha256: &str,
+) -> Result<Option<String>, ControlFailure> {
+    arkforged::service::native_hdc_connect_key(serial_sha256, topology_sha256)
+        .map_err(|_| ControlFailure::AmbiguousHdcTarget)
 }
 
 fn exact_observation<O: ObservationPort>(
@@ -467,7 +618,7 @@ fn unique_mode_on_topology<O: ObservationPort>(
 
 fn normalized_mode(mode: &str) -> &str {
     match mode {
-        "Loader" | "loader" => "loader",
+        "Loader" | "loader" | "rockusb-loader" => "loader",
         "HDCNormal" | "hdc-normal" | "normal" => "hdc-normal",
         other => other,
     }
@@ -496,6 +647,33 @@ fn lineage_facts(
             value: context.topology_sha256.clone(),
         },
     ]
+}
+
+fn parse_property_lines(stdout: &[u8], requested: &[&str]) -> Result<Vec<String>, ControlFailure> {
+    if stdout.len() > OUTPUT_LIMIT {
+        return Err(ControlFailure::OutputTooLarge);
+    }
+    let text = std::str::from_utf8(stdout).map_err(|_| ControlFailure::InvalidUtf8)?;
+    let lines = text
+        .lines()
+        .map(str::trim)
+        .filter(|line| !line.is_empty())
+        .collect::<Vec<_>>();
+    if lines.len() != requested.len() {
+        return Err(ControlFailure::PropertyEmpty);
+    }
+    lines
+        .into_iter()
+        .zip(requested)
+        .map(|(line, property)| parse_property(line.as_bytes(), property))
+        .collect()
+}
+
+fn transient_hdc_reply(stdout: &[u8]) -> bool {
+    let text = String::from_utf8_lossy(stdout).to_ascii_lowercase();
+    text.contains("e000004")
+        || text.contains("communication channel is being established")
+        || text.contains("please wait for several seconds")
 }
 
 fn parse_property(stdout: &[u8], requested: &str) -> Result<String, ControlFailure> {
@@ -664,20 +842,22 @@ mod tests {
     }
 
     #[test]
-    fn enter_updater_requires_command_detach_and_unique_loader_rebind() {
+    fn single_hdc_target_uses_unscoped_reboot_after_exact_read_only_identity_check() {
         let normal = observation("NORMAL-1", "hdc-normal", "topology", "serial");
-        let loader = observation("LOADER-1", "loader", "topology", "loader-serial");
+        let loader = observation(
+            "USB-2207-350a-01120000",
+            "rockusb-loader",
+            "topology",
+            "loader-serial",
+        );
         let runner = ScriptedRunner {
             calls: Vec::new(),
-            replies: VecDeque::from([
-                Ok(b"serial\t\tUSB\tConnected\tlocalhost\n".to_vec()),
-                Ok(Vec::new()),
-                Ok(b"[Empty]\n".to_vec()),
-            ]),
+            replies: VecDeque::from([Ok(b"serial\n".to_vec()), Ok(Vec::new())]),
         };
         let mut port = HdcControlPort {
             runner,
             sessions: BTreeMap::new(),
+            resolve_native_usb_target: false,
         };
         let mut observations = ScriptedObservations {
             lists: VecDeque::from([vec![normal], vec![loader.clone()]]),
@@ -690,15 +870,68 @@ mod tests {
         assert!(result.receipt.accepted);
         assert_eq!(
             result.rebound_observation.unwrap().observation_id,
-            "LOADER-1"
+            "USB-2207-350a-01120000"
         );
         assert_eq!(
-            port.runner.calls[1],
-            ["-t", "serial", "target", "boot", "loader"]
+            port.runner.calls[0],
+            ["shell", "param", "get", "ohos.boot.sn"]
         );
+        assert_eq!(port.runner.calls[1], ["shell", "reboot", "loader"]);
+        assert!(result.receipt.facts.contains(&KeyValue {
+            key: "hdcTargetSelection".into(),
+            value: "single-default".into(),
+        }));
         let rendered = format!("{:?}", result.receipt);
         assert!(!rendered.contains("serial\""));
         assert!(!rendered.contains("argv"));
+    }
+
+    #[test]
+    fn multiple_hdc_targets_fall_back_to_exact_connect_key_reboot() {
+        let normal = observation("NORMAL-1", "hdc-normal", "topology", "serial");
+        let loader = observation(
+            "USB-2207-350a-01120000",
+            "rockusb-loader",
+            "topology",
+            "loader-serial",
+        );
+        let runner = ScriptedRunner {
+            calls: Vec::new(),
+            replies: VecDeque::from([
+                Ok(b"[Fail]ExecuteCommand need connect-key?\n".to_vec()),
+                Ok(b"serial\t\tUSB\tConnected\tlocalhost\n".to_vec()),
+                Ok(Vec::new()),
+            ]),
+        };
+        let mut port = HdcControlPort {
+            runner,
+            sessions: BTreeMap::new(),
+            resolve_native_usb_target: false,
+        };
+        let mut observations = ScriptedObservations {
+            lists: VecDeque::from([vec![normal], vec![loader]]),
+        };
+
+        let result = port.perform_with(
+            &mut observations,
+            &request(ManagedControlAction::EnterUpdater),
+            &context(),
+        );
+
+        assert!(result.receipt.accepted);
+        assert_eq!(
+            port.runner.calls[0],
+            ["shell", "param", "get", "ohos.boot.sn"]
+        );
+        assert_eq!(port.runner.calls[1], ["list", "targets", "-v"]);
+        assert_eq!(
+            port.runner.calls[2],
+            ["-t", "serial", "shell", "reboot", "loader"]
+        );
+        assert!(result.receipt.facts.contains(&KeyValue {
+            key: "hdcTargetSelection".into(),
+            value: "exact-connect-key".into(),
+        }));
     }
 
     #[test]
@@ -714,6 +947,7 @@ mod tests {
         let mut port = HdcControlPort {
             runner,
             sessions: BTreeMap::new(),
+            resolve_native_usb_target: false,
         };
         let mut observations = ScriptedObservations {
             lists: VecDeque::from([vec![normal]]),
@@ -741,6 +975,124 @@ mod tests {
     }
 
     #[test]
+    fn build_fact_read_returns_every_fact_the_postflight_requires() {
+        let normal = observation("NORMAL-1", "hdc-normal", "topology", "serial");
+        let runner = ScriptedRunner {
+            calls: Vec::new(),
+            replies: VecDeque::from([
+                Ok(b"serial\t\tUSB\tConnected\tlocalhost\n".to_vec()),
+                Ok(b"OpenHarmony-7.0.0.37 \nohos \n".to_vec()),
+            ]),
+        };
+        let mut port = HdcControlPort {
+            runner,
+            sessions: BTreeMap::new(),
+            resolve_native_usb_target: false,
+        };
+        let mut observations = ScriptedObservations {
+            lists: VecDeque::from([vec![normal]]),
+        };
+        let mut request = request(ManagedControlAction::ReadBuildFacts);
+        request.expected_facts = vec![
+            KeyValue {
+                key: "const.ohos.fullname".into(),
+                value: "OpenHarmony-7.0.0.37".into(),
+            },
+            KeyValue {
+                key: "const.product.model".into(),
+                value: "ohos".into(),
+            },
+        ];
+
+        let result = port.perform_with(&mut observations, &request, &context());
+
+        assert!(result.receipt.accepted);
+        assert_eq!(result.receipt.facts, request.expected_facts);
+        assert_eq!(port.runner.calls.len(), 2);
+        assert_eq!(
+            port.runner.calls[1],
+            [
+                "-t",
+                "serial",
+                "shell",
+                "param get const.ohos.fullname; param get const.product.model"
+            ]
+        );
+    }
+
+    #[test]
+    fn postflight_reuses_the_exact_pre_loader_target_and_retries_until_ready() {
+        let normal = observation("NORMAL-1", "hdc-normal", "topology", "serial");
+        let runner = ScriptedRunner {
+            calls: Vec::new(),
+            replies: VecDeque::from([
+                Ok(Vec::new()),
+                Ok(
+                    b"[Fail][E000004]:The communication channel is being established.\n\
+                     Please wait for several seconds and try again.\n"
+                        .to_vec(),
+                ),
+                Ok(b"OpenHarmony-7.0.0.37\nohos\n".to_vec()),
+            ]),
+        };
+        let mut port = HdcControlPort {
+            runner,
+            sessions: BTreeMap::from([("JOB-1".into(), "serial".into())]),
+            resolve_native_usb_target: false,
+        };
+        let mut observations = ScriptedObservations {
+            lists: VecDeque::from([vec![normal]]),
+        };
+        let mut request = request(ManagedControlAction::ReadBuildFacts);
+        request.expected_facts = vec![
+            KeyValue {
+                key: "const.ohos.fullname".into(),
+                value: "OpenHarmony-7.0.0.37".into(),
+            },
+            KeyValue {
+                key: "const.product.model".into(),
+                value: "ohos".into(),
+            },
+        ];
+
+        let result = port.perform_with(&mut observations, &request, &context());
+
+        assert!(result.receipt.accepted);
+        assert_eq!(port.runner.calls.len(), 3);
+        assert!(
+            port.runner
+                .calls
+                .iter()
+                .all(|call| call == &["-t", "serial", "shell", BUILD_PROPERTIES_QUERY])
+        );
+    }
+
+    #[test]
+    fn a_combined_property_reply_must_have_one_nonempty_line_per_fixed_property() {
+        assert_eq!(
+            parse_property_lines(b"OpenHarmony-7.0.0.37\nohos\n", &BUILD_PROPERTIES).unwrap(),
+            ["OpenHarmony-7.0.0.37", "ohos"]
+        );
+        assert_eq!(
+            parse_property_lines(b"OpenHarmony-7.0.0.37\n", &BUILD_PROPERTIES),
+            Err(ControlFailure::PropertyEmpty)
+        );
+        assert_eq!(
+            parse_property_lines(b"OpenHarmony-7.0.0.37\nohos\nextra\n", &BUILD_PROPERTIES),
+            Err(ControlFailure::PropertyEmpty)
+        );
+    }
+
+    #[test]
+    fn hdc_channel_establishment_text_is_transient_not_a_build_fact() {
+        assert!(transient_hdc_reply(
+            b"[Fail][E000004]:The communication channel is being established.\n\
+              Please wait for several seconds and try again.\n"
+        ));
+        assert!(!transient_hdc_reply(b"OpenHarmony-7.0.0.37\nohos\n"));
+    }
+
+    #[test]
     fn extra_or_replacement_targets_never_become_the_selected_target() {
         let serial_digest = digest_in_domain(Domain::DeviceFacts, b"serial").to_hex();
         let runner = ScriptedRunner {
@@ -750,11 +1102,39 @@ mod tests {
         let mut port = HdcControlPort {
             runner,
             sessions: BTreeMap::new(),
+            resolve_native_usb_target: false,
         };
         assert_eq!(
-            port.exact_target(&serial_digest, Instant::now() + Duration::from_secs(1)),
+            port.exact_target(&serial_digest, "topology", Instant::now()),
             Err(ControlFailure::NoExactHdcTarget)
         );
         assert_eq!(port.runner.calls.len(), 1);
+    }
+
+    #[test]
+    fn an_exact_hdc_target_may_register_after_the_usb_observation() {
+        let serial_digest = digest_in_domain(Domain::DeviceFacts, b"serial").to_hex();
+        let runner = ScriptedRunner {
+            calls: Vec::new(),
+            replies: VecDeque::from([
+                Ok(b"[Empty]\n".to_vec()),
+                Ok(b"serial\t\tUSB\tConnected\tlocalhost\n".to_vec()),
+            ]),
+        };
+        let mut port = HdcControlPort {
+            runner,
+            sessions: BTreeMap::new(),
+            resolve_native_usb_target: false,
+        };
+
+        assert_eq!(
+            port.exact_target(
+                &serial_digest,
+                "topology",
+                Instant::now() + Duration::from_secs(1)
+            ),
+            Ok("serial".into())
+        );
+        assert_eq!(port.runner.calls.len(), 2);
     }
 }

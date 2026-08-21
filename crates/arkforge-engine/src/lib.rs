@@ -104,7 +104,10 @@ impl JobState {
             StepIntentDurable => matches!(next, Dispatching | OutcomeUnknown),
             Dispatching => matches!(next, ReceiptDurable | CancelledSafe | OutcomeUnknown),
             ReceiptDurable => matches!(next, Checkpointed | OutcomeUnknown),
-            Checkpointed => matches!(next, RebindWait | Preflight | Postflight | CancelledSafe),
+            Checkpointed => matches!(
+                next,
+                RebindWait | Preflight | Postflight | ConfirmedFailed | CancelledSafe
+            ),
             RebindWait => matches!(next, Preflight | OutcomeUnknown),
             Postflight => matches!(next, Succeeded | ConfirmedFailed),
             OutcomeUnknown => matches!(next, Reconciling | RecoveryAssessable),
@@ -488,6 +491,13 @@ mod tests {
         assert!(JobState::Reconciling.may_transition_to(JobState::ConfirmedFailed));
         assert!(JobState::Reconciling.may_transition_to(JobState::OutcomeUnknown));
         assert!(!JobState::Reconciling.may_transition_to(JobState::Dispatching));
+    }
+
+    #[test]
+    fn a_checkpointed_verification_may_conclude_as_confirmed_failed() {
+        assert!(JobState::Checkpointed.may_transition_to(JobState::ConfirmedFailed));
+        assert!(JobState::ConfirmedFailed.is_terminal());
+        assert!(!JobState::ConfirmedFailed.may_transition_to(JobState::Preflight));
     }
 
     #[test]

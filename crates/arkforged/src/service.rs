@@ -5,7 +5,8 @@
 //! "startExecution is unavailable" without opening a socket — the properties
 //! belong to the service, not to the plumbing.
 
-use crate::artifact_ops::{inspect_container, manifest_response};
+use crate::artifact_ops::{inspect_stored_container, manifest_response};
+use crate::dispatch::PendingPreparation;
 use crate::jobs::{AdmissionFacts, JobRegistry};
 use arkforge_artifact::cas::{CasQuota, ContentAddressedStore};
 use arkforge_artifact::manifest::ArtifactManifest;
@@ -13,7 +14,7 @@ use arkforge_artifact::{dayu200, pac};
 use arkforge_authority_api::{
     ControllerPairingSecret, CurrentFacts, EffectSetCompleteness, PossibleEffectSet, StepPermit,
 };
-use arkforge_core::digest::{Domain, digest_canonical, sha256};
+use arkforge_core::digest::{Domain, digest_canonical, digest_in_domain, sha256};
 use arkforge_core::identity::{
     HostPlatform, MaturityKey, ToolchainIdentity, ToolchainKind, Version,
 };
@@ -31,10 +32,11 @@ use arkforge_engine::superseding::{
     possible_effects as assess_possible_effects,
 };
 use arkforge_engine::{BoundToolchain, Engine, ExecutionReadiness, StoredPlan};
+use arkforge_engine::{journal::JournalRecordKind, recovery::PermitLedger};
 use arkforge_ipc::messages::{
-    Assessment, Effect, ErrorBody, ExecutablePlan, JobSummary, KeyValue, MaterializePlanResponse,
-    PublicStep, Request, Response, SubmissionOutcome, SubmitManagedControlReceiptRequest,
-    SubmitStepPermitRequest, WatchJobRequest,
+    Assessment, Effect, ErrorBody, ExecutablePlan, JobSummary, KeyValue, ManagedControlAction,
+    MaterializePlanResponse, PublicStep, Request, Response, SubmissionOutcome,
+    SubmitManagedControlReceiptRequest, SubmitStepPermitRequest, WatchJobRequest,
 };
 use arkforge_ipc::{Api, SessionKind, Status};
 use arkforge_provider::rockchip::{RockchipProvider, publish_dayu200_maturity};
@@ -43,13 +45,97 @@ use arkforge_provider::{
     FlashIntent, FlashProvider, MaterializeRequest, MaturityRegistry, ProbeContext,
 };
 use arkforge_transport::replay::TranscriptTransport;
-use arkforge_transport::usb::UsbTransport;
+use arkforge_transport::usb::{UsbDeviceRecord, UsbEnumerator, UsbTransport};
 use arkforge_transport::{
-    DeviceObservation, DeviceTransport, TransportSession, TypedDiscoveryFilter, transcript,
+    DeviceObservation, DeviceTransport, TransportError, TransportSession, TypedDiscoveryFilter,
+    transcript,
 };
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::io::Read;
 use std::path::Path;
+
+/// Adapts the daemon's safe native IOKit boundary to the read-only transport
+/// record shape. Unlike the historical `ioreg` enumerator this performs no
+/// process spawn or text parsing, so mode-rebind polling can be both fast and
+/// cheap. Interface records belonging to one USB device are collapsed before
+/// the transport applies a Profile's VID/PID allowlist.
+#[derive(Debug, Clone, Copy)]
+struct NativeIokitEnumerator;
+
+/// Resolves HDC's raw USB connect key without spawning its slow target-list
+/// command. The serial is returned only to the in-process CLI authority and is
+/// selected by both sealed descriptor and topology digests; it is never put in
+/// public observations, journals, receipts, or errors.
+pub fn native_hdc_connect_key(
+    serial_sha256: &str,
+    topology_sha256: &str,
+) -> Result<Option<String>, String> {
+    let Ok(interfaces) = arkforge_usb::NativeUsb::new(30_000).enumerate() else {
+        return Ok(None);
+    };
+    select_hdc_connect_key(
+        interfaces
+            .into_iter()
+            .map(|interface| (interface.location_id, interface.serial)),
+        serial_sha256,
+        topology_sha256,
+    )
+}
+
+fn select_hdc_connect_key(
+    candidates: impl IntoIterator<Item = (u32, Option<String>)>,
+    serial_sha256: &str,
+    topology_sha256: &str,
+) -> Result<Option<String>, String> {
+    let mut matches = candidates
+        .into_iter()
+        .filter(|(location_id, _)| {
+            digest_in_domain(Domain::DeviceFacts, &location_id.to_be_bytes()).to_hex()
+                == topology_sha256
+        })
+        .filter_map(|(_, serial)| serial)
+        .filter(|serial| {
+            !serial.is_empty()
+                && serial.len() <= 128
+                && serial
+                    .bytes()
+                    .all(|byte| byte.is_ascii() && !byte.is_ascii_whitespace())
+                && digest_in_domain(Domain::DeviceFacts, serial.as_bytes()).to_hex()
+                    == serial_sha256
+        })
+        .collect::<Vec<_>>();
+    matches.sort();
+    matches.dedup();
+    match matches.as_slice() {
+        [] => Ok(None),
+        [one] => Ok(Some(one.clone())),
+        _ => Err("multiple native USB descriptors match the sealed HDC target".into()),
+    }
+}
+
+impl UsbEnumerator for NativeIokitEnumerator {
+    fn enumerate(&self) -> Result<Vec<UsbDeviceRecord>, TransportError> {
+        let interfaces = arkforge_usb::NativeUsb::new(30_000)
+            .enumerate()
+            .map_err(|error| TransportError::Evidence(error.to_string()))?;
+        let mut devices = Vec::new();
+        for interface in interfaces {
+            let record = UsbDeviceRecord {
+                vendor_id: interface.vendor_id,
+                product_id: interface.product_id,
+                location_id: interface.location_id,
+                serial: interface.serial,
+                product_name: interface.product_name,
+                vendor_name: interface.vendor_name,
+                bcd_device: Some(interface.device_release),
+            };
+            if !devices.contains(&record) {
+                devices.push(record);
+            }
+        }
+        Ok(devices)
+    }
+}
 
 /// Where this daemon's notion of "now" comes from.
 ///
@@ -114,6 +200,7 @@ pub struct Service {
     /// observed in the next expected mode. A periodic sweep must never turn an
     /// unexplained detach into permission to select a new device.
     authorized_rebinds: BTreeSet<String>,
+    pending_preparations: VecDeque<PendingPreparation>,
     clock: Clock,
     jobs: JobRegistry,
     /// The secret the authority handed this daemon at startup. Held here and
@@ -241,10 +328,14 @@ impl Service {
         // One USB transport per loaded profile, because the transport reads
         // its identity table from the profile: which vendor/product pairs in
         // which mode are this device, rather than "any Rockchip in Loader".
-        // Read-only ioreg enumeration — this opens no HDC server and takes no
-        // device, so it coexists with whatever else owns the board.
+        // Native read-only IOKit enumeration opens no HDC server and claims no
+        // interface, so it coexists with whatever else owns the board without
+        // paying for an `ioreg` process and parser on every rebind poll.
         for profile in profile_map.values() {
-            loaded.push(Box::new(UsbTransport::with_ioreg(profile)));
+            loaded.push(Box::new(UsbTransport::new(
+                profile,
+                Box::new(NativeIokitEnumerator),
+            )));
         }
 
         Ok(Service {
@@ -259,6 +350,7 @@ impl Service {
             plan_observations: BTreeMap::new(),
             job_sessions: BTreeMap::new(),
             authorized_rebinds: BTreeSet::new(),
+            pending_preparations: VecDeque::new(),
             clock,
             jobs: JobRegistry::open(store_root.join("jobs")).map_err(|error| error.to_string())?,
             pairing: None,
@@ -356,6 +448,10 @@ impl Service {
     /// same lock.
     pub fn take_pending_dispatch(&mut self) -> Option<crate::jobs::PendingDispatch> {
         self.jobs.take_pending_dispatch()
+    }
+
+    pub fn take_pending_preparation(&mut self) -> Option<PendingPreparation> {
+        self.pending_preparations.pop_front()
     }
 
     /// Classifies control requests whose deadline passed unanswered.
@@ -735,7 +831,8 @@ impl Service {
                         );
                     }
                 };
-                match inspect_container(object) {
+                drop(object);
+                match inspect_stored_container(&self.store, &digest) {
                     Ok(manifest) => {
                         self.manifests.insert(artifact_id.clone(), manifest.clone());
                         manifest
@@ -993,6 +1090,22 @@ impl Service {
                 }
             };
 
+        let Some(preparation_profile) = self
+            .profiles
+            .get(&profile_key(
+                &stored.envelope.profile.id,
+                stored.envelope.profile.version,
+            ))
+            .cloned()
+        else {
+            return self.refuse(
+                request,
+                Status::Unavailable,
+                "PROFILE_NOT_LOADED",
+                "the sealed plan's profile is no longer loaded",
+            );
+        };
+
         match self.jobs.start(
             &stored.envelope,
             &stored.private_plan,
@@ -1008,6 +1121,12 @@ impl Service {
                         session,
                     },
                 );
+                self.pending_preparations.push_back(PendingPreparation {
+                    job_id: job_id.clone(),
+                    plan_actions: stored.private_plan.actions.clone(),
+                    profile: preparation_profile,
+                    artifact_digest: stored.envelope.artifact.content_digest,
+                });
                 let mut payload = Vec::new();
                 arkforge_ipc::wire::write_string(&mut payload, 1, &job_id);
                 self.ok(request, payload)
@@ -1087,6 +1206,14 @@ impl Service {
         };
         let state = job.state().as_str();
         let context = self.recovery_surface_context(&job_id);
+        let recovered_possible = context
+            .is_none()
+            .then(|| recovered_managed_control_possible_effects(job.journal()))
+            .flatten();
+        let possible = context
+            .as_ref()
+            .map(|context| &context.possible)
+            .or(recovered_possible.as_ref());
         let mut payload = Vec::new();
         arkforge_ipc::wire::write_string(&mut payload, 1, &job_id);
         if state == "outcomeUnknown" {
@@ -1097,6 +1224,9 @@ impl Service {
                 if context.is_some() {
                     "the safe read-only face cannot establish every possible persistent effect; \
                      the original outcome remains immutable"
+                } else if recovered_possible.is_some() {
+                    "the durable journal bounds every unresolved managed control to zero \
+                     persistent effects; the original outcome remains immutable"
                 } else {
                     "the durable job was recovered without its private plan, so its possible \
                      effects cannot be bounded in this daemon process"
@@ -1109,13 +1239,12 @@ impl Service {
         arkforge_ipc::wire::write_string(
             &mut payload,
             4,
-            context
-                .as_ref()
-                .map(|context| completeness_name(context.possible.completeness))
+            possible
+                .map(|possible| completeness_name(possible.completeness))
                 .unwrap_or("unbounded"),
         );
-        if let Some(context) = &context {
-            for effect in &context.possible.effects.persistent {
+        if let Some(possible) = possible {
+            for effect in &possible.effects.persistent {
                 arkforge_ipc::wire::write_string(&mut payload, 5, &persistent_effect_name(effect));
             }
         }
@@ -1138,10 +1267,20 @@ impl Service {
         let mut payload = Vec::new();
         arkforge_ipc::wire::write_string(&mut payload, 1, &job_id);
         let context = self.recovery_surface_context(&job_id);
+        let recovered_possible = context
+            .is_none()
+            .then(|| recovered_managed_control_possible_effects(job.journal()))
+            .flatten();
         let assessment = if job.state().as_str() != "outcomeUnknown" {
             SupersedingRecoveryAssessment::Ineligible(RecoveryBlocker::NothingToRecover)
         } else if let Some(context) = &context {
             assess_superseding_recovery(&context.possible, &context.declaration)
+        } else if recovered_possible.is_some() {
+            // A closed managed control can change mode or read facts, but it
+            // cannot leave a persistent partition effect for a complete
+            // overwrite to supersede. The original outcome remains unknown;
+            // there is simply no persistent effect to recover.
+            SupersedingRecoveryAssessment::Ineligible(RecoveryBlocker::NothingToRecover)
         } else {
             SupersedingRecoveryAssessment::Ineligible(RecoveryBlocker::EffectsUnbounded)
         };
@@ -1509,18 +1648,7 @@ impl Service {
                     "materializePlan requires a 64-hex content-addressed artifact id",
                 );
             };
-            let object = match self.store.open_object(&digest) {
-                Ok(object) => object,
-                Err(error) => {
-                    return self.refuse(
-                        request,
-                        Status::NotFound,
-                        "ARTIFACT_NOT_FOUND",
-                        &error.to_string(),
-                    );
-                }
-            };
-            let manifest = match inspect_container(object) {
+            let manifest = match inspect_stored_container(&self.store, &digest) {
                 Ok(manifest) => manifest,
                 Err(error) => {
                     return self.refuse(request, Status::Refused, "ARTIFACT_REJECTED", &error);
@@ -1852,6 +1980,9 @@ impl Service {
                         key: requirement.id.to_string(),
                         value: requirement.description.clone(),
                     });
+                }
+                for step in &assessment.would_be_steps {
+                    message.would_be_steps.push(encode_step(step));
                 }
                 for effect in &assessment.known_effects.persistent {
                     message.known_persistent_effects.push(encode_effect(effect));
@@ -2279,6 +2410,44 @@ fn encode_effect(effect: &PersistentEffect) -> Effect {
     }
 }
 
+fn recovered_managed_control_possible_effects(
+    journal: &arkforge_engine::journal::Journal,
+) -> Option<PossibleEffectSet> {
+    let ledger = PermitLedger::from_journal(journal);
+    let unresolved = ledger.unresolved();
+    if unresolved.is_empty() {
+        return None;
+    }
+    for permit_id in unresolved {
+        let action = journal.records().iter().rev().find_map(|record| {
+            if record.kind != JournalRecordKind::PermitConsuming
+                || journal_fact(&record.facts, "permitId") != Some(permit_id.as_str())
+            {
+                return None;
+            }
+            journal_fact(&record.facts, "controlAction")
+        })?;
+        if !ManagedControlAction::ALL
+            .iter()
+            .any(|candidate| candidate.as_str() == action)
+        {
+            return None;
+        }
+    }
+    Some(PossibleEffectSet {
+        effects: arkforge_core::EffectSet::read_only(),
+        completeness: EffectSetCompleteness::Bounded,
+        source_action_ids: Vec::new(),
+    })
+}
+
+fn journal_fact<'a>(facts: &'a [(OpaqueId, String)], key: &str) -> Option<&'a str> {
+    facts
+        .iter()
+        .find(|(candidate, _)| candidate.as_str() == key)
+        .map(|(_, value)| value.as_str())
+}
+
 fn encode_transient(effect: &TransientEffect) -> Effect {
     match effect {
         TransientEffect::EnterMode { from, to } => Effect {
@@ -2362,6 +2531,62 @@ mod tests {
     use arkforge_core::identity::{MaturityKey, MaturityState};
 
     const DAYU200_PROFILE: &str = include_str!("../../../profiles/dayu200.yaml");
+
+    #[test]
+    fn native_hdc_target_requires_both_sealed_usb_digests() {
+        let serial_digest = digest_in_domain(Domain::DeviceFacts, b"serial").to_hex();
+        let topology_digest =
+            digest_in_domain(Domain::DeviceFacts, &0x0112_0000_u32.to_be_bytes()).to_hex();
+        assert_eq!(
+            select_hdc_connect_key(
+                vec![
+                    (0x0112_0000, Some("serial".into())),
+                    (0x0112_0000, Some("serial".into())),
+                    (0x0113_0000, Some("serial".into())),
+                    (0x0112_0000, Some("other".into())),
+                ],
+                &serial_digest,
+                &topology_digest,
+            ),
+            Ok(Some("serial".into()))
+        );
+    }
+
+    fn unresolved_control_journal(action: &str) -> arkforge_engine::journal::Journal {
+        let mut journal = arkforge_engine::journal::Journal::new();
+        let id = |value: &str| OpaqueId::new(value).unwrap();
+        for kind in [
+            JournalRecordKind::StepPermitAccepted,
+            JournalRecordKind::StepIntentRecorded,
+            JournalRecordKind::PermitConsuming,
+        ] {
+            let mut facts = vec![(id("permitId"), "PERMIT-1".into())];
+            if kind == JournalRecordKind::PermitConsuming {
+                facts.push((id("controlAction"), action.into()));
+            }
+            journal
+                .append(kind, 1_000, 1, id("STEP-001"), facts)
+                .unwrap();
+        }
+        journal
+    }
+
+    #[test]
+    fn rehydrated_closed_managed_control_is_bounded_without_a_private_plan() {
+        let possible = recovered_managed_control_possible_effects(&unresolved_control_journal(
+            "enter-updater",
+        ))
+        .unwrap();
+        assert_eq!(possible.completeness, EffectSetCompleteness::Bounded);
+        assert!(possible.effects.persistent.is_empty());
+        assert!(possible.effects.transient.is_empty());
+
+        assert!(
+            recovered_managed_control_possible_effects(&unresolved_control_journal("raw-shell"))
+                .is_none(),
+            "an unknown action must remain unbounded after restart"
+        );
+    }
 
     fn native_binding_maturity(campaign: Option<&str>) -> MaturityState {
         let root = std::env::temp_dir().join(format!(

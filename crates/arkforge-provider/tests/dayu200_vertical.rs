@@ -259,6 +259,7 @@ fn af_v1_materializes_a_complete_plan_that_is_not_executable() {
 
     // …but the effect set is complete, so an operator can see exactly what a
     // future execution would do.
+    assert_eq!(assessment.would_be_steps.len(), 23);
     assert_eq!(assessment.known_effects.persistent.len(), 9);
     assert_eq!(
         assessment.known_effects.data_impact.userdata,

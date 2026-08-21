@@ -2,7 +2,9 @@
 //!
 //! Stored actions carry typed semantics only. The executor validates the
 //! Profile, observed partition table, staged artifact and read domain before
-//! calling the native [`RockUsbPort`]; there is no subprocess or argv surface.
+//! calling the native [`RockUsbPort`]. No caller-controlled subprocess or argv
+//! surface exists; macOS file validation uses one fixed system SHA-256 command
+//! fed only an already-open descriptor.
 
 use arkforge_artifact::manifest::PartitionTableFact;
 use arkforge_core::Sha256Digest;
@@ -17,8 +19,15 @@ use arkforge_core::verification::{
 };
 use core::fmt;
 use std::collections::BTreeMap;
+use std::fs::File;
+#[cfg(not(target_os = "macos"))]
 use std::io::Read;
+use std::io::{Seek, SeekFrom};
 use std::path::{Path, PathBuf};
+#[cfg(target_os = "macos")]
+use std::process::{Command, Stdio};
+use std::thread::JoinHandle;
+use std::time::Instant;
 
 /// `a / b` rounded up. `u64::div_ceil` is unstable on this toolchain.
 fn ceil_div(numerator: u64, denominator: u64) -> u64 {
@@ -85,6 +94,7 @@ pub struct RockUsbWriteProgress {
     pub payload_bytes: u64,
     pub wire_sectors: u64,
     pub chunks: u64,
+    pub chunk_sectors: u16,
     pub payload_digest: Sha256Digest,
 }
 
@@ -131,7 +141,7 @@ pub trait RockUsbPort: fmt::Debug {
         &self,
         _partition: &str,
         _begin_sector: u64,
-        _image: &StagedImage,
+        _image: &mut ValidatedImage,
     ) -> Result<RockUsbMutationReceipt, RockUsbPortFailure> {
         Err(RockUsbPortFailure::BeforeIo(
             "this RockUSB port does not implement WRITE_LBA".into(),
@@ -156,27 +166,33 @@ pub struct StagedImage {
 impl StagedImage {
     /// Re-reads the staged file and checks it is still what was staged.
     ///
-    /// Called immediately before the write, not once at staging time: the file
-    /// lives on a filesystem other processes can reach, and the gap between
-    /// "verified" and "written" is the whole window an attacker or a stray
-    /// build script needs.
+    /// This simple entry point is used by callers that need an immediate check.
+    /// Normal flashing uses [`Self::open_and_revalidate`] so independent images
+    /// can hash concurrently while retaining and fingerprinting the exact file
+    /// descriptors that WRITE_LBA will later consume.
     pub fn revalidate(&self) -> Result<(), ExecutionError> {
-        let mut file = std::fs::File::open(&self.path).map_err(|error| {
+        self.open_and_revalidate().map(drop)
+    }
+
+    /// Opens and hashes the staged image, keeping that exact file description
+    /// alive for the later WRITE_LBA. This closes the pathname replacement
+    /// race between validation and transfer and lets independent images be
+    /// validated safely on independent CPU cores.
+    pub fn open_and_revalidate(&self) -> Result<ValidatedImage, ExecutionError> {
+        let started = Instant::now();
+        let mut file = File::open(&self.path).map_err(|error| {
             ExecutionError::StagingChanged(format!("{}: {error}", self.path.display()))
         })?;
-        let mut hasher = Sha256::new();
-        let mut buffer = vec![0u8; 1 << 20];
-        let mut total = 0u64;
-        loop {
-            let read = file.read(&mut buffer).map_err(|error| {
-                ExecutionError::StagingChanged(format!("{}: {error}", self.path.display()))
-            })?;
-            if read == 0 {
-                break;
-            }
-            hasher.update(&buffer[..read]);
-            total += read as u64;
+        let before = StagedFileFingerprint::read(&file, &self.path)?;
+        if before.size_bytes != self.size_bytes {
+            return Err(ExecutionError::StagingChanged(format!(
+                "{} is {} bytes, was staged at {}",
+                self.path.display(),
+                before.size_bytes,
+                self.size_bytes
+            )));
         }
+        let (digest, total, validation_backend) = hash_open_file(&mut file, &self.path)?;
         if total != self.size_bytes {
             return Err(ExecutionError::StagingChanged(format!(
                 "{} is {total} bytes, was staged at {}",
@@ -184,7 +200,6 @@ impl StagedImage {
                 self.size_bytes
             )));
         }
-        let digest = hasher.finalize();
         if digest != self.sha256 {
             return Err(ExecutionError::StagingChanged(format!(
                 "{} hashes to {digest}, was staged as {}",
@@ -192,7 +207,191 @@ impl StagedImage {
                 self.sha256
             )));
         }
-        Ok(())
+        let after = StagedFileFingerprint::read(&file, &self.path)?;
+        if after != before {
+            return Err(ExecutionError::StagingChanged(format!(
+                "{} changed while its SHA-256 was being checked",
+                self.path.display()
+            )));
+        }
+        Ok(ValidatedImage {
+            staged: self.clone(),
+            file,
+            fingerprint: after,
+            validation_duration_ms: started.elapsed().as_millis() as u64,
+            validation_backend,
+        })
+    }
+}
+
+/// Hashes the exact descriptor retained for WRITE_LBA. macOS ships a
+/// hardware-accelerated OpenSSL SHA-256 implementation; feeding it a clone of
+/// this already-open descriptor reduced the measured 2 GiB validation from
+/// ~6.9s to ~1.0s on the DAYU200 test host. The child never receives a path,
+/// so it cannot follow a replacement between validation and transfer.
+#[cfg(target_os = "macos")]
+fn hash_open_file(
+    file: &mut File,
+    path: &Path,
+) -> Result<(Sha256Digest, u64, &'static str), ExecutionError> {
+    file.seek(SeekFrom::Start(0))
+        .map_err(|error| ExecutionError::StagingChanged(format!("{}: {error}", path.display())))?;
+    let exact_descriptor = file
+        .try_clone()
+        .map_err(|error| ExecutionError::StagingChanged(format!("{}: {error}", path.display())))?;
+    let output = Command::new("/usr/bin/openssl")
+        .args(["dgst", "-sha256", "-binary"])
+        .env_clear()
+        .stdin(Stdio::from(exact_descriptor))
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null())
+        .output()
+        .map_err(|error| {
+            ExecutionError::StagingChanged(format!(
+                "cannot run the fixed macOS SHA-256 backend for {}: {error}",
+                path.display()
+            ))
+        })?;
+    if !output.status.success() || output.stdout.len() != Sha256Digest::LEN {
+        return Err(ExecutionError::StagingChanged(format!(
+            "the fixed macOS SHA-256 backend did not return one binary digest for {}",
+            path.display()
+        )));
+    }
+    let total = file
+        .stream_position()
+        .map_err(|error| ExecutionError::StagingChanged(format!("{}: {error}", path.display())))?;
+    let digest = Sha256Digest::from_bytes(
+        output
+            .stdout
+            .as_slice()
+            .try_into()
+            .expect("the SHA-256 output length was checked"),
+    );
+    Ok((digest, total, "macos-openssl-stdin"))
+}
+
+#[cfg(not(target_os = "macos"))]
+fn hash_open_file(
+    file: &mut File,
+    path: &Path,
+) -> Result<(Sha256Digest, u64, &'static str), ExecutionError> {
+    let mut hasher = Sha256::new();
+    let mut buffer = vec![0u8; 8 << 20];
+    let mut total = 0u64;
+    loop {
+        let read = file.read(&mut buffer).map_err(|error| {
+            ExecutionError::StagingChanged(format!("{}: {error}", path.display()))
+        })?;
+        if read == 0 {
+            break;
+        }
+        hasher.update(&buffer[..read]);
+        total += read as u64;
+    }
+    Ok((hasher.finalize(), total, "portable-vendored-sha256"))
+}
+
+/// A full digest proof tied to the exact open file that will be transferred.
+#[derive(Debug)]
+pub struct ValidatedImage {
+    staged: StagedImage,
+    file: File,
+    fingerprint: StagedFileFingerprint,
+    validation_duration_ms: u64,
+    validation_backend: &'static str,
+}
+
+impl ValidatedImage {
+    pub fn staged(&self) -> &StagedImage {
+        &self.staged
+    }
+
+    pub fn validation_duration_ms(&self) -> u64 {
+        self.validation_duration_ms
+    }
+
+    pub fn validation_backend(&self) -> &'static str {
+        self.validation_backend
+    }
+
+    /// Rechecks the non-forgeable inode change time and other file identity
+    /// facts, then rewinds the already validated descriptor for WRITE_LBA.
+    pub fn prepare_for_write(&mut self) -> Result<&mut File, String> {
+        let current = StagedFileFingerprint::read(&self.file, &self.staged.path)
+            .map_err(|error| error.to_string())?;
+        if current != self.fingerprint {
+            return Err(format!(
+                "{} changed after its SHA-256 was checked",
+                self.staged.path.display()
+            ));
+        }
+        self.file
+            .seek(SeekFrom::Start(0))
+            .map_err(|error| format!("{}: {error}", self.staged.path.display()))?;
+        Ok(&mut self.file)
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct StagedFileFingerprint {
+    size_bytes: u64,
+    readonly: bool,
+    #[cfg(unix)]
+    device: u64,
+    #[cfg(unix)]
+    inode: u64,
+    #[cfg(unix)]
+    mode: u32,
+    #[cfg(unix)]
+    links: u64,
+    #[cfg(unix)]
+    modified_seconds: i64,
+    #[cfg(unix)]
+    modified_nanoseconds: i64,
+    #[cfg(unix)]
+    changed_seconds: i64,
+    #[cfg(unix)]
+    changed_nanoseconds: i64,
+    #[cfg(not(unix))]
+    modified: Option<std::time::SystemTime>,
+}
+
+impl StagedFileFingerprint {
+    fn read(file: &File, path: &Path) -> Result<Self, ExecutionError> {
+        let metadata = file.metadata().map_err(|error| {
+            ExecutionError::StagingChanged(format!("{}: {error}", path.display()))
+        })?;
+        if !metadata.is_file() {
+            return Err(ExecutionError::StagingChanged(format!(
+                "{} is not a regular file",
+                path.display()
+            )));
+        }
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::MetadataExt;
+            Ok(Self {
+                size_bytes: metadata.len(),
+                readonly: metadata.permissions().readonly(),
+                device: metadata.dev(),
+                inode: metadata.ino(),
+                mode: metadata.mode(),
+                links: metadata.nlink(),
+                modified_seconds: metadata.mtime(),
+                modified_nanoseconds: metadata.mtime_nsec(),
+                changed_seconds: metadata.ctime(),
+                changed_nanoseconds: metadata.ctime_nsec(),
+            })
+        }
+        #[cfg(not(unix))]
+        {
+            Ok(Self {
+                size_bytes: metadata.len(),
+                readonly: metadata.permissions().readonly(),
+                modified: metadata.modified().ok(),
+            })
+        }
     }
 }
 
@@ -395,6 +594,7 @@ pub struct ExecutionSession {
     /// afterwards is a real failure rather than an unreadable address.
     demonstrated_readable: Vec<u64>,
     staged: BTreeMap<String, StagedImage>,
+    validating: BTreeMap<String, JoinHandle<Result<ValidatedImage, ExecutionError>>>,
 }
 
 impl ExecutionSession {
@@ -404,6 +604,7 @@ impl ExecutionSession {
             read_domain: None,
             demonstrated_readable: Vec::new(),
             staged,
+            validating: BTreeMap::new(),
         }
     }
 
@@ -436,6 +637,48 @@ impl ExecutionSession {
     /// rather than producing it.
     pub fn stage(&mut self, member: String, image: StagedImage) {
         self.staged.insert(member, image);
+    }
+
+    /// Starts one full SHA-256 worker per independent staged image. The
+    /// resulting proof retains the exact open descriptor, so waiting for a
+    /// later partition write does not reopen a pathname or trust metadata in
+    /// place of bytes.
+    pub fn begin_parallel_staged_validation(&mut self) {
+        for (member, image) in &self.staged {
+            if self.validating.contains_key(member) {
+                continue;
+            }
+            let image = image.clone();
+            self.validating.insert(
+                member.clone(),
+                std::thread::spawn(move || image.open_and_revalidate()),
+            );
+        }
+    }
+
+    fn take_validated_image(
+        &mut self,
+        member: &str,
+    ) -> Result<(ValidatedImage, u64, bool), ExecutionError> {
+        let waited = Instant::now();
+        let (result, parallel) = match self.validating.remove(member) {
+            Some(worker) => (
+                worker.join().map_err(|_| {
+                    ExecutionError::StagingChanged(format!(
+                        "the SHA-256 worker for {member} terminated unexpectedly"
+                    ))
+                })?,
+                true,
+            ),
+            None => (
+                self.staged
+                    .get(member)
+                    .ok_or_else(|| ExecutionError::ImageNotStaged(member.to_string()))?
+                    .open_and_revalidate(),
+                false,
+            ),
+        };
+        Ok((result?, waited.elapsed().as_millis() as u64, parallel))
     }
 }
 
@@ -670,19 +913,21 @@ fn write_partition(
         });
     }
 
+    let device_offset_sectors = entry.offset_sectors;
+    let partition_size_sectors = entry.size_sectors;
+
     // 3. The staged image is still the image that was staged.
-    let image = session
+    let staged = session
         .staged
         .get(member)
         .ok_or_else(|| ExecutionError::ImageNotStaged(member.to_string()))?
         .clone();
-    image.revalidate()?;
 
     // 4. It has to fit inside the span the device's table gives it. This is a
     //    refusal, not an addressing step: a write that would cross into the
     //    next partition is refused before external I/O begins.
-    let image_sectors = ceil_div(image.size_bytes, ROCKUSB_SECTOR_BYTES);
-    if let Some(size_sectors) = entry.size_sectors
+    let image_sectors = ceil_div(staged.size_bytes, ROCKUSB_SECTOR_BYTES);
+    if let Some(size_sectors) = partition_size_sectors
         && image_sectors > size_sectors
     {
         return Err(ExecutionError::ImageOverrunsPartition {
@@ -697,8 +942,13 @@ fn write_partition(
     //    agree, but neither is allowed to replace the device fact. From the
     //    first external I/O the device may have changed, so nothing after this
     //    point may report "no effect".
+    let (mut validated, validation_wait_ms, parallel_validation) =
+        session.take_validated_image(member)?;
+    let validation_duration_ms = validated.validation_duration_ms();
+    let validation_backend = validated.validation_backend();
+    let image = validated.staged().clone();
     let receipt = port
-        .write_partition(partition, entry.offset_sectors, &image)
+        .write_partition(partition, device_offset_sectors, &mut validated)
         .map_err(|error| port_error("writePartition", error))?;
     if let Some(progress) = &receipt.progress
         && (progress.payload_bytes != image.size_bytes || progress.payload_digest != image.sha256)
@@ -724,7 +974,22 @@ fn write_partition(
         fact("member", member),
         fact("imageSha256", image.sha256.to_string()),
         fact("imageBytes", image.size_bytes.to_string()),
+        fact(
+            "imageValidationDurationMs",
+            validation_duration_ms.to_string(),
+        ),
+        fact("imageValidationWaitMs", validation_wait_ms.to_string()),
+        fact("imageValidationBackend", validation_backend),
+        fact(
+            "imageValidationMode",
+            if parallel_validation {
+                "parallel-open-file"
+            } else {
+                "inline-open-file"
+            },
+        ),
         fact("beginSector", begin_sector.to_string()),
+        fact("operationDurationMs", receipt.duration_ms.to_string()),
     ];
     if let Some(progress) = &receipt.progress {
         facts.push(fact(
@@ -733,6 +998,10 @@ fn write_partition(
         ));
         facts.push(fact("writeWireSectors", progress.wire_sectors.to_string()));
         facts.push(fact("writeChunks", progress.chunks.to_string()));
+        facts.push(fact(
+            "writeChunkSectors",
+            progress.chunk_sectors.to_string(),
+        ));
         facts.push(fact(
             "writePayloadSha256",
             progress.payload_digest.to_string(),
@@ -744,7 +1013,6 @@ fn write_partition(
         // names the cause was the one fact thrown away. The tail of the
         // executor's own detail string is where it says why it stopped
         // (AD-032's lesson, restated for the native receipt).
-        facts.push(fact("operationDurationMs", receipt.duration_ms.to_string()));
         let tail: String = receipt
             .detail
             .chars()
@@ -788,6 +1056,49 @@ fn readback_partition(
         .ok_or(ExecutionError::ReadDomainNotCharacterized)?;
 
     let sectors = ceil_div(range.length, ROCKUSB_SECTOR_BYTES);
+    // On a windowed read face, probe the end of the declared range before
+    // transferring the whole image. If that endpoint is the measured filler,
+    // the range cannot support a full-hash claim; reading gigabytes of the same
+    // uninformative byte only to reach the same TypedSkip wastes minutes and
+    // can turn a range that crosses the window edge into a false mismatch.
+    if matches!(domain, MeasuredReadDomain::Windowed { .. }) {
+        let last_sector = begin_sector
+            .checked_add(sectors.saturating_sub(1))
+            .ok_or(ExecutionError::VerificationRangeMissing)?;
+        let tail = read_sectors(
+            port,
+            scratch,
+            last_sector,
+            1,
+            &format!("{partition}-range-end-probe"),
+        )?;
+        let is_declared_filler = uniform_byte(&tail)
+            .is_some_and(|byte| filler.map(|declared| declared == byte).unwrap_or(true));
+        if is_declared_filler {
+            let verification = VerificationOutcome::TypedSkip {
+                range,
+                reason: TypedSkipReason::OutsideReadDomain,
+                detail: format!(
+                    "range endpoint sector {last_sector} returned the measured filler through a \
+                     windowed read face; the full range was not transferred"
+                ),
+            };
+            return Ok(outcome(
+                record,
+                ActionDisposition::SemanticSuccess,
+                vec![
+                    fact("partition", partition),
+                    fact("addressableMedium", domain.summary()),
+                    fact("outcome", verification.as_str()),
+                    fact("readbackStrategy", "range-end-probe"),
+                    fact("probedSector", last_sector.to_string()),
+                    fact("readbackBytes", tail.len().to_string()),
+                ],
+                sha256(&tail),
+                Some(verification),
+            ));
+        }
+    }
     let bytes = read_sectors(port, scratch, begin_sector, sectors, partition)?;
     let read = &bytes[..(range.length as usize).min(bytes.len())];
 
@@ -808,6 +1119,8 @@ fn readback_partition(
         fact("partition", partition),
         fact("addressableMedium", domain.summary()),
         fact("outcome", verification.as_str()),
+        fact("readbackStrategy", "full-range"),
+        fact("readbackBytes", read.len().to_string()),
     ];
     Ok(outcome(
         record,
@@ -1313,6 +1626,55 @@ mod tests {
     }
 
     #[test]
+    fn a_windowed_range_with_a_filler_endpoint_skips_after_one_sector() {
+        let root = std::env::temp_dir().join(format!(
+            "arkforge-readback-probe-{}-{:?}",
+            std::process::id(),
+            std::thread::current().id()
+        ));
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(&root).unwrap();
+
+        let mut record = record_for_test();
+        record.declared_range = Some(range());
+        record.content_digest = Some(sha256(b"the full image"));
+        let port = NativeRecordingPort::default();
+        let mut session = ExecutionSession::new(BTreeMap::new());
+        session.set_read_domain(MeasuredReadDomain::Windowed {
+            detail: "far end read 0xCC".into(),
+        });
+
+        let observed = readback_partition(
+            &record,
+            &mut session,
+            &port,
+            &root,
+            "system",
+            245_760,
+            VerificationStrength::FullHash,
+            Some(0xCC),
+        )
+        .unwrap();
+        assert!(matches!(
+            observed.verification,
+            Some(VerificationOutcome::TypedSkip {
+                reason: TypedSkipReason::OutsideReadDomain,
+                ..
+            })
+        ));
+        assert_eq!(port.reads.borrow().as_slice(), &[(245_767, 1)]);
+        assert_eq!(
+            observed
+                .facts
+                .iter()
+                .find(|(key, _)| key.as_str() == "readbackBytes")
+                .map(|(_, value)| value.as_str()),
+            Some("512")
+        );
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
     fn filler_inside_a_full_read_face_is_a_named_failure_not_a_hash_mismatch() {
         let read = vec![0xCC; 4096];
         let verdict = classify_readback(
@@ -1426,8 +1788,49 @@ mod tests {
         assert!(port.writes.borrow().is_empty());
     }
 
+    #[test]
+    fn parallel_validation_pins_the_file_and_rechecks_its_inode_fingerprint() {
+        let path = std::env::temp_dir().join(format!(
+            "arkforge-validated-image-{}-{:?}",
+            std::process::id(),
+            std::thread::current().id()
+        ));
+        let bytes = b"one exact staged image";
+        std::fs::write(&path, bytes).unwrap();
+        let image = StagedImage {
+            member: "uboot.img".into(),
+            path: path.clone(),
+            size_bytes: bytes.len() as u64,
+            sha256: sha256(bytes),
+        };
+        let mut session = ExecutionSession::new(BTreeMap::from([("uboot.img".into(), image)]));
+        session.begin_parallel_staged_validation();
+        let (mut validated, _wait_ms, parallel) =
+            session.take_validated_image("uboot.img").unwrap();
+        assert!(parallel);
+
+        let mut permissions = std::fs::metadata(&path).unwrap().permissions();
+        permissions.set_readonly(true);
+        std::fs::set_permissions(&path, permissions).unwrap();
+        assert!(validated.prepare_for_write().is_err());
+
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let _ = std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600));
+        }
+        #[cfg(not(unix))]
+        {
+            let mut permissions = std::fs::metadata(&path).unwrap().permissions();
+            permissions.set_readonly(false);
+            let _ = std::fs::set_permissions(&path, permissions);
+        }
+        let _ = std::fs::remove_file(path);
+    }
+
     #[derive(Debug, Default)]
     struct NativeRecordingPort {
+        reads: RefCell<Vec<(u64, u64)>>,
         writes: RefCell<Vec<(String, u64, PathBuf)>>,
     }
 
@@ -1444,19 +1847,25 @@ mod tests {
 
         fn read_sectors(
             &self,
-            _begin_sector: u64,
-            _sectors: u64,
+            begin_sector: u64,
+            sectors: u64,
             _scratch: &Path,
         ) -> Result<RockUsbObservation<Vec<u8>>, RockUsbPortFailure> {
-            Err(RockUsbPortFailure::BeforeIo("not used by this test".into()))
+            self.reads.borrow_mut().push((begin_sector, sectors));
+            let value = vec![0xCC; sectors as usize * ROCKUSB_SECTOR_BYTES as usize];
+            Ok(RockUsbObservation {
+                evidence_digest: sha256(&value),
+                value,
+            })
         }
 
         fn write_partition(
             &self,
             partition: &str,
             begin_sector: u64,
-            image: &StagedImage,
+            image: &mut ValidatedImage,
         ) -> Result<RockUsbMutationReceipt, RockUsbPortFailure> {
+            let image = image.staged();
             self.writes.borrow_mut().push((
                 partition.to_string(),
                 begin_sector,
@@ -1472,6 +1881,7 @@ mod tests {
                     payload_bytes: bytes.len() as u64,
                     wire_sectors: ceil_div(bytes.len() as u64, ROCKUSB_SECTOR_BYTES),
                     chunks: 1,
+                    chunk_sectors: 1,
                     payload_digest: sha256(&bytes),
                 }),
             })

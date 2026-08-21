@@ -311,6 +311,7 @@ impl FlashProvider for UnisocProvider {
                     request.profile.execution_blockers().len()
                 ),
             }],
+            would_be_steps: Vec::new(),
             // Not `EffectSet::read_only()`: that would assert every axis is
             // preserved. Nothing is known, so every axis reads unknown — and an
             // EffectSet with unknown data impact can never be sealed into a
