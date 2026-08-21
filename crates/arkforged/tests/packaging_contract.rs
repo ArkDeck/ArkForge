@@ -102,6 +102,70 @@ fn the_windows_release_refuses_unsigned_or_unbound_payloads() {
 }
 
 #[test]
+fn the_windows_release_scripts_delimit_variables_before_colons() {
+    let scripts = [
+        (
+            "package-arkforge.ps1",
+            include_str!("../../../packaging/windows/package-arkforge.ps1"),
+        ),
+        (
+            "Install-ArkForge.ps1",
+            include_str!("../../../packaging/windows/Install-ArkForge.ps1"),
+        ),
+        (
+            "Test-ArkForgePackage.ps1",
+            include_str!("../../../packaging/windows/Test-ArkForgePackage.ps1"),
+        ),
+        (
+            "Uninstall-ArkForge.ps1",
+            include_str!("../../../packaging/windows/Uninstall-ArkForge.ps1"),
+        ),
+    ];
+    for (name, script) in scripts {
+        let ambiguous = ambiguous_colon_variables(script);
+        assert!(
+            ambiguous.is_empty(),
+            "{name} has PowerShell variable references that require braces: {ambiguous:?}"
+        );
+    }
+}
+
+fn ambiguous_colon_variables(source: &str) -> Vec<String> {
+    let bytes = source.as_bytes();
+    let mut found = Vec::new();
+    let mut index = 0;
+    while index < bytes.len() {
+        if bytes[index] != b'$'
+            || bytes
+                .get(index + 1)
+                .is_none_or(|byte| !byte.is_ascii_alphabetic() && *byte != b'_')
+        {
+            index += 1;
+            continue;
+        }
+        let start = index + 1;
+        let mut end = start + 1;
+        while bytes
+            .get(end)
+            .is_some_and(|byte| byte.is_ascii_alphanumeric() || *byte == b'_')
+        {
+            end += 1;
+        }
+        if bytes.get(end) == Some(&b':') {
+            let variable = &source[start..end];
+            if !matches!(
+                variable.to_ascii_lowercase().as_str(),
+                "env" | "global" | "script" | "local" | "private" | "using"
+            ) {
+                found.push(format!("${variable}:"));
+            }
+        }
+        index = end;
+    }
+    found
+}
+
+#[test]
 fn an_app_sandbox_entitlement_is_refused_in_every_mode() {
     // AD-007 itself. The shape ArkDeck's validator used to *require* is the
     // shape this refuses, and it refuses it in development too — there is no

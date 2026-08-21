@@ -31,7 +31,7 @@ function Assert-TrustedSignature([string]$Path, [string]$ExpectedThumbprint = ''
         throw "Authenticode is not trusted for $Path ($($signature.Status))."
     }
     if ($ExpectedThumbprint -and $signature.SignerCertificate.Thumbprint -ine $ExpectedThumbprint) {
-        throw "Signer mismatch for $Path: $($signature.SignerCertificate.Thumbprint)"
+        throw "Signer mismatch for ${Path}: $($signature.SignerCertificate.Thumbprint)"
     }
 }
 

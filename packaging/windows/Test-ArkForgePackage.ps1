@@ -43,7 +43,7 @@ foreach ($relative in @($manifest.arkforge, $manifest.arkforged, $manifest.hdc.p
     }
     if ($relative -ne $manifest.driver.catalog -and
         $signature.SignerCertificate.Thumbprint -ine $trustedManifest.certificateThumbprint) {
-        throw "Release signer mismatch for $relative: $($signature.SignerCertificate.Thumbprint)"
+        throw "Release signer mismatch for ${relative}: $($signature.SignerCertificate.Thumbprint)"
     }
 }
 
