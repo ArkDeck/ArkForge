@@ -45,10 +45,13 @@ fn the_shipped_entitlement_files_are_empty_dictionaries() {
 fn the_release_packager_contains_only_the_canonical_cli_daemon_pair() {
     const SCRIPT: &str = include_str!("../../../packaging/macos/package-arkforge.sh");
 
-    assert!(SCRIPT.contains("cp \"$release_bin/arkforge\" \"$stage/arkforge\""));
-    assert!(SCRIPT.contains("cp \"$release_bin/arkforged\" \"$stage/arkforged\""));
-    assert!(SCRIPT.contains("\\\"arkforge\\\": {"));
-    assert!(SCRIPT.contains("\\\"arkforged\\\": {"));
+    assert!(SCRIPT.contains("stage=\"$staging_root/ArkForge.bundle\""));
+    assert!(SCRIPT.contains("cp \"$release_bin/arkforge\" \"$macos_dir/arkforge\""));
+    assert!(SCRIPT.contains("cp \"$release_bin/arkforged\" \"$macos_dir/arkforged\""));
+    assert!(SCRIPT.contains("arkforge.release-bundle/v1"));
+    assert!(SCRIPT.contains("Contents/Resources/profiles/dayu200.yaml"));
+    assert!(SCRIPT.contains("Contents/Resources/profiles/dayu600.yaml"));
+    assert!(SCRIPT.contains("arkforge-bundle.json"));
     assert!(SCRIPT.contains("for component in arkforge arkforged"));
     assert!(SCRIPT.contains("-p arkforged --bin arkforged -p arkforge-cli --bin arkforge"));
     assert!(SCRIPT.contains("\"$release_bin/arkforge\" signing verify"));

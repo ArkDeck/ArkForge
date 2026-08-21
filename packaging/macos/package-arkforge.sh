@@ -1,8 +1,7 @@
 #!/bin/bash
-# Signs the complete ArkForge macOS release pair: the canonical `arkforge` CLI
-# and its sibling native `arkforged` mechanics daemon. The two files are kept
-# together because the CLI resolves the daemon beside its own executable
-# (AFD-0003, CHG-2026-CLI).
+# Signs the complete ArkForge macOS release bundle: the canonical `arkforge`
+# CLI, its native `arkforged` mechanics daemon, the published profiles, and a
+# manifest binding every member byte (AFD-0003, CHG-2026-CLI).
 #
 # What this does NOT do, deliberately:
 #
@@ -11,8 +10,8 @@
 #     separate submission for a nested binary would produce a ticket nothing
 #     staples;
 #   * install, launch, or touch a device;
-#   * decide where the container puts these files. It produces two signed
-#     sibling binaries and a receipt; embedding is the container's contract.
+#   * install, launch, or rewrite the bundle. Consumers receive one immutable
+#     `ArkForge.bundle` path and validate its manifest independently.
 #
 # The order below is fixed. No stage may be skipped or reordered, and a
 # self-reported field never replaces an inspection: every property is read back
@@ -22,7 +21,7 @@ set -euo pipefail
 
 packaging_root="$(cd "$(dirname "$0")" && pwd)"
 repo_root="$(cd "$packaging_root/../.." && pwd)"
-output_root="${ARKFORGE_PACKAGE_OUTPUT:-$repo_root/target/arkforge-macos-release}"
+output_root="${ARKFORGE_PACKAGE_OUTPUT:-$repo_root/target/ArkForge.bundle}"
 identity="${ARKFORGE_CODESIGN_IDENTITY:-}"
 signing_prefix="${ARKFORGE_SIGNING_PREFIX:-com.arkforge}"
 
@@ -51,16 +50,22 @@ cargo build --manifest-path "$repo_root/Cargo.toml" --release --offline \
 release_bin="$repo_root/target/release"
 
 staging_root="$(mktemp -d "${TMPDIR:-/tmp}/arkforge-package.XXXXXX")"
-stage="$staging_root/ArkForge"
-mkdir -p "$stage"
-cp "$release_bin/arkforged" "$stage/arkforged"
-cp "$release_bin/arkforge" "$stage/arkforge"
-chmod 700 "$stage/arkforge" "$stage/arkforged"
+stage="$staging_root/ArkForge.bundle"
+macos_dir="$stage/Contents/MacOS"
+resources_dir="$stage/Contents/Resources"
+profiles_dir="$resources_dir/profiles"
+mkdir -p "$macos_dir" "$profiles_dir"
+cp "$release_bin/arkforged" "$macos_dir/arkforged"
+cp "$release_bin/arkforge" "$macos_dir/arkforge"
+cp "$repo_root/profiles/dayu200.yaml" "$profiles_dir/dayu200.yaml"
+cp "$repo_root/profiles/dayu600.yaml" "$profiles_dir/dayu600.yaml"
+chmod 700 "$macos_dir/arkforge" "$macos_dir/arkforged"
+chmod 600 "$profiles_dir/dayu200.yaml" "$profiles_dir/dayu600.yaml"
 
 # 2. architecture and dependency closure, before anything is signed ------------
 for component in arkforge arkforged; do
-  if ! file "$stage/$component" | grep -q "arm64"; then
-    echo "$component is not arm64: $(file "$stage/$component")" >&2
+  if ! file "$macos_dir/$component" | grep -q "arm64"; then
+    echo "$component is not arm64: $(file "$macos_dir/$component")" >&2
     exit 65
   fi
   while read -r dylib; do
@@ -72,7 +77,7 @@ for component in arkforge arkforged; do
         exit 65
         ;;
     esac
-  done < <(otool -L "$stage/$component" | tail -n +2 | awk '{print $1}')
+  done < <(otool -L "$macos_dir/$component" | tail -n +2 | awk '{print $1}')
 done
 
 # 3. sign both siblings with the empty entitlement dictionary ------------------
@@ -82,7 +87,7 @@ for component in arkforge arkforged; do
   codesign --force --sign "$identity" --options runtime --timestamp \
     --identifier "$signing_prefix.$component" \
     --entitlements "$packaging_root/arkforged.entitlements" \
-    "$stage/$component"
+    "$macos_dir/$component"
 done
 
 # 4. independent read-back ----------------------------------------------------
@@ -90,38 +95,39 @@ done
 # reader is the one the daemon will actually apply at bind time. A contract only
 # one of them enforces is a contract that drifts.
 for component in arkforge arkforged; do
-  codesign --verify --strict --verbose=2 "$stage/$component"
-  entitlements="$(codesign -d --entitlements - --xml "$stage/$component" 2>/dev/null | tail -1)"
+  codesign --verify --strict --verbose=2 "$macos_dir/$component"
+  entitlements="$(codesign -d --entitlements - --xml "$macos_dir/$component" 2>/dev/null | tail -1)"
   if [[ "$entitlements" == *"<key>"* ]]; then
     echo "$component came out carrying entitlements: $entitlements" >&2
     echo "the contract is an empty dictionary (AD-007)" >&2
     exit 65
   fi
   "$release_bin/arkforge" signing verify \
-    --file "$stage/$component" --mode release
+    --file "$macos_dir/$component" --mode release
 done
 
-# 5. receipt ------------------------------------------------------------------
-# The digest is read from the signed bytes; signing changes the binary, so a
-# pre-signing build digest cannot identify the release component.
-receipt="$stage/package-receipt.json"
+# 5. one release manifest ------------------------------------------------------
+# Digests are read from the signed bytes; signing changes a binary, so a
+# pre-signing build digest cannot identify a release component. The manifest
+# is deliberately outside its own member list to avoid a circular self-hash.
+manifest="$resources_dir/arkforge-bundle.json"
 {
-  echo "{"
-  echo "  \"contract\": \"docs/decisions/AFD-0003-arkforged-signing-packaging.md\","
-  echo "  \"signingPrefix\": \"$signing_prefix\","
-  echo "  \"components\": {"
-  echo "    \"arkforge\": {"
-  echo "      \"signedSHA256\": \"$(shasum -a 256 "$stage/arkforge" | cut -d' ' -f1)\","
-  echo "      \"identifier\": \"$signing_prefix.arkforge\""
-  echo "    },"
-  echo "    \"arkforged\": {"
-  echo "      \"signedSHA256\": \"$(shasum -a 256 "$stage/arkforged" | cut -d' ' -f1)\","
-  echo "      \"identifier\": \"$signing_prefix.arkforged\""
-  echo "    }"
-  echo "  },"
-  echo "  \"notarization\": \"not performed here; the pair is notarized with the container that ships it\""
-  echo "}"
-} > "$receipt"
+  echo '{'
+  echo '  "members": ['
+  echo "    {\"bytes\": $(wc -c < "$macos_dir/arkforge" | tr -d ' '), \"path\": \"Contents/MacOS/arkforge\", \"role\": \"cli\", \"sha256\": \"$(shasum -a 256 "$macos_dir/arkforge" | cut -d' ' -f1)\"},"
+  echo "    {\"bytes\": $(wc -c < "$macos_dir/arkforged" | tr -d ' '), \"path\": \"Contents/MacOS/arkforged\", \"role\": \"daemon\", \"sha256\": \"$(shasum -a 256 "$macos_dir/arkforged" | cut -d' ' -f1)\"},"
+  echo "    {\"bytes\": $(wc -c < "$profiles_dir/dayu200.yaml" | tr -d ' '), \"path\": \"Contents/Resources/profiles/dayu200.yaml\", \"profileId\": \"org.openharmony.dayu200\", \"role\": \"profile\", \"sha256\": \"$(shasum -a 256 "$profiles_dir/dayu200.yaml" | cut -d' ' -f1)\"},"
+  echo "    {\"bytes\": $(wc -c < "$profiles_dir/dayu600.yaml" | tr -d ' '), \"path\": \"Contents/Resources/profiles/dayu600.yaml\", \"profileId\": \"org.openharmony.dayu600\", \"role\": \"profile\", \"sha256\": \"$(shasum -a 256 "$profiles_dir/dayu600.yaml" | cut -d' ' -f1)\"}"
+  echo '  ],'
+  echo '  "schema": "arkforge.release-bundle/v1",'
+  echo '  "version": "0.1.0"'
+  echo '}'
+} > "$manifest"
+
+if find "$stage" -type l | grep -q .; then
+  echo "ArkForge.bundle must not contain symbolic links" >&2
+  exit 65
+fi
 
 mkdir -p "$(dirname "$output_root")"
 mv "$stage" "$output_root"

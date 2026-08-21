@@ -138,7 +138,7 @@ cargo test --workspace --all-targets
 
 The workspace has no third-party Rust runtime dependencies. SHA-256, deterministic CBOR, DEFLATE, tar, and the Protobuf wire codec are implemented in the repository and checked against published test vectors. See [AFD-0001](docs/decisions/AFD-0001-zero-dependency-core.md) for the rationale.
 
-A macOS release consists of separately signed sibling `arkforge` and `arkforged` binaries. [`packaging/macos/package-arkforge.sh`](packaging/macos/package-arkforge.sh) is the packaging entry point, and the release bundle contains no vendor RockUSB tool.
+A macOS release is one `ArkForge.bundle`: separately signed `arkforge` and `arkforged` binaries plus published profiles are bound member-by-member by `Contents/Resources/arkforge-bundle.json`. [`packaging/macos/package-arkforge.sh`](packaging/macos/package-arkforge.sh) is the packaging entry point, and the bundle contains no vendor RockUSB tool. Swift consumers use `ArkForgeProtocol` and `ArkForgeClient` from [`swift/ArkForgeSDK`](swift/ArkForgeSDK) instead of copying the IPC codec.
 
 The Windows release surface uses local-only Named Pipes, current-user ACLs,
 WinUSB, and Authenticode. See

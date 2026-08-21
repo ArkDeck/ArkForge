@@ -139,7 +139,7 @@ cargo test --workspace --all-targets
 
 工作区没有第三方 Rust 运行时依赖。SHA-256、deterministic CBOR、DEFLATE、tar 和 Protobuf wire codec 均在仓内实现并使用公开测试向量验证，设计理由见 [AFD-0001](docs/decisions/AFD-0001-zero-dependency-core.md)。
 
-macOS 发布物是一对位于同一目录、分别签名的 `arkforge` 和 `arkforged`。打包入口为 [`packaging/macos/package-arkforge.sh`](packaging/macos/package-arkforge.sh)，发布包不携带 vendor RockUSB 工具。
+macOS 发布物是一个 `ArkForge.bundle`：分别签名的 `arkforge`、`arkforged` 与发布 profiles 由 `Contents/Resources/arkforge-bundle.json` 逐成员绑定。打包入口为 [`packaging/macos/package-arkforge.sh`](packaging/macos/package-arkforge.sh)，发布包不携带 vendor RockUSB 工具。Swift 接入使用 [`swift/ArkForgeSDK`](swift/ArkForgeSDK) 的 `ArkForgeProtocol` 与 `ArkForgeClient`，无需复制 IPC codec。
 
 Windows 发布面使用 local-only Named Pipe、当前用户 ACL、WinUSB 和 Authenticode。
 打包、驱动绑定、安装/卸载及软件/真机分级验收入口见
