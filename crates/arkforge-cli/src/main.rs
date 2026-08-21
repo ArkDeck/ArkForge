@@ -4,12 +4,10 @@
 //! normal-flash authority surface. No canonical command is a compatibility
 //! wrapper around an older binary.
 
-mod authority_support;
-mod controller_client;
-mod hdc_control;
-mod supervisor;
-
 use arkforge_artifact::cas::{CasError, CasQuota, ContentAddressedStore, ImportedObject};
+use arkforge_client::{
+    DeviceObservationView, DeviceProbeView, PublicClient, PublicClientError, RecoveryGuideView,
+};
 use arkforge_core::profile;
 use arkforge_core::{OpaqueId, Sha256Digest, Version};
 use arkforge_ipc::messages::{
@@ -21,9 +19,6 @@ use arkforged::artifact_ops::{
 };
 use arkforged::dispatch::executable_digest;
 use arkforged::packaging::{self, ContractMode, SignedCode};
-use arkforged::public_client::{
-    DeviceObservationView, DeviceProbeView, PublicClient, PublicClientError, RecoveryGuideView,
-};
 use arkforged::rescue::{
     NativeRescueBackend, RescueApplyResult, RescueDevice, RescueError, RescueInspection,
     RescueManager, RescuePlanSummary, RescueReadReceipt, now_epoch_ms,
@@ -31,6 +26,9 @@ use arkforged::rescue::{
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs::File;
 use std::path::{Path, PathBuf};
+
+use arkforge_standalone::StandaloneError;
+use arkforge_standalone::supervisor;
 
 const HELP_SCHEMA: &str = "arkforge.command-help/v1";
 
@@ -91,6 +89,7 @@ impl CliError {
         Self::new("INVALID_ARGUMENT", message, 2, false)
     }
 
+    #[cfg(test)]
     fn with_required_acknowledgements(mut self, tokens: Vec<String>) -> Self {
         if !tokens.is_empty() {
             self.retryable = true;
@@ -125,6 +124,18 @@ impl From<PublicClientError> for CliError {
             exit_code: error.exit_code,
             retryable: error.retryable,
             required_acknowledgements: Vec::new(),
+        }
+    }
+}
+
+impl From<StandaloneError> for CliError {
+    fn from(error: StandaloneError) -> Self {
+        Self {
+            code: error.code,
+            message: error.message,
+            exit_code: error.exit_code,
+            retryable: error.retryable,
+            required_acknowledgements: error.required_acknowledgements,
         }
     }
 }
@@ -783,7 +794,7 @@ fn run_help(arguments: &[String], global_output: Output) -> Result<i32, CliError
 
 fn run_doctor(globals: Globals) -> Result<i32, CliError> {
     let runtime_dir = command_runtime_dir(&globals)?;
-    let platform_supported = cfg!(target_os = "macos");
+    let platform_supported = cfg!(any(target_os = "macos", target_os = "windows"));
     let runtime = supervisor::status(&runtime_dir).ok();
     let runtime_running = runtime.is_some();
     let mechanics_ready = runtime
@@ -1577,7 +1588,9 @@ fn artifact_store_root(globals: &Globals) -> Result<PathBuf, CliError> {
 }
 
 fn open_artifact_store(globals: &Globals) -> Result<ContentAddressedStore, CliError> {
-    ContentAddressedStore::open(artifact_store_root(globals)?, CasQuota::dayu200_default())
+    let runtime_dir = command_runtime_dir(globals)?;
+    supervisor::prepare_storage(&runtime_dir)?;
+    ContentAddressedStore::open(runtime_dir.join("store"), CasQuota::dayu200_default())
         .map_err(artifact_store_error)
 }
 
@@ -2857,6 +2870,10 @@ fn default_runtime_dir() -> Result<PathBuf, CliError> {
             .join("Application Support")
             .join("ArkForge"));
     }
+    #[cfg(target_os = "windows")]
+    if let Some(local_app_data) = std::env::var_os("LOCALAPPDATA") {
+        return Ok(PathBuf::from(local_app_data).join("ArkForge"));
+    }
     #[cfg(not(target_os = "macos"))]
     {
         if let Some(state) = std::env::var_os("XDG_STATE_HOME") {
@@ -3450,7 +3467,7 @@ fn print_help(spec: &HelpSpec, output: Output) {
                 .join(",");
             let constraints = help_constraints(spec).join(",");
             println!(
-                "{{\"schema\":{},\"path\":{},\"command\":{},\"summary\":{},\"usage\":{},\"effect\":{},\"effect_detail\":{},\"interactive\":false,\"availability\":{{\"platforms\":[\"macos\"],\"requires_daemon\":{},\"requires_controller\":{}}},\"subcommands\":[{}],\"requires\":{},\"outputs\":{},\"output_descriptions\":{},\"options\":[{}],\"constraints\":[{}],\"examples\":{},\"next_commands\":{},\"exit_codes\":[{}]}}",
+                "{{\"schema\":{},\"path\":{},\"command\":{},\"summary\":{},\"usage\":{},\"effect\":{},\"effect_detail\":{},\"interactive\":false,\"availability\":{{\"platforms\":{},\"requires_daemon\":{},\"requires_controller\":{}}},\"subcommands\":[{}],\"requires\":{},\"outputs\":{},\"output_descriptions\":{},\"options\":[{}],\"constraints\":[{}],\"examples\":{},\"next_commands\":{},\"exit_codes\":[{}]}}",
                 json(HELP_SCHEMA),
                 json_array(&spec.path()),
                 json(spec.command),
@@ -3458,6 +3475,7 @@ fn print_help(spec: &HelpSpec, output: Output) {
                 json(spec.usage),
                 json(spec.effect_class()),
                 json(spec.effect),
+                supported_platforms_json(),
                 spec.requires_daemon(),
                 spec.requires_controller(),
                 subcommands,
@@ -3471,6 +3489,14 @@ fn print_help(spec: &HelpSpec, output: Output) {
                 exits
             );
         }
+    }
+}
+
+fn supported_platforms_json() -> &'static str {
+    if cfg!(target_os = "windows") {
+        "[\"windows\"]"
+    } else {
+        "[\"macos\"]"
     }
 }
 

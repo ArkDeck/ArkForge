@@ -13,7 +13,8 @@ use arkforge_core::plan::ExecutionUnknown;
 use arkforge_core::profile::DeviceProfile;
 use arkforge_ipc::messages::{ArchiveMember, InspectArtifactResponse, KeyValue, PartitionEntry};
 use arkforge_ipc::wire;
-use std::fs::{self, File, OpenOptions};
+use arkforge_platform::{replace_file, sync_directory};
+use std::fs::{self, OpenOptions};
 use std::io::{Read, Write};
 use std::path::Path;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -168,10 +169,8 @@ fn persist_manifest_cache(
         file.sync_all().map_err(|error| error.to_string())?;
         drop(file);
         set_mode(&temporary, 0o400)?;
-        fs::rename(&temporary, &target).map_err(|error| error.to_string())?;
-        File::open(&directory)
-            .and_then(|directory| directory.sync_all())
-            .map_err(|error| error.to_string())?;
+        replace_file(&temporary, &target).map_err(|error| error.to_string())?;
+        sync_directory(&directory).map_err(|error| error.to_string())?;
         Ok(())
     })();
     if result.is_err() {

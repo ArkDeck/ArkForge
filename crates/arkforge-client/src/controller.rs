@@ -5,7 +5,7 @@
 //! use `PublicClient`; only the supervisor can materialize, start, cancel,
 //! reconcile or answer admissions.
 
-use crate::CliError;
+use crate::ClientError;
 use arkforge_ipc::framing::{read_frame, write_frame};
 use arkforge_ipc::messages::{
     ErrorBody, Hello, HelloAck, JobEvent, MaterializePlanResponse, Request, Response,
@@ -13,12 +13,12 @@ use arkforge_ipc::messages::{
     WatchJobRequest,
 };
 use arkforge_ipc::{Api, PROTOCOL_MAJOR, PROTOCOL_MINOR, SessionKind, Status, wire};
-use std::os::unix::net::UnixStream;
+use arkforge_platform::{LocalChannel, LocalEndpoint, LocalStream};
 use std::path::Path;
 
 #[derive(Debug)]
 pub struct ControllerClient {
-    stream: UnixStream,
+    stream: LocalStream,
     next_request: u64,
 }
 
@@ -39,12 +39,12 @@ pub struct MaterializeInput<'a> {
 }
 
 impl ControllerClient {
-    pub fn connect(runtime_dir: &Path) -> Result<Self, CliError> {
-        let socket = runtime_dir.join("controller.sock");
-        let mut stream = UnixStream::connect(&socket).map_err(|error| {
-            CliError::new(
+    pub fn connect(runtime_dir: &Path) -> Result<Self, ClientError> {
+        let endpoint = LocalEndpoint::for_runtime(runtime_dir, LocalChannel::Controller);
+        let mut stream = LocalStream::connect(&endpoint).map_err(|error| {
+            ClientError::new(
                 "CONTROLLER_UNAVAILABLE",
-                format!("Cannot connect to {}: {error}", socket.display()),
+                format!("Cannot connect to {}: {error}", endpoint.display()),
                 5,
                 true,
             )
@@ -59,7 +59,7 @@ impl ControllerClient {
         let frame = read_frame(&mut stream)
             .map_err(|error| transport("read the controller handshake", error))?
             .ok_or_else(|| {
-                CliError::new(
+                ClientError::new(
                     "CONTROLLER_UNAVAILABLE",
                     "arkforged closed during the controller handshake.",
                     5,
@@ -69,10 +69,10 @@ impl ControllerClient {
         let ack = HelloAck::decode(&frame)
             .map_err(|error| invalid_response("decode the controller handshake", error))?;
         if let Some(refusal) = ack.refusal {
-            return Err(CliError::new("PROTOCOL_REFUSED", refusal, 3, false));
+            return Err(ClientError::new("PROTOCOL_REFUSED", refusal, 3, false));
         }
         if ack.protocol_major != PROTOCOL_MAJOR || ack.session_kind != SessionKind::Controller {
-            return Err(CliError::new(
+            return Err(ClientError::new(
                 "PROTOCOL_REFUSED",
                 "arkforged did not acknowledge the requested controller protocol.",
                 3,
@@ -88,7 +88,7 @@ impl ControllerClient {
     pub fn materialize_plan(
         &mut self,
         input: &MaterializeInput<'_>,
-    ) -> Result<MaterializePlanResponse, CliError> {
+    ) -> Result<MaterializePlanResponse, ClientError> {
         let mut payload = Vec::new();
         wire::write_string(&mut payload, 1, input.artifact_id);
         wire::write_string(&mut payload, 2, input.profile_id);
@@ -114,7 +114,7 @@ impl ControllerClient {
         plan_sha256: &str,
         execution_purpose: &str,
         controller_session_id: &str,
-    ) -> Result<String, CliError> {
+    ) -> Result<String, ClientError> {
         let mut payload = Vec::new();
         wire::write_string(&mut payload, 1, plan_id);
         wire::write_string(&mut payload, 2, plan_sha256);
@@ -128,7 +128,7 @@ impl ControllerClient {
         &mut self,
         job_id: &str,
         after_sequence: u64,
-    ) -> Result<Vec<JobEvent>, CliError> {
+    ) -> Result<Vec<JobEvent>, ClientError> {
         let response = self.call(
             Api::WatchJob,
             WatchJobRequest {
@@ -157,7 +157,7 @@ impl ControllerClient {
         Ok(events)
     }
 
-    pub fn cancel(&mut self, job_id: &str, expected_sequence: u64) -> Result<String, CliError> {
+    pub fn cancel(&mut self, job_id: &str, expected_sequence: u64) -> Result<String, ClientError> {
         let mut payload = Vec::new();
         wire::write_string(&mut payload, 1, job_id);
         wire::write_uint64(&mut payload, 2, expected_sequence);
@@ -165,13 +165,13 @@ impl ControllerClient {
         first_string(&response, 1, "cancelJob state")
     }
 
-    pub fn reconcile(&mut self, job_id: &str) -> Result<Vec<u8>, CliError> {
+    pub fn reconcile(&mut self, job_id: &str) -> Result<Vec<u8>, ClientError> {
         let mut payload = Vec::new();
         wire::write_string(&mut payload, 1, job_id);
         self.call(Api::ReconcileJob, payload)
     }
 
-    pub fn plan_superseding_recovery(&mut self, job_id: &str) -> Result<Vec<u8>, CliError> {
+    pub fn plan_superseding_recovery(&mut self, job_id: &str) -> Result<Vec<u8>, ClientError> {
         let mut payload = Vec::new();
         wire::write_string(&mut payload, 1, job_id);
         self.call(Api::PlanSupersedingRecovery, payload)
@@ -180,7 +180,7 @@ impl ControllerClient {
     pub fn submit_permit(
         &mut self,
         submission: &SubmitStepPermitRequest,
-    ) -> Result<SubmissionOutcome, CliError> {
+    ) -> Result<SubmissionOutcome, ClientError> {
         let response = self.call(Api::SubmitStepPermit, submission.encode())?;
         SubmissionOutcome::decode(&response)
             .map_err(|error| invalid_response("decode submitStepPermit", error))
@@ -189,13 +189,13 @@ impl ControllerClient {
     pub fn submit_control_receipt(
         &mut self,
         receipt: &SubmitManagedControlReceiptRequest,
-    ) -> Result<SubmissionOutcome, CliError> {
+    ) -> Result<SubmissionOutcome, ClientError> {
         let response = self.call(Api::SubmitManagedControlReceipt, receipt.encode())?;
         SubmissionOutcome::decode(&response)
             .map_err(|error| invalid_response("decode submitManagedControlReceipt", error))
     }
 
-    fn call(&mut self, api: Api, payload: Vec<u8>) -> Result<Vec<u8>, CliError> {
+    fn call(&mut self, api: Api, payload: Vec<u8>) -> Result<Vec<u8>, ClientError> {
         let request = Request {
             request_id: format!("CLI-CONTROLLER-{}", self.next_request),
             api,
@@ -231,11 +231,11 @@ impl ControllerClient {
                 Status::Ok => 10,
             },
         };
-        Err(CliError::new(error.code, error.message, exit, false))
+        Err(ClientError::new(error.code, error.message, exit, false))
     }
 }
 
-fn first_string(payload: &[u8], field: u32, context: &str) -> Result<String, CliError> {
+fn first_string(payload: &[u8], field: u32, context: &str) -> Result<String, ClientError> {
     let mut reader = wire::Reader::new(payload);
     while let Some((found, value)) = reader
         .next_field()
@@ -251,8 +251,8 @@ fn first_string(payload: &[u8], field: u32, context: &str) -> Result<String, Cli
     Err(invalid_response(context, "required field is missing"))
 }
 
-fn transport(context: &str, error: impl std::fmt::Display) -> CliError {
-    CliError::new(
+fn transport(context: &str, error: impl std::fmt::Display) -> ClientError {
+    ClientError::new(
         "CONTROLLER_IO_FAILED",
         format!("Cannot {context}: {error}"),
         10,
@@ -260,8 +260,8 @@ fn transport(context: &str, error: impl std::fmt::Display) -> CliError {
     )
 }
 
-fn invalid_response(context: &str, error: impl std::fmt::Display) -> CliError {
-    CliError::new(
+fn invalid_response(context: &str, error: impl std::fmt::Display) -> ClientError {
+    ClientError::new(
         "CONTROLLER_RESPONSE_INVALID",
         format!("Cannot {context}: {error}"),
         10,

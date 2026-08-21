@@ -5,14 +5,14 @@
 //! arrays. Raw paths, connect keys and argv never enter facts, receipts,
 //! journals or errors.
 
-use crate::CliError;
+use crate::StandaloneError;
+use arkforge_client::{DeviceObservationView, PublicClient};
 use arkforge_core::Sha256Digest;
 use arkforge_core::digest::{Domain, digest_in_domain};
 use arkforge_ipc::messages::{
     KeyValue, ManagedControlAction, ManagedControlRequest, SubmitManagedControlReceiptRequest,
 };
 use arkforged::jobs::canonical_facts_digest;
-use arkforged::public_client::{DeviceObservationView, PublicClient};
 use std::collections::BTreeMap;
 use std::path::PathBuf;
 use std::process::{Command, Stdio};
@@ -39,16 +39,16 @@ pub(super) struct ControlResult {
 }
 
 trait ObservationPort {
-    fn list(&mut self) -> Result<Vec<DeviceObservationView>, CliError>;
-    fn probe(&mut self, device: &str, profile: &str) -> Result<(), CliError>;
+    fn list(&mut self) -> Result<Vec<DeviceObservationView>, StandaloneError>;
+    fn probe(&mut self, device: &str, profile: &str) -> Result<(), StandaloneError>;
 }
 
 impl ObservationPort for PublicClient {
-    fn list(&mut self) -> Result<Vec<DeviceObservationView>, CliError> {
+    fn list(&mut self) -> Result<Vec<DeviceObservationView>, StandaloneError> {
         self.device_list().map_err(Into::into)
     }
 
-    fn probe(&mut self, device: &str, profile: &str) -> Result<(), CliError> {
+    fn probe(&mut self, device: &str, profile: &str) -> Result<(), StandaloneError> {
         self.device_probe(device, profile)
             .map(|_| ())
             .map_err(Into::into)
@@ -767,11 +767,11 @@ mod tests {
     }
 
     impl ObservationPort for ScriptedObservations {
-        fn list(&mut self) -> Result<Vec<DeviceObservationView>, CliError> {
+        fn list(&mut self) -> Result<Vec<DeviceObservationView>, StandaloneError> {
             Ok(self.lists.pop_front().expect("scripted observation list"))
         }
 
-        fn probe(&mut self, _device: &str, _profile: &str) -> Result<(), CliError> {
+        fn probe(&mut self, _device: &str, _profile: &str) -> Result<(), StandaloneError> {
             Ok(())
         }
     }

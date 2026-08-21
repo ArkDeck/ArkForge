@@ -316,7 +316,17 @@ impl ContentAddressedStore {
         // read-only lets higher-level, content-bound indexes distinguish a
         // sealed object from one that may have been edited since import.
         set_private_permissions(&staging_path, 0o400)?;
-        fs::rename(&staging_path, &object_path)?;
+        if let Err(error) = fs::rename(&staging_path, &object_path) {
+            if object_path.exists() {
+                let _ = fs::remove_file(&staging_path);
+                return Ok(ImportedObject {
+                    digest,
+                    size_bytes: written,
+                    deduplicated: true,
+                });
+            }
+            return Err(error.into());
+        }
         Ok(ImportedObject {
             digest,
             size_bytes: written,
@@ -544,9 +554,13 @@ fn set_private_permissions(path: &Path, mode: u32) -> Result<(), CasError> {
 }
 
 #[cfg(not(unix))]
-fn set_private_permissions(_path: &Path, _mode: u32) -> Result<(), CasError> {
-    // Windows ACLs are a Stage B item; see architecture.md 15.2, which keeps
-    // the Windows transport surface out of AF-V1/AF-V2 acceptance.
+fn set_private_permissions(path: &Path, mode: u32) -> Result<(), CasError> {
+    // The platform owner creates the store beneath a protected, inheritable
+    // Windows DACL. This neutral crate additionally preserves the sealed-file
+    // invariant with the host read-only attribute.
+    let mut permissions = fs::metadata(path)?.permissions();
+    permissions.set_readonly(mode & 0o200 == 0);
+    fs::set_permissions(path, permissions)?;
     Ok(())
 }
 

@@ -4,14 +4,15 @@
 //! passes the secret to `arkforged` over an anonymous stdin pipe and exposes an
 //! owner-only local control socket containing no secret-bearing operation.
 
-use crate::CliError;
+use crate::StandaloneError;
 use crate::authority_support::{self, AuthoritySupportKey};
-use crate::controller_client::{ControllerClient, MaterializeInput};
 use crate::hdc_control::{ControlContext, HdcControlPort};
 use arkforge_authority_api::authority_side::mint_integrity_tag;
 use arkforge_authority_api::{
     ControllerPairingSecret, PairingEpoch, PermitIntegrityTag, StepPermit,
 };
+use arkforge_client::{ControllerClient, MaterializeInput};
+use arkforge_client::{DeviceObservationView, DeviceProbeView, PublicClient, PublicRuntimeInfo};
 use arkforge_core::Sha256Digest;
 use arkforge_core::authority::{AuthorityBindingRef, AuthorityNamespace, AuthoritySupportState};
 use arkforge_core::digest::sha256;
@@ -24,19 +25,16 @@ use arkforge_ipc::messages::{
     SubmitManagedControlReceiptRequest, SubmitStepPermitRequest,
 };
 use arkforge_ipc::wire;
-use arkforged::public_client::{
-    DeviceObservationView, DeviceProbeView, PublicClient, PublicRuntimeInfo,
+use arkforge_platform::{
+    LocalChannel, LocalEndpoint, LocalListener, LocalStream, fill_random, protect_path,
+    replace_file, sync_directory, unix_socket_path,
 };
 use std::collections::BTreeMap;
-use std::fs::File;
-use std::io::{Read, Write};
-use std::os::unix::fs::PermissionsExt;
-use std::os::unix::net::{UnixListener, UnixStream};
+use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
 use std::time::{Duration, Instant};
 
-const SOCKET: &str = "supervisor.sock";
 const READY_TIMEOUT: Duration = Duration::from_secs(10);
 
 #[derive(Debug, Clone, Default)]
@@ -49,7 +47,7 @@ pub struct DaemonOptions {
 }
 
 impl DaemonOptions {
-    pub fn parse(arguments: &[String]) -> Result<Self, CliError> {
+    pub fn parse(arguments: &[String]) -> Result<Self, StandaloneError> {
         let mut options = Self::default();
         let mut index = 0;
         while index < arguments.len() {
@@ -59,45 +57,46 @@ impl DaemonOptions {
                     options
                         .profile_files
                         .push(PathBuf::from(arguments.get(index).ok_or_else(|| {
-                            CliError::invalid("--profile-file requires a file path.")
+                            StandaloneError::invalid("--profile-file requires a file path.")
                         })?));
                 }
                 "--hdc" => {
                     index += 1;
-                    let path =
-                        PathBuf::from(arguments.get(index).ok_or_else(|| {
-                            CliError::invalid("--hdc requires an absolute path.")
-                        })?);
+                    let path = PathBuf::from(arguments.get(index).ok_or_else(|| {
+                        StandaloneError::invalid("--hdc requires an absolute path.")
+                    })?);
                     if !path.is_absolute() {
-                        return Err(CliError::invalid("--hdc requires an absolute path."));
+                        return Err(StandaloneError::invalid("--hdc requires an absolute path."));
                     }
                     if options.hdc.replace(path).is_some() {
-                        return Err(CliError::invalid("--hdc may be supplied only once."));
+                        return Err(StandaloneError::invalid("--hdc may be supplied only once."));
                     }
                 }
                 "--expect-hdc-sha256" => {
                     index += 1;
                     let digest = arguments.get(index).ok_or_else(|| {
-                        CliError::invalid("--expect-hdc-sha256 requires 64 lowercase hex digits.")
+                        StandaloneError::invalid(
+                            "--expect-hdc-sha256 requires 64 lowercase hex digits.",
+                        )
                     })?;
                     if digest.len() != 64
                         || !digest
                             .bytes()
                             .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
                     {
-                        return Err(CliError::invalid(
+                        return Err(StandaloneError::invalid(
                             "--expect-hdc-sha256 requires 64 lowercase hex digits.",
                         ));
                     }
                     if options.expect_hdc_sha256.replace(digest.clone()).is_some() {
-                        return Err(CliError::invalid(
+                        return Err(StandaloneError::invalid(
                             "--expect-hdc-sha256 may be supplied only once.",
                         ));
                     }
                 }
                 "--require-release-signing" => {
                     if options.require_release_signing {
-                        return Err(CliError::invalid(
+                        return Err(StandaloneError::invalid(
                             "--require-release-signing may be supplied only once.",
                         ));
                     }
@@ -106,10 +105,12 @@ impl DaemonOptions {
                 "--hardware-campaign" => {
                     index += 1;
                     let campaign = arguments.get(index).ok_or_else(|| {
-                        CliError::invalid("--hardware-campaign requires a non-empty campaign id.")
+                        StandaloneError::invalid(
+                            "--hardware-campaign requires a non-empty campaign id.",
+                        )
                     })?;
                     if campaign.trim().is_empty() {
-                        return Err(CliError::invalid(
+                        return Err(StandaloneError::invalid(
                             "--hardware-campaign requires a non-empty campaign id.",
                         ));
                     }
@@ -118,13 +119,13 @@ impl DaemonOptions {
                         .replace(campaign.clone())
                         .is_some()
                     {
-                        return Err(CliError::invalid(
+                        return Err(StandaloneError::invalid(
                             "--hardware-campaign may be supplied only once.",
                         ));
                     }
                 }
                 argument => {
-                    return Err(CliError::invalid(format!(
+                    return Err(StandaloneError::invalid(format!(
                         "Unknown daemon option {argument:?}."
                     )));
                 }
@@ -132,7 +133,7 @@ impl DaemonOptions {
             index += 1;
         }
         if options.hdc.is_some() != options.expect_hdc_sha256.is_some() {
-            return Err(CliError::invalid(
+            return Err(StandaloneError::invalid(
                 "--hdc and --expect-hdc-sha256 are required together.",
             ));
         }
@@ -212,17 +213,33 @@ struct ActiveTargetLineage {
     revision: u64,
 }
 
-pub fn start(runtime_dir: PathBuf, options: DaemonOptions) -> Result<DaemonStatus, CliError> {
+pub fn start(
+    runtime_dir: PathBuf,
+    options: DaemonOptions,
+) -> Result<DaemonStatus, StandaloneError> {
+    let executable =
+        std::env::current_exe().map_err(|error| internal("identify arkforge", error))?;
+    start_with_launcher(runtime_dir, options, executable)
+}
+
+/// Starts the background authority through a packaged ArkForge launcher.
+///
+/// Desktop applications use this entry point because their current executable
+/// is a UI process and cannot service the supervisor mode. The CLI continues
+/// to use [`start`] and therefore preserves its existing behavior.
+pub fn start_with_launcher(
+    runtime_dir: PathBuf,
+    options: DaemonOptions,
+    executable: PathBuf,
+) -> Result<DaemonStatus, StandaloneError> {
     if status(&runtime_dir).is_ok() {
-        return Err(CliError::new(
+        return Err(StandaloneError::new(
             "RUNTIME_ALREADY_RUNNING",
             "This ArkForge runtime already has a live CLI authority supervisor.",
             6,
             false,
         ));
     }
-    let executable =
-        std::env::current_exe().map_err(|error| internal("identify arkforge", error))?;
     let mut command = Command::new(executable);
     options.append_public_arguments(&mut command, &runtime_dir);
     command
@@ -248,25 +265,19 @@ pub fn run(
     runtime_dir: PathBuf,
     options: DaemonOptions,
     foreground_output: bool,
-) -> Result<(), CliError> {
+) -> Result<(), StandaloneError> {
     prepare_runtime(&runtime_dir)?;
-    let socket = runtime_dir.join(SOCKET);
-    if UnixStream::connect(&socket).is_ok() {
-        return Err(CliError::new(
+    let endpoint = LocalEndpoint::for_runtime(&runtime_dir, LocalChannel::Supervisor);
+    if LocalStream::connect(&endpoint).is_ok() {
+        return Err(StandaloneError::new(
             "RUNTIME_ALREADY_RUNNING",
             "This runtime is already owned by a live CLI authority supervisor.",
             6,
             false,
         ));
     }
-    if socket.exists() {
-        std::fs::remove_file(&socket)
-            .map_err(|error| internal("remove a stale supervisor socket", error))?;
-    }
-    let listener = UnixListener::bind(&socket)
+    let mut listener = LocalListener::bind(&endpoint)
         .map_err(|error| internal("bind the authority supervisor socket", error))?;
-    std::fs::set_permissions(&socket, std::fs::Permissions::from_mode(0o600))
-        .map_err(|error| internal("protect the authority supervisor socket", error))?;
     listener
         .set_nonblocking(true)
         .map_err(|error| internal("configure the authority supervisor socket", error))?;
@@ -317,18 +328,24 @@ pub fn run(
     );
     let _ = daemon.kill();
     let _ = daemon.wait();
-    for name in [SOCKET, "public.sock", "controller.sock"] {
-        let _ = std::fs::remove_file(runtime_dir.join(name));
+    for channel in [
+        LocalChannel::Supervisor,
+        LocalChannel::Public,
+        LocalChannel::Controller,
+    ] {
+        if let Some(path) = unix_socket_path(&runtime_dir, channel) {
+            let _ = std::fs::remove_file(path);
+        }
     }
     result
 }
 
-pub fn status(runtime_dir: &Path) -> Result<DaemonStatus, CliError> {
+pub fn status(runtime_dir: &Path) -> Result<DaemonStatus, StandaloneError> {
     let payload = request(runtime_dir, "status", &[])?;
     decode_status(&payload)
 }
 
-pub fn stop(runtime_dir: &Path) -> Result<DaemonStatus, CliError> {
+pub fn stop(runtime_dir: &Path) -> Result<DaemonStatus, StandaloneError> {
     let payload = request(runtime_dir, "stop", &[])?;
     decode_status(&payload)
 }
@@ -338,14 +355,14 @@ pub fn materialize_plan(
     artifact: &str,
     profile: &str,
     device: &str,
-) -> Result<MaterializePlanResponse, CliError> {
+) -> Result<MaterializePlanResponse, StandaloneError> {
     let payload = request(
         runtime_dir,
         "materialize-plan",
         &[artifact, profile, device],
     )?;
     MaterializePlanResponse::decode(&payload).map_err(|error| {
-        CliError::new(
+        StandaloneError::new(
             "SUPERVISOR_RESPONSE_INVALID",
             format!("The supervisor returned an invalid plan response: {error}"),
             10,
@@ -359,10 +376,10 @@ pub fn assess_plan(
     artifact: &str,
     profile: &str,
     device: &str,
-) -> Result<arkforge_ipc::messages::Assessment, CliError> {
+) -> Result<arkforge_ipc::messages::Assessment, StandaloneError> {
     let payload = request(runtime_dir, "assess-plan", &[artifact, profile, device])?;
     match MaterializePlanResponse::decode(&payload).map_err(|error| {
-        CliError::new(
+        StandaloneError::new(
             "SUPERVISOR_RESPONSE_INVALID",
             format!("The supervisor assessment response is invalid: {error}"),
             10,
@@ -370,7 +387,7 @@ pub fn assess_plan(
         )
     })? {
         MaterializePlanResponse::Assessment(assessment) => Ok(assessment),
-        MaterializePlanResponse::Plan(_) => Err(CliError::new(
+        MaterializePlanResponse::Plan(_) => Err(StandaloneError::new(
             "ASSESSMENT_BECAME_EXECUTABLE_PLAN",
             "A read-only assessment returned an executable plan.",
             10,
@@ -383,13 +400,13 @@ pub fn cancel_job(
     runtime_dir: &Path,
     job_id: &str,
     expected_sequence: u64,
-) -> Result<String, CliError> {
+) -> Result<String, StandaloneError> {
     let sequence = expected_sequence.to_string();
     let payload = request(runtime_dir, "cancel-job", &[job_id, &sequence])?;
     decode_single_string(&payload, 1, "cancel disposition")
 }
 
-pub fn reconcile_job(runtime_dir: &Path, job_id: &str) -> Result<ReconcileStatus, CliError> {
+pub fn reconcile_job(runtime_dir: &Path, job_id: &str) -> Result<ReconcileStatus, StandaloneError> {
     let payload = request(runtime_dir, "reconcile-job", &[job_id])?;
     decode_reconcile(&payload)
 }
@@ -400,7 +417,7 @@ pub fn apply_plan(
     expected_plan_sha256: &str,
     acknowledgements: &[String],
     detach: bool,
-) -> Result<String, CliError> {
+) -> Result<String, StandaloneError> {
     let mut arguments = vec![
         plan_id,
         expected_plan_sha256,
@@ -417,14 +434,14 @@ pub fn materialize_recovery_plan(
     artifact: &str,
     profile: &str,
     device: &str,
-) -> Result<MaterializePlanResponse, CliError> {
+) -> Result<MaterializePlanResponse, StandaloneError> {
     let payload = request(
         runtime_dir,
         "materialize-recovery-plan",
         &[job_id, artifact, profile, device],
     )?;
     MaterializePlanResponse::decode(&payload).map_err(|error| {
-        CliError::new(
+        StandaloneError::new(
             "SUPERVISOR_RESPONSE_INVALID",
             format!("The supervisor returned an invalid recovery plan response: {error}"),
             10,
@@ -433,14 +450,14 @@ pub fn materialize_recovery_plan(
     })
 }
 
-fn request(runtime_dir: &Path, verb: &str, arguments: &[&str]) -> Result<Vec<u8>, CliError> {
-    let socket = runtime_dir.join(SOCKET);
-    let mut stream = UnixStream::connect(&socket).map_err(|error| {
-        CliError::new(
+fn request(runtime_dir: &Path, verb: &str, arguments: &[&str]) -> Result<Vec<u8>, StandaloneError> {
+    let endpoint = LocalEndpoint::for_runtime(runtime_dir, LocalChannel::Supervisor);
+    let mut stream = LocalStream::connect(&endpoint).map_err(|error| {
+        StandaloneError::new(
             "DAEMON_UNAVAILABLE",
             format!(
                 "No CLI authority supervisor is listening at {}: {error}",
-                socket.display()
+                endpoint.display()
             ),
             5,
             true,
@@ -468,11 +485,11 @@ struct SupervisorSession<'a> {
 }
 
 fn serve(
-    listener: UnixListener,
+    mut listener: LocalListener,
     runtime_dir: &Path,
     daemon: &mut Child,
     mut session: SupervisorSession<'_>,
-) -> Result<(), CliError> {
+) -> Result<(), StandaloneError> {
     let mut job_cursors = BTreeMap::new();
     let mut target_lineages = BTreeMap::new();
     let mut last_drive = Instant::now() - Duration::from_secs(1);
@@ -481,7 +498,7 @@ fn serve(
             .try_wait()
             .map_err(|error| internal("observe arkforged", error))?
         {
-            return Err(CliError::new(
+            return Err(StandaloneError::new(
                 "MECHANICS_DAEMON_EXITED",
                 format!("arkforged exited unexpectedly with {exit}."),
                 10,
@@ -502,7 +519,7 @@ fn serve(
             last_drive = Instant::now();
         }
         match listener.accept() {
-            Ok((mut stream, _)) => {
+            Ok(mut stream) => {
                 let Some(request) = read_frame(&mut stream)
                     .map_err(|error| internal("read supervisor request", error))?
                 else {
@@ -554,7 +571,7 @@ fn serve(
                     "stop" => {
                         write_reply(
                             &mut stream,
-                            Err(CliError::new(
+                            Err(StandaloneError::new(
                                 "ACTIVE_JOBS",
                                 format!(
                                     "The runtime has {active_jobs} active job(s); request cancellation and wait for a terminal state before stopping."
@@ -619,7 +636,7 @@ fn serve(
                     _ => {
                         write_reply(
                             &mut stream,
-                            Err(CliError::new(
+                            Err(StandaloneError::new(
                                 "SUPERVISOR_REQUEST_INVALID",
                                 "The authority supervisor does not recognize this request.",
                                 2,
@@ -637,9 +654,9 @@ fn serve(
     }
 }
 
-fn handle_cancel(runtime_dir: &Path, arguments: &[String]) -> Result<Vec<u8>, CliError> {
+fn handle_cancel(runtime_dir: &Path, arguments: &[String]) -> Result<Vec<u8>, StandaloneError> {
     let [job_id, expected] = arguments else {
-        return Err(CliError::new(
+        return Err(StandaloneError::new(
             "SUPERVISOR_REQUEST_INVALID",
             "cancel-job requires a job id and expected journal sequence.",
             2,
@@ -647,7 +664,7 @@ fn handle_cancel(runtime_dir: &Path, arguments: &[String]) -> Result<Vec<u8>, Cl
         ));
     };
     JobId::new(job_id).map_err(|error| {
-        CliError::new(
+        StandaloneError::new(
             "SUPERVISOR_REQUEST_INVALID",
             format!("cancel-job requires a canonical job id: {error}"),
             2,
@@ -655,7 +672,7 @@ fn handle_cancel(runtime_dir: &Path, arguments: &[String]) -> Result<Vec<u8>, Cl
         )
     })?;
     let expected = expected.parse::<u64>().map_err(|_| {
-        CliError::new(
+        StandaloneError::new(
             "SUPERVISOR_REQUEST_INVALID",
             "cancel-job expected sequence is not an unsigned integer.",
             2,
@@ -669,9 +686,9 @@ fn handle_cancel(runtime_dir: &Path, arguments: &[String]) -> Result<Vec<u8>, Cl
     Ok(out)
 }
 
-fn handle_reconcile(runtime_dir: &Path, arguments: &[String]) -> Result<Vec<u8>, CliError> {
+fn handle_reconcile(runtime_dir: &Path, arguments: &[String]) -> Result<Vec<u8>, StandaloneError> {
     let [job_id] = arguments else {
-        return Err(CliError::new(
+        return Err(StandaloneError::new(
             "SUPERVISOR_REQUEST_INVALID",
             "reconcile-job requires exactly one job id.",
             2,
@@ -679,7 +696,7 @@ fn handle_reconcile(runtime_dir: &Path, arguments: &[String]) -> Result<Vec<u8>,
         ));
     };
     JobId::new(job_id).map_err(|error| {
-        CliError::new(
+        StandaloneError::new(
             "SUPERVISOR_REQUEST_INVALID",
             format!("reconcile-job requires a canonical job id: {error}"),
             2,
@@ -687,10 +704,14 @@ fn handle_reconcile(runtime_dir: &Path, arguments: &[String]) -> Result<Vec<u8>,
         )
     })?;
     let mut controller = ControllerClient::connect(runtime_dir)?;
-    controller.reconcile(job_id)
+    Ok(controller.reconcile(job_id)?)
 }
 
-fn decode_single_string(input: &[u8], wanted: u32, context: &str) -> Result<String, CliError> {
+fn decode_single_string(
+    input: &[u8],
+    wanted: u32,
+    context: &str,
+) -> Result<String, StandaloneError> {
     let mut reader = wire::Reader::new(input);
     while let Some((field, value)) = reader
         .next_field()
@@ -700,7 +721,7 @@ fn decode_single_string(input: &[u8], wanted: u32, context: &str) -> Result<Stri
             return Ok(value.as_str(wanted).map_err(status_decode)?.to_string());
         }
     }
-    Err(CliError::new(
+    Err(StandaloneError::new(
         "SUPERVISOR_RESPONSE_INVALID",
         format!("The supervisor returned no {context}."),
         10,
@@ -708,7 +729,7 @@ fn decode_single_string(input: &[u8], wanted: u32, context: &str) -> Result<Stri
     ))
 }
 
-fn decode_reconcile(input: &[u8]) -> Result<ReconcileStatus, CliError> {
+fn decode_reconcile(input: &[u8]) -> Result<ReconcileStatus, StandaloneError> {
     let mut status = ReconcileStatus {
         job_id: String::new(),
         verdict: String::new(),
@@ -735,7 +756,7 @@ fn decode_reconcile(input: &[u8]) -> Result<ReconcileStatus, CliError> {
         }
     }
     if status.job_id.is_empty() || status.verdict.is_empty() {
-        return Err(CliError::new(
+        return Err(StandaloneError::new(
             "SUPERVISOR_RESPONSE_INVALID",
             "The supervisor returned an incomplete reconciliation.",
             10,
@@ -751,7 +772,7 @@ fn handle_materialize(
     arguments: &[String],
     hdc_digest: Option<Sha256Digest>,
     hardware_campaign: Option<&str>,
-) -> Result<MaterializePlanResponse, CliError> {
+) -> Result<MaterializePlanResponse, StandaloneError> {
     handle_materialize_for(
         runtime_dir,
         public,
@@ -772,7 +793,7 @@ fn handle_assess(
     arguments: &[String],
     hdc_digest: Option<Sha256Digest>,
     hardware_campaign: Option<&str>,
-) -> Result<MaterializePlanResponse, CliError> {
+) -> Result<MaterializePlanResponse, StandaloneError> {
     handle_materialize_for(
         runtime_dir,
         public,
@@ -793,9 +814,9 @@ fn handle_recovery_plan(
     arguments: &[String],
     hdc_digest: Option<Sha256Digest>,
     hardware_campaign: Option<&str>,
-) -> Result<MaterializePlanResponse, CliError> {
+) -> Result<MaterializePlanResponse, StandaloneError> {
     let [job_id, artifact, profile, device] = arguments else {
-        return Err(CliError::new(
+        return Err(StandaloneError::new(
             "SUPERVISOR_REQUEST_INVALID",
             "materialize-recovery-plan requires job, artifact, profile, and device.",
             2,
@@ -803,7 +824,7 @@ fn handle_recovery_plan(
         ));
     };
     JobId::new(job_id).map_err(|error| {
-        CliError::new(
+        StandaloneError::new(
             "SUPERVISOR_REQUEST_INVALID",
             format!("materialize-recovery-plan requires a canonical job id: {error}"),
             2,
@@ -828,7 +849,7 @@ fn handle_recovery_plan(
         }
     }
     if !eligible {
-        return Err(CliError::new(
+        return Err(StandaloneError::new(
             if blocker.is_empty() {
                 "RECOVERY_NOT_ELIGIBLE".into()
             } else {
@@ -870,9 +891,9 @@ fn handle_materialize_for(
     kind: MaterializationKind<'_>,
     hdc_digest: Option<Sha256Digest>,
     hardware_campaign: Option<&str>,
-) -> Result<MaterializePlanResponse, CliError> {
+) -> Result<MaterializePlanResponse, StandaloneError> {
     let [artifact, profile, device] = arguments else {
-        return Err(CliError::new(
+        return Err(StandaloneError::new(
             "SUPERVISOR_REQUEST_INVALID",
             "materialize-plan requires artifact, profile, and exact device observation.",
             2,
@@ -884,7 +905,7 @@ fn handle_materialize_for(
         .iter()
         .find(|candidate| candidate.observation_id == *device)
         .ok_or_else(|| {
-            CliError::new(
+            StandaloneError::new(
                 "OBSERVATION_NOT_FOUND",
                 format!("No current observation exactly matches {device}."),
                 5,
@@ -925,7 +946,7 @@ fn handle_materialize_for(
             parse_mechanics_key(&assessment.mechanics_maturity_key_sha256)?
         }
         MaterializePlanResponse::Plan(_) => {
-            return Err(CliError::new(
+            return Err(StandaloneError::new(
                 "AUTHORITY_GATE_BYPASSED",
                 "The daemon produced an executable plan for a hardware-gated authority binding.",
                 10,
@@ -1011,9 +1032,9 @@ fn close_resolved_authority_blocker(assessment: &mut arkforge_ipc::messages::Ass
     }
 }
 
-fn parse_mechanics_key(value: &str) -> Result<Sha256Digest, CliError> {
+fn parse_mechanics_key(value: &str) -> Result<Sha256Digest, StandaloneError> {
     Sha256Digest::parse_hex(value).map_err(|error| {
-        CliError::new(
+        StandaloneError::new(
             "MECHANICS_MATURITY_KEY_INVALID",
             format!("The materialization carries no usable mechanics maturity key: {error}"),
             10,
@@ -1026,7 +1047,7 @@ fn current_authority_support(
     mechanics: Sha256Digest,
     hdc_digest: Option<Sha256Digest>,
     hardware_campaign: Option<&str>,
-) -> Result<(Sha256Digest, AuthoritySupportState), CliError> {
+) -> Result<(Sha256Digest, AuthoritySupportState), StandaloneError> {
     let executable =
         std::env::current_exe().map_err(|error| internal("identify arkforge", error))?;
     let implementation = arkforged::dispatch::executable_digest(&executable)
@@ -1038,7 +1059,7 @@ fn current_authority_support(
     );
     let key_digest = key
         .digest()
-        .map_err(|error| CliError::new("AUTHORITY_SUPPORT_KEY_INVALID", error, 10, false))?;
+        .map_err(|error| StandaloneError::new("AUTHORITY_SUPPORT_KEY_INVALID", error, 10, false))?;
     let state = match hdc_digest {
         Some(_) => authority_support::classify(&key, hardware_campaign),
         None => AuthoritySupportState::HardwareGated {
@@ -1053,10 +1074,10 @@ fn require_authority_support(
     plan: &ExecutablePlan,
     expected_key: Sha256Digest,
     expected_state: &AuthoritySupportState,
-) -> Result<(), CliError> {
+) -> Result<(), StandaloneError> {
     let actual_key =
         Sha256Digest::parse_hex(&plan.authority_support_key_sha256).map_err(|error| {
-            CliError::new(
+            StandaloneError::new(
                 "AUTHORITY_SUPPORT_KEY_INVALID",
                 format!("The executable plan carries no usable authority support key: {error}"),
                 10,
@@ -1068,7 +1089,7 @@ fn require_authority_support(
         || plan.authority_support_state != expected_state.as_str()
         || plan.authority_support_campaign != expected_campaign
     {
-        return Err(CliError::new(
+        return Err(StandaloneError::new(
             "AUTHORITY_SUPPORT_SEAL_MISMATCH",
             "The daemon did not seal the exact authority support key and state supplied by this supervisor.",
             10,
@@ -1082,12 +1103,12 @@ fn require_current_authority_support(
     plan: &ExecutablePlan,
     hdc_digest: Option<Sha256Digest>,
     hardware_campaign: Option<&str>,
-) -> Result<(), CliError> {
+) -> Result<(), StandaloneError> {
     let mechanics_key = parse_mechanics_key(&plan.mechanics_maturity_key_sha256)?;
     let (support_key, support_state) =
         current_authority_support(mechanics_key, hdc_digest, hardware_campaign)?;
     if !support_state.permits_execution() {
-        return Err(CliError::new(
+        return Err(StandaloneError::new(
             "AUTHORITY_SUPPORT_UNAVAILABLE",
             support_state
                 .blocker()
@@ -1106,9 +1127,9 @@ fn handle_apply(
     hdc_digest: Option<Sha256Digest>,
     hardware_campaign: Option<&str>,
     arguments: &[String],
-) -> Result<Vec<u8>, CliError> {
+) -> Result<Vec<u8>, StandaloneError> {
     if arguments.len() < 3 {
-        return Err(CliError::new(
+        return Err(StandaloneError::new(
             "SUPERVISOR_REQUEST_INVALID",
             "apply-plan requires plan id, expected digest, detach disposition, and acknowledgements.",
             2,
@@ -1117,7 +1138,7 @@ fn handle_apply(
     }
     let plan_id = &arguments[0];
     PlanId::new(plan_id).map_err(|error| {
-        CliError::new(
+        StandaloneError::new(
             "SUPERVISOR_REQUEST_INVALID",
             format!("apply-plan requires a canonical plan id: {error}"),
             2,
@@ -1129,7 +1150,7 @@ fn handle_apply(
         "true" => true,
         "false" => false,
         _ => {
-            return Err(CliError::new(
+            return Err(StandaloneError::new(
                 "SUPERVISOR_REQUEST_INVALID",
                 "apply-plan detach disposition must be true or false.",
                 2,
@@ -1139,7 +1160,7 @@ fn handle_apply(
     };
     let record = load_authority_plan(runtime_dir, plan_id)?;
     if record.plan.plan_sha256 != *expected_digest {
-        return Err(CliError::new(
+        return Err(StandaloneError::new(
             "PLAN_DIGEST_MISMATCH",
             format!(
                 "Plan {} is sealed as {}, not caller expectation {}.",
@@ -1151,7 +1172,7 @@ fn handle_apply(
     }
     let supplied: std::collections::BTreeSet<String> = arguments[3..].iter().cloned().collect();
     if supplied.len() != arguments[3..].len() {
-        return Err(CliError::new(
+        return Err(StandaloneError::new(
             "UNEXPECTED_ACKNOWLEDGEMENT",
             "Each acknowledgement token must be supplied exactly once.",
             4,
@@ -1163,7 +1184,7 @@ fn handle_apply(
     if supplied != required {
         let missing = required.difference(&supplied).cloned().collect::<Vec<_>>();
         let unexpected = supplied.difference(&required).cloned().collect::<Vec<_>>();
-        return Err(CliError::new(
+        return Err(StandaloneError::new(
             if !missing.is_empty() {
                 "ACKNOWLEDGEMENT_REQUIRED"
             } else {
@@ -1181,7 +1202,7 @@ fn handle_apply(
     }
     require_current_authority_support(&record.plan, hdc_digest, hardware_campaign)?;
     if public.runtime_info().toolchain_id != record.toolchain_id {
-        return Err(CliError::new(
+        return Err(StandaloneError::new(
             "MECHANICS_RUNTIME_CHANGED",
             "The running mechanics toolchain differs from the one sealed by this authority plan; materialize a new plan.",
             3,
@@ -1190,7 +1211,7 @@ fn handle_apply(
     }
     let now = arkforged::rescue::now_epoch_ms()?;
     if now >= record.plan.expires_at_epoch_ms {
-        return Err(CliError::new(
+        return Err(StandaloneError::new(
             "PLAN_EXPIRED",
             format!("Plan {plan_id} expired before apply."),
             3,
@@ -1222,7 +1243,9 @@ fn handle_apply(
     Ok(out)
 }
 
-fn plan_acknowledgements(plan: &ExecutablePlan) -> Vec<String> {
+/// Stable acknowledgement tokens required before an application may submit
+/// this plan. Presentation layers render the tokens but never derive them.
+pub fn required_acknowledgements(plan: &ExecutablePlan) -> Vec<String> {
     if plan
         .persistent_effects
         .iter()
@@ -1239,7 +1262,7 @@ fn plan_acknowledgements(plan: &ExecutablePlan) -> Vec<String> {
 }
 
 fn record_acknowledgements(record: &AuthorityPlanRecord) -> Vec<String> {
-    let mut tokens = plan_acknowledgements(&record.plan);
+    let mut tokens = required_acknowledgements(&record.plan);
     if !record.supersedes_job_id.is_empty() {
         tokens.push(format!(
             "recovery:supersedes-job={}",
@@ -1278,18 +1301,18 @@ fn persist_job_lineage(
     runtime_dir: &Path,
     job_id: &str,
     lineage: &ActiveTargetLineage,
-) -> Result<(), CliError> {
+) -> Result<(), StandaloneError> {
     let path = job_lineage_path(runtime_dir, job_id);
     let root = path.parent().expect("job lineage path has parent");
     std::fs::create_dir_all(root)
         .map_err(|error| internal("create the authority job journal", error))?;
-    std::fs::set_permissions(root, std::fs::Permissions::from_mode(0o700))
+    protect_path(root, true)
         .map_err(|error| internal("protect the authority job journal", error))?;
     let encoded = encode_job_lineage(lineage);
     if path.exists() {
         let existing = load_job_lineage(runtime_dir, job_id)?;
         if existing.revision > lineage.revision {
-            return Err(CliError::new(
+            return Err(StandaloneError::new(
                 "TARGET_LINEAGE_STALE",
                 "A stale target-lineage revision cannot replace newer durable evidence.",
                 6,
@@ -1300,7 +1323,7 @@ fn persist_job_lineage(
             if existing == *lineage {
                 return Ok(());
             }
-            return Err(CliError::new(
+            return Err(StandaloneError::new(
                 "TARGET_LINEAGE_CONFLICT",
                 "The same target-lineage revision already names different facts.",
                 6,
@@ -1319,16 +1342,19 @@ fn persist_job_lineage(
         .create_new(true)
         .open(&temporary)
         .map_err(|error| internal("create a target-lineage transaction", error))?;
-    std::fs::set_permissions(&temporary, std::fs::Permissions::from_mode(0o600))
+    protect_path(&temporary, false)
         .map_err(|error| internal("protect a target-lineage transaction", error))?;
     file.write_all(&encoded)
         .and_then(|_| file.sync_all())
         .map_err(|error| internal("commit target-lineage bytes", error))?;
-    std::fs::rename(&temporary, &path)
+    replace_file(&temporary, &path)
         .map_err(|error| internal("publish target-lineage revision", error))
 }
 
-fn load_job_lineage(runtime_dir: &Path, job_id: &str) -> Result<ActiveTargetLineage, CliError> {
+fn load_job_lineage(
+    runtime_dir: &Path,
+    job_id: &str,
+) -> Result<ActiveTargetLineage, StandaloneError> {
     let encoded = std::fs::read(job_lineage_path(runtime_dir, job_id))
         .map_err(|error| internal("read the authority job lineage", error))?;
     let mut lineage = ActiveTargetLineage {
@@ -1361,7 +1387,7 @@ fn load_job_lineage(runtime_dir: &Path, job_id: &str) -> Result<ActiveTargetLine
         || lineage.topology_sha256.is_empty()
         || lineage.revision == 0
     {
-        return Err(CliError::new(
+        return Err(StandaloneError::new(
             "TARGET_LINEAGE_INVALID",
             "The durable target lineage is incomplete.",
             10,
@@ -1387,19 +1413,19 @@ fn encode_authority_plan(record: &AuthorityPlanRecord) -> Vec<u8> {
 fn persist_authority_plan(
     runtime_dir: &Path,
     record: &AuthorityPlanRecord,
-) -> Result<(), CliError> {
+) -> Result<(), StandaloneError> {
     let path = authority_plan_path(runtime_dir, &record.plan.plan_id);
     let root = path.parent().expect("plan path has parent");
     std::fs::create_dir_all(root)
         .map_err(|error| internal("create the authority plan journal", error))?;
-    std::fs::set_permissions(root, std::fs::Permissions::from_mode(0o700))
+    protect_path(root, true)
         .map_err(|error| internal("protect the authority plan journal", error))?;
     let encoded = encode_authority_plan(record);
     if path.exists() {
         let existing = std::fs::read(&path)
             .map_err(|error| internal("read the authority plan journal", error))?;
         if existing != encoded {
-            return Err(CliError::new(
+            return Err(StandaloneError::new(
                 "PLAN_STATE_CONFLICT",
                 format!(
                     "Authority plan {} already exists with different bytes.",
@@ -1416,17 +1442,20 @@ fn persist_authority_plan(
         .create_new(true)
         .open(&path)
         .map_err(|error| internal("create the authority plan journal", error))?;
-    std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600))
+    protect_path(&path, false)
         .map_err(|error| internal("protect the authority plan journal", error))?;
     file.write_all(&encoded)
         .and_then(|_| file.sync_all())
         .map_err(|error| internal("commit the authority plan journal", error))
 }
 
-fn load_authority_plan(runtime_dir: &Path, plan_id: &str) -> Result<AuthorityPlanRecord, CliError> {
+fn load_authority_plan(
+    runtime_dir: &Path,
+    plan_id: &str,
+) -> Result<AuthorityPlanRecord, StandaloneError> {
     let path = authority_plan_path(runtime_dir, plan_id);
     let encoded = std::fs::read(&path).map_err(|error| {
-        CliError::new(
+        StandaloneError::new(
             "PLAN_NOT_FOUND",
             format!(
                 "Cannot read authority plan {plan_id} at {}: {error}",
@@ -1482,7 +1511,7 @@ fn load_authority_plan(runtime_dir: &Path, plan_id: &str) -> Result<AuthorityPla
         || record.topology_sha256.is_empty()
         || record.toolchain_id.is_empty()
     {
-        return Err(CliError::new(
+        return Err(StandaloneError::new(
             "PLAN_STATE_INVALID",
             format!("Authority plan journal for {plan_id} is incomplete or mismatched."),
             10,
@@ -1499,7 +1528,7 @@ fn drive_active_jobs(
     mut hdc: Option<&mut HdcControlPort>,
     cursors: &mut BTreeMap<String, u64>,
     target_lineages: &mut BTreeMap<String, ActiveTargetLineage>,
-) -> Result<(), CliError> {
+) -> Result<(), StandaloneError> {
     let mut public = PublicClient::connect(runtime_dir)?;
     let active = public
         .job_list()?
@@ -1517,7 +1546,7 @@ fn drive_active_jobs(
             match event.kind {
                 JobEventKind::StepAdmissionRequested => {
                     let snapshot = event.admission.as_ref().ok_or_else(|| {
-                        CliError::new(
+                        StandaloneError::new(
                             "ADMISSION_EVENT_INVALID",
                             "A stepAdmissionRequested event contains no admission snapshot.",
                             10,
@@ -1536,7 +1565,7 @@ fn drive_active_jobs(
                 }
                 JobEventKind::ManagedControlRequested => {
                     let request = event.control_request.as_ref().ok_or_else(|| {
-                        CliError::new(
+                        StandaloneError::new(
                             "CONTROL_EVENT_INVALID",
                             "A managedControlRequested event contains no typed request.",
                             10,
@@ -1556,7 +1585,7 @@ fn drive_active_jobs(
                         if lineage.plan_id != record.plan.plan_id
                             || lineage.topology_sha256 != record.topology_sha256
                         {
-                            return Err(CliError::new(
+                            return Err(StandaloneError::new(
                                 "TARGET_LINEAGE_CONFLICT",
                                 "The active target lineage does not belong to the job's sealed plan.",
                                 6,
@@ -1616,10 +1645,10 @@ fn drive_active_jobs(
 fn submit_control_receipt(
     controller: &mut ControllerClient,
     receipt: &SubmitManagedControlReceiptRequest,
-) -> Result<(), CliError> {
+) -> Result<(), StandaloneError> {
     let outcome = controller.submit_control_receipt(receipt)?;
     if !outcome.accepted {
-        return Err(CliError::new(
+        return Err(StandaloneError::new(
             outcome.rejection_code,
             outcome.rejection_message,
             3,
@@ -1633,7 +1662,7 @@ fn submit_control_refusal(
     controller: &mut ControllerClient,
     request: &arkforge_ipc::messages::ManagedControlRequest,
     reason: &str,
-) -> Result<(), CliError> {
+) -> Result<(), StandaloneError> {
     let receipt = SubmitManagedControlReceiptRequest {
         job_id: request.job_id.clone(),
         request_id: request.request_id.clone(),
@@ -1654,7 +1683,7 @@ fn answer_admission(
     controller: &mut ControllerClient,
     snapshot: &StepAdmissionSnapshot,
     target_lineages: &mut BTreeMap<String, ActiveTargetLineage>,
-) -> Result<(), CliError> {
+) -> Result<(), StandaloneError> {
     let record = load_authority_plan(runtime_dir, &snapshot.plan_id)?;
     let lineage = match target_lineages.get(&snapshot.job_id) {
         Some(lineage) => lineage.clone(),
@@ -1726,7 +1755,7 @@ fn answer_admission(
     )?;
     let outcome = controller.submit_permit(&submission)?;
     if !outcome.accepted {
-        return Err(CliError::new(
+        return Err(StandaloneError::new(
             outcome.rejection_code,
             outcome.rejection_message,
             3,
@@ -1742,7 +1771,7 @@ fn resolve_lineage_for_admission(
     snapshot: &StepAdmissionSnapshot,
     record: &AuthorityPlanRecord,
     lineage: &ActiveTargetLineage,
-) -> Result<Option<ActiveTargetLineage>, CliError> {
+) -> Result<Option<ActiveTargetLineage>, StandaloneError> {
     let observations = public.device_list()?;
     if let Some(current) = observations
         .iter()
@@ -1830,7 +1859,7 @@ fn submit_permit_refusal(
     snapshot: &StepAdmissionSnapshot,
     epoch: u64,
     reason: &str,
-) -> Result<(), CliError> {
+) -> Result<(), StandaloneError> {
     let outcome = controller.submit_permit(&SubmitStepPermitRequest {
         job_id: snapshot.job_id.clone(),
         request_id: snapshot.request_id.clone(),
@@ -1840,7 +1869,7 @@ fn submit_permit_refusal(
         refusal: reason.to_string(),
     })?;
     if !outcome.accepted {
-        return Err(CliError::new(
+        return Err(StandaloneError::new(
             outcome.rejection_code,
             outcome.rejection_message,
             3,
@@ -1860,14 +1889,13 @@ fn load_or_create_permit(
     admitted_device: Sha256Digest,
     issued_at: u64,
     expires_at: u64,
-) -> Result<SubmitStepPermitRequest, CliError> {
+) -> Result<SubmitStepPermitRequest, StandaloneError> {
     let root = runtime_dir
         .join("authority")
         .join("permits")
         .join(epoch.to_string());
     std::fs::create_dir_all(&root).map_err(|error| internal("create the permit journal", error))?;
-    std::fs::set_permissions(&root, std::fs::Permissions::from_mode(0o700))
-        .map_err(|error| internal("protect the permit journal", error))?;
+    protect_path(&root, true).map_err(|error| internal("protect the permit journal", error))?;
     let path = root.join(format!("{}.permit", sha256(snapshot.request_id.as_bytes())));
     if path.exists() {
         let persisted =
@@ -1937,8 +1965,7 @@ fn load_or_create_permit(
         .create_new(true)
         .open(&path)
         .map_err(|error| internal("create a durable permit", error))?;
-    std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600))
-        .map_err(|error| internal("protect a durable permit", error))?;
+    protect_path(&path, false).map_err(|error| internal("protect a durable permit", error))?;
     file.write_all(&persisted)
         .and_then(|_| file.sync_all())
         .map_err(|error| internal("commit a durable permit before submission", error))?;
@@ -1957,7 +1984,7 @@ fn decode_persisted_permit(
     snapshot: &StepAdmissionSnapshot,
     epoch: u64,
     input: &[u8],
-) -> Result<SubmitStepPermitRequest, CliError> {
+) -> Result<SubmitStepPermitRequest, StandaloneError> {
     let mut permit_cbor = Vec::new();
     let mut integrity_tag = Vec::new();
     let mut stored_epoch = 0;
@@ -1974,7 +2001,7 @@ fn decode_persisted_permit(
         }
     }
     if permit_cbor.is_empty() || integrity_tag.len() != 32 || stored_epoch != epoch {
-        return Err(CliError::new(
+        return Err(StandaloneError::new(
             "PERMIT_JOURNAL_INVALID",
             "A durable permit is incomplete or belongs to another pairing epoch.",
             10,
@@ -1995,13 +2022,13 @@ fn current_stable_identity(
     public: &mut PublicClient,
     device: &str,
     profile: &str,
-) -> Result<Sha256Digest, CliError> {
+) -> Result<Sha256Digest, StandaloneError> {
     let observations = public.device_list()?;
     let observation = observations
         .iter()
         .find(|candidate| candidate.observation_id == device)
         .ok_or_else(|| {
-            CliError::new(
+            StandaloneError::new(
                 "OBSERVATION_NOT_FOUND",
                 format!("No current observation exactly matches {device}."),
                 5,
@@ -2085,7 +2112,7 @@ fn append_stable_field(stable: &mut Vec<u8>, label: &str, value: &[u8]) {
 
 fn recompute_admitted_device_digest(
     snapshot: &StepAdmissionSnapshot,
-) -> Result<Sha256Digest, CliError> {
+) -> Result<Sha256Digest, StandaloneError> {
     use arkforge_transport::{
         DeviceObservation, IdentityEvidenceStrength, ProtocolIdentityFact, SerialEvidence,
     };
@@ -2116,7 +2143,7 @@ fn recompute_admitted_device_digest(
                     value: fact.value.clone(),
                 })
             })
-            .collect::<Result<Vec<_>, CliError>>()?,
+            .collect::<Result<Vec<_>, StandaloneError>>()?,
         provider_candidates: Vec::new(),
         identity_strength: IdentityEvidenceStrength::parse(&snapshot.identity_strength)
             .ok_or_else(|| permit_invalid("admission identity strength is unknown"))?,
@@ -2125,7 +2152,7 @@ fn recompute_admitted_device_digest(
     observation.admission_facts_digest().map_err(permit_invalid)
 }
 
-fn digest_bytes(bytes: &[u8], name: &str) -> Result<Sha256Digest, CliError> {
+fn digest_bytes(bytes: &[u8], name: &str) -> Result<Sha256Digest, StandaloneError> {
     if bytes.len() != 32 {
         return Err(permit_invalid(format!("{name} is not 32 bytes")));
     }
@@ -2134,8 +2161,8 @@ fn digest_bytes(bytes: &[u8], name: &str) -> Result<Sha256Digest, CliError> {
     Ok(Sha256Digest::from_bytes(digest))
 }
 
-fn permit_invalid(error: impl std::fmt::Display) -> CliError {
-    CliError::new(
+fn permit_invalid(error: impl std::fmt::Display) -> StandaloneError {
+    StandaloneError::new(
         "PERMIT_INPUT_INVALID",
         format!("Cannot construct an exact step permit: {error}"),
         10,
@@ -2149,11 +2176,11 @@ fn persist_binding(
     device: &str,
     profile: &str,
     stable_identity: &str,
-) -> Result<(), CliError> {
+) -> Result<(), StandaloneError> {
     let root = runtime_dir.join("authority").join("bindings");
     std::fs::create_dir_all(&root)
         .map_err(|error| internal("create the authority binding journal", error))?;
-    std::fs::set_permissions(&root, std::fs::Permissions::from_mode(0o700))
+    protect_path(&root, true)
         .map_err(|error| internal("protect the authority binding journal", error))?;
     let path = root.join(format!("{binding_id}.binding"));
     let record = format!(
@@ -2163,7 +2190,7 @@ fn persist_binding(
         let existing = std::fs::read_to_string(&path)
             .map_err(|error| internal("read the durable target binding", error))?;
         if existing != record {
-            return Err(CliError::new(
+            return Err(StandaloneError::new(
                 "TARGET_BINDING_CONFLICT",
                 format!("Durable binding {binding_id} disagrees with the current target facts."),
                 6,
@@ -2177,7 +2204,7 @@ fn persist_binding(
         .create_new(true)
         .open(&path)
         .map_err(|error| internal("create the durable target binding", error))?;
-    std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600))
+    protect_path(&path, false)
         .map_err(|error| internal("protect the durable target binding", error))?;
     file.write_all(record.as_bytes())
         .and_then(|_| file.sync_all())
@@ -2204,7 +2231,7 @@ fn encode_status(status: &DaemonStatus) -> Vec<u8> {
     out
 }
 
-fn decode_status(input: &[u8]) -> Result<DaemonStatus, CliError> {
+fn decode_status(input: &[u8]) -> Result<DaemonStatus, StandaloneError> {
     let mut status = DaemonStatus {
         supervisor_pid: 0,
         daemon_pid: 0,
@@ -2250,7 +2277,7 @@ fn decode_status(input: &[u8]) -> Result<DaemonStatus, CliError> {
         || status.protocol_major == 0
         || status.daemon_version.is_empty()
     {
-        return Err(CliError::new(
+        return Err(StandaloneError::new(
             "SUPERVISOR_RESPONSE_INVALID",
             "The authority supervisor returned an incomplete status response.",
             10,
@@ -2260,7 +2287,7 @@ fn decode_status(input: &[u8]) -> Result<DaemonStatus, CliError> {
     Ok(status)
 }
 
-fn decode_request(input: &[u8]) -> Result<(String, Vec<String>), CliError> {
+fn decode_request(input: &[u8]) -> Result<(String, Vec<String>), StandaloneError> {
     let mut command = String::new();
     let mut arguments = Vec::new();
     let mut reader = wire::Reader::new(input);
@@ -2275,7 +2302,7 @@ fn decode_request(input: &[u8]) -> Result<(String, Vec<String>), CliError> {
         }
     }
     if command.is_empty() {
-        return Err(CliError::new(
+        return Err(StandaloneError::new(
             "SUPERVISOR_REQUEST_INVALID",
             "The supervisor request contains no command.",
             2,
@@ -2285,7 +2312,10 @@ fn decode_request(input: &[u8]) -> Result<(String, Vec<String>), CliError> {
     Ok((command, arguments))
 }
 
-fn write_reply(stream: &mut UnixStream, result: Result<Vec<u8>, CliError>) -> Result<(), CliError> {
+fn write_reply(
+    stream: &mut LocalStream,
+    result: Result<Vec<u8>, StandaloneError>,
+) -> Result<(), StandaloneError> {
     let mut out = Vec::new();
     match result {
         Ok(payload) => {
@@ -2306,7 +2336,7 @@ fn write_reply(stream: &mut UnixStream, result: Result<Vec<u8>, CliError>) -> Re
     write_frame(stream, &out).map_err(|error| internal("write supervisor response", error))
 }
 
-fn decode_reply(input: &[u8]) -> Result<Vec<u8>, CliError> {
+fn decode_reply(input: &[u8]) -> Result<Vec<u8>, StandaloneError> {
     let mut disposition = 0;
     let mut code = String::new();
     let mut message = String::new();
@@ -2334,9 +2364,9 @@ fn decode_reply(input: &[u8]) -> Result<Vec<u8>, CliError> {
     }
     match disposition {
         1 => Ok(payload),
-        2 if !code.is_empty() => Err(CliError::new(code, message, exit_code, retryable)
+        2 if !code.is_empty() => Err(StandaloneError::new(code, message, exit_code, retryable)
             .with_required_acknowledgements(required_acknowledgements)),
-        _ => Err(CliError::new(
+        _ => Err(StandaloneError::new(
             "SUPERVISOR_RESPONSE_INVALID",
             "The authority supervisor returned an incomplete response envelope.",
             10,
@@ -2345,8 +2375,8 @@ fn decode_reply(input: &[u8]) -> Result<Vec<u8>, CliError> {
     }
 }
 
-fn status_decode(error: impl std::fmt::Display) -> CliError {
-    CliError::new(
+fn status_decode(error: impl std::fmt::Display) -> StandaloneError {
+    StandaloneError::new(
         "SUPERVISOR_RESPONSE_INVALID",
         format!("The authority supervisor response is invalid: {error}"),
         10,
@@ -2354,22 +2384,28 @@ fn status_decode(error: impl std::fmt::Display) -> CliError {
     )
 }
 
-fn prepare_runtime(runtime_dir: &Path) -> Result<(), CliError> {
+/// Creates the per-user runtime root and applies the host owner-only boundary.
+/// Offline artifact import uses this before the daemon exists so Windows CAS
+/// children inherit the same protected DACL.
+pub fn prepare_storage(runtime_dir: &Path) -> Result<(), StandaloneError> {
     std::fs::create_dir_all(runtime_dir)
         .map_err(|error| internal("create the runtime directory", error))?;
-    std::fs::set_permissions(runtime_dir, std::fs::Permissions::from_mode(0o700))
+    protect_path(runtime_dir, true)
         .map_err(|error| internal("protect the runtime directory", error))
 }
 
-fn fresh_pairing(runtime_dir: &Path) -> Result<(u64, Vec<u8>), CliError> {
+fn prepare_runtime(runtime_dir: &Path) -> Result<(), StandaloneError> {
+    prepare_storage(runtime_dir)
+}
+
+fn fresh_pairing(runtime_dir: &Path) -> Result<(u64, Vec<u8>), StandaloneError> {
     let mut secret = [0u8; 32];
-    File::open("/dev/urandom")
-        .and_then(|mut file| file.read_exact(&mut secret))
+    fill_random(&mut secret)
         .map_err(|error| internal("read host randomness for pairing", error))?;
     let authority = runtime_dir.join("authority");
     std::fs::create_dir_all(&authority)
         .map_err(|error| internal("create pairing epoch journal", error))?;
-    std::fs::set_permissions(&authority, std::fs::Permissions::from_mode(0o700))
+    protect_path(&authority, true)
         .map_err(|error| internal("protect pairing epoch journal", error))?;
     let path = authority.join("pairing-epoch");
     let previous = if path.exists() {
@@ -2387,7 +2423,7 @@ fn fresh_pairing(runtime_dir: &Path) -> Result<(u64, Vec<u8>), CliError> {
         0
     };
     let epoch = previous.checked_add(1).ok_or_else(|| {
-        CliError::new(
+        StandaloneError::new(
             "PAIRING_EPOCH_EXHAUSTED",
             "The durable pairing epoch cannot advance; this runtime must not execute.",
             10,
@@ -2405,16 +2441,14 @@ fn fresh_pairing(runtime_dir: &Path) -> Result<(u64, Vec<u8>), CliError> {
         .create_new(true)
         .open(&temporary)
         .map_err(|error| internal("create pairing epoch transaction", error))?;
-    std::fs::set_permissions(&temporary, std::fs::Permissions::from_mode(0o600))
+    protect_path(&temporary, false)
         .map_err(|error| internal("protect pairing epoch transaction", error))?;
     journal
         .write_all(epoch.to_string().as_bytes())
         .and_then(|_| journal.sync_all())
         .map_err(|error| internal("commit pairing epoch bytes", error))?;
-    std::fs::rename(&temporary, &path).map_err(|error| internal("publish pairing epoch", error))?;
-    File::open(&authority)
-        .and_then(|directory| directory.sync_all())
-        .map_err(|error| internal("sync pairing epoch directory", error))?;
+    replace_file(&temporary, &path).map_err(|error| internal("publish pairing epoch", error))?;
+    sync_directory(&authority).map_err(|error| internal("sync pairing epoch directory", error))?;
     Ok((epoch, secret.to_vec()))
 }
 
@@ -2424,7 +2458,7 @@ fn spawn_daemon(
     epoch: u64,
     secret: &[u8],
     foreground_output: bool,
-) -> Result<Child, CliError> {
+) -> Result<Child, StandaloneError> {
     let daemon = sibling_daemon()?;
     let mut command = Command::new(&daemon);
     command
@@ -2445,7 +2479,7 @@ fn spawn_daemon(
         command.stdout(Stdio::null()).stderr(Stdio::null());
     }
     let mut child = command.spawn().map_err(|error| {
-        CliError::new(
+        StandaloneError::new(
             "MECHANICS_DAEMON_UNAVAILABLE",
             format!("Cannot start {}: {error}", daemon.display()),
             5,
@@ -2453,7 +2487,7 @@ fn spawn_daemon(
         )
     })?;
     let stdin = child.stdin.as_mut().ok_or_else(|| {
-        CliError::new(
+        StandaloneError::new(
             "PAIRING_PIPE_UNAVAILABLE",
             "arkforged did not expose its inherited pairing pipe.",
             10,
@@ -2467,10 +2501,10 @@ fn spawn_daemon(
     Ok(child)
 }
 
-fn validate_tool_bindings(options: &DaemonOptions) -> Result<(), CliError> {
+fn validate_tool_bindings(options: &DaemonOptions) -> Result<(), StandaloneError> {
     if let (Some(hdc), Some(expected)) = (&options.hdc, &options.expect_hdc_sha256) {
         let actual = arkforged::dispatch::executable_digest(hdc).map_err(|_| {
-            CliError::new(
+            StandaloneError::new(
                 "HDC_BINDING_REFUSED",
                 "The exact HDC executable could not be opened and hashed.",
                 3,
@@ -2478,7 +2512,7 @@ fn validate_tool_bindings(options: &DaemonOptions) -> Result<(), CliError> {
             )
         })?;
         if actual.to_hex() != *expected {
-            return Err(CliError::new(
+            return Err(StandaloneError::new(
                 "HDC_DIGEST_MISMATCH",
                 format!(
                     "The HDC executable digest is {actual}, not the caller expectation {expected}."
@@ -2490,39 +2524,64 @@ fn validate_tool_bindings(options: &DaemonOptions) -> Result<(), CliError> {
     }
     if options.require_release_signing {
         let daemon = sibling_daemon()?;
-        let signed = arkforged::packaging::read_file(&daemon).map_err(|error| {
-            CliError::new(
-                "RELEASE_SIGNING_REQUIRED",
-                format!("Cannot inspect the mechanics daemon signing contract: {error}"),
-                3,
-                false,
-            )
-        })?;
-        let violations = signed.violations(arkforged::packaging::ContractMode::Release);
-        if !violations.is_empty() {
-            return Err(CliError::new(
-                "RELEASE_SIGNING_REQUIRED",
-                format!(
-                    "The mechanics daemon has {} release-signing contract violation(s).",
-                    violations.len()
-                ),
-                3,
-                false,
-            ));
+        #[cfg(windows)]
+        {
+            verify_windows_signature(&daemon, "mechanics daemon")?;
+            if let Some(hdc) = &options.hdc {
+                verify_windows_signature(hdc, "HDC executable")?;
+            }
+        }
+        #[cfg(not(windows))]
+        {
+            let signed = arkforged::packaging::read_file(&daemon).map_err(|error| {
+                StandaloneError::new(
+                    "RELEASE_SIGNING_REQUIRED",
+                    format!("Cannot inspect the mechanics daemon signing contract: {error}"),
+                    3,
+                    false,
+                )
+            })?;
+            let violations = signed.violations(arkforged::packaging::ContractMode::Release);
+            if !violations.is_empty() {
+                return Err(StandaloneError::new(
+                    "RELEASE_SIGNING_REQUIRED",
+                    format!(
+                        "The mechanics daemon has {} release-signing contract violation(s).",
+                        violations.len()
+                    ),
+                    3,
+                    false,
+                ));
+            }
         }
     }
     Ok(())
 }
 
-fn sibling_daemon() -> Result<PathBuf, CliError> {
+#[cfg(windows)]
+fn verify_windows_signature(path: &Path, role: &str) -> Result<(), StandaloneError> {
+    arkforge_platform::verify_trusted_signature(path).map_err(|error| {
+        StandaloneError::new(
+            "RELEASE_SIGNING_REQUIRED",
+            format!(
+                "Windows does not trust the selected {role} {}: {error}",
+                path.display()
+            ),
+            3,
+            false,
+        )
+    })
+}
+
+fn sibling_daemon() -> Result<PathBuf, StandaloneError> {
     let executable =
         std::env::current_exe().map_err(|error| internal("identify arkforge", error))?;
     let path = executable
         .parent()
         .unwrap_or_else(|| Path::new("."))
-        .join("arkforged");
+        .join(format!("arkforged{}", std::env::consts::EXE_SUFFIX));
     if !path.is_file() {
-        return Err(CliError::new(
+        return Err(StandaloneError::new(
             "MECHANICS_DAEMON_UNAVAILABLE",
             format!(
                 "The canonical mechanics daemon is not installed beside arkforge at {}.",
@@ -2535,14 +2594,17 @@ fn sibling_daemon() -> Result<PathBuf, CliError> {
     Ok(path)
 }
 
-fn wait_for_daemon(runtime_dir: &Path, daemon: &mut Child) -> Result<PublicRuntimeInfo, CliError> {
+fn wait_for_daemon(
+    runtime_dir: &Path,
+    daemon: &mut Child,
+) -> Result<PublicRuntimeInfo, StandaloneError> {
     let deadline = Instant::now() + READY_TIMEOUT;
     loop {
         if let Some(exit) = daemon
             .try_wait()
             .map_err(|error| internal("observe arkforged startup", error))?
         {
-            return Err(CliError::new(
+            return Err(StandaloneError::new(
                 "MECHANICS_DAEMON_EXITED",
                 format!("arkforged exited during startup with {exit}."),
                 10,
@@ -2553,7 +2615,7 @@ fn wait_for_daemon(runtime_dir: &Path, daemon: &mut Child) -> Result<PublicRunti
             return Ok(client.runtime_info().clone());
         }
         if Instant::now() >= deadline {
-            return Err(CliError::new(
+            return Err(StandaloneError::new(
                 "MECHANICS_DAEMON_START_TIMEOUT",
                 "arkforged did not accept a versioned public session within 10 seconds.",
                 5,
@@ -2564,8 +2626,8 @@ fn wait_for_daemon(runtime_dir: &Path, daemon: &mut Child) -> Result<PublicRunti
     }
 }
 
-fn internal(context: &str, error: impl std::fmt::Display) -> CliError {
-    CliError::new(
+fn internal(context: &str, error: impl std::fmt::Display) -> StandaloneError {
+    StandaloneError::new(
         "SUPERVISOR_IO_FAILED",
         format!("Cannot {context}: {error}"),
         10,
@@ -2894,14 +2956,18 @@ mod tests {
             std::fs::read_to_string(root.join("authority/pairing-epoch")).unwrap(),
             "2"
         );
-        assert_eq!(
-            std::fs::metadata(root.join("authority/pairing-epoch"))
-                .unwrap()
-                .permissions()
-                .mode()
-                & 0o777,
-            0o600
-        );
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            assert_eq!(
+                std::fs::metadata(root.join("authority/pairing-epoch"))
+                    .unwrap()
+                    .permissions()
+                    .mode()
+                    & 0o777,
+                0o600
+            );
+        }
         let _ = std::fs::remove_dir_all(root);
     }
 

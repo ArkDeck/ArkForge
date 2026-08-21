@@ -1,24 +1,17 @@
 [package]
-name = "arkforge-cli"
+name = "arkforge-standalone"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
 repository.workspace = true
 
-[[bin]]
-name = "arkforge"
-path = "src/main.rs"
-
 [dependencies]
+arkforge-artifact = { path = "../arkforge-artifact" }
 arkforge-client = { path = "../arkforge-client" }
-arkforge-standalone = { path = "../arkforge-standalone" }
 arkforge-core = { path = "../arkforge-core" }
 arkforge-authority-api = { path = "../arkforge-authority-api" }
-arkforge-artifact = { path = "../arkforge-artifact" }
 arkforge-ipc = { path = "../arkforge-ipc" }
+arkforge-platform = { path = "../arkforge-platform" }
 arkforge-transport = { path = "../arkforge-transport" }
 arkforged = { path = "../arkforged" }
-
-[dev-dependencies]
-arkforge-artifact = { path = "../arkforge-artifact" }

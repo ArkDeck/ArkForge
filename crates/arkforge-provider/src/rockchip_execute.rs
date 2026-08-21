@@ -384,7 +384,8 @@ impl StagedFileFingerprint {
                 changed_nanoseconds: metadata.ctime_nsec(),
             })
         }
-        #[cfg(not(unix))]
+        #[cfg(windows)]
+        #[allow(clippy::permissions_set_readonly_false)]
         {
             Ok(Self {
                 size_bytes: metadata.len(),
@@ -1822,6 +1823,7 @@ mod tests {
         #[cfg(not(unix))]
         {
             let mut permissions = std::fs::metadata(&path).unwrap().permissions();
+            #[allow(clippy::permissions_set_readonly_false)]
             permissions.set_readonly(false);
             let _ = std::fs::set_permissions(&path, permissions);
         }

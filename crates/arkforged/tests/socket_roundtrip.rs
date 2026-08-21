@@ -5,6 +5,8 @@
 //! including that the public socket refuses a controller handshake and that
 //! `startExecution` is unavailable over the wire, not just in the handler.
 
+#![cfg(unix)]
+
 use arkforge_artifact::fixture;
 use arkforge_ipc::framing::{read_frame, write_frame};
 use arkforge_ipc::messages::{

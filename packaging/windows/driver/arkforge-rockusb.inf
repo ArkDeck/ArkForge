@@ -1,0 +1,32 @@
+[Version]
+Signature   = "$Windows NT$"
+Class       = USBDevice
+ClassGuid   = {88BAE032-5A81-49f0-BC3D-A4FF138216D6}
+Provider    = %ArkForge%
+CatalogFile = arkforge-rockusb.cat
+DriverVer   = 08/21/2026,0.1.0.0
+PnpLockdown = 1
+
+[Manufacturer]
+%ArkForge% = ArkForgeDevices,NTamd64
+
+[ArkForgeDevices.NTamd64]
+%Dayu200Loader% = ArkForgeWinUsb,USB\VID_2207&PID_350A
+
+[ArkForgeWinUsb]
+Include = winusb.inf
+Needs   = WINUSB.NT
+
+[ArkForgeWinUsb.Services]
+Include = winusb.inf
+Needs   = WINUSB.NT.Services
+
+[ArkForgeWinUsb.HW]
+AddReg = ArkForgeWinUsb.InterfaceGuid
+
+[ArkForgeWinUsb.InterfaceGuid]
+HKR,,DeviceInterfaceGUIDs,0x10000,"{6A4E21F0-50A4-4D7A-B71B-9E945B3F6B7B}"
+
+[Strings]
+ArkForge       = "ArkForge"
+Dayu200Loader  = "ArkForge DAYU200 Loader (WinUSB)"

@@ -12,6 +12,8 @@
 | NRU | 原生 RockUSB 换轨(ArkDeck chg-2026-063 的 ArkForge 半) | AF-V2 首过 | ✅ 完成：`a935798`/`26aa527`(读+parity)、`3567484`(写)、`8129a7a`(默认原生)、`c049a11`(移除 vendor 运行时)；[换轨证据](docs/evidence/runs/2026-08-19-dayu200-green-flash-and-native-cutover.md) |
 | AF-V3 | DAYU600 evidence + plan-only | AF-V1(共用 API 面) | 🟡 软件半完成([验收证据](docs/evidence/AF-V3-acceptance.md))；证据半需真机 |
 | AF-V4 | DAYU600 production execute | AF-V3 + AF-V2(engine) + 17.5 证据门全 PASS | ⛔ 阻塞：18 条证据门 0 条 PASS |
+| AF-P1 | ArkFlash/CLI 消费边界抽离 | AF-V2 软件面 | ✅ `arkforge-client`、`arkforge-standalone`、application v1 DTO/错误/进度/mock 已落地；CLI help/行为基线一致 |
+| AF-W1 | Windows host enablement | AF-P1 | 🟡 Named Pipe、owner ACL、WinUSB、HDC digest+Authenticode、签名包与安装验收脚本已落地并通过 MSVC 全 workspace 交叉检查；余：Windows x64 实机、微软签名 catalog、跨账户与 DAYU200 受控验收 |
 
 ## 全局规矩(摘自 architecture.md 7.4 / 21)
 

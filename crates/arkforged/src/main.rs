@@ -1,23 +1,20 @@
 //! `arkforged` — the ArkForge mechanics daemon.
 //!
-//! architecture.md 15.1/15.2. The public Unix-domain socket is read-only; the
-//! controller socket carries execution, admission and recovery assessment.
+//! architecture.md 15.1/15.2. The public local endpoint is read-only; the
+//! controller endpoint carries execution, admission and recovery assessment.
 //!
 //! Two sockets, two capabilities:
 //!
 //! - `public.sock` (0600): inspect, discover, probe, job status and guides;
 //! - `controller.sock` (0600): the above plus import, execution and permits.
 //!
-//! Windows named pipes are a design reservation, out of AF-V1/AF-V2 acceptance
-//! (architecture.md 15.2).
-
 use arkforge_ipc::framing::{read_frame, write_frame};
 use arkforge_ipc::messages::{Hello, HelloAck, Request, Response};
 use arkforge_ipc::{Api, PROTOCOL_MAJOR, PROTOCOL_MINOR, SessionKind, Status, negotiate};
+use arkforge_platform::{LocalChannel, LocalEndpoint, LocalListener, LocalStream};
 use arkforged::{Clock, Service};
 use std::io::{self, Read, Write};
-use std::os::unix::net::{UnixListener, UnixStream};
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 
 const DAEMON_VERSION: &str = env!("CARGO_PKG_VERSION");
@@ -169,12 +166,14 @@ fn run(arguments: &[String]) -> Result<(), String> {
     }
     let service = Arc::new(Mutex::new(service));
 
-    let public = bind(&runtime_dir.join("public.sock"))?;
-    let controller = bind(&runtime_dir.join("controller.sock"))?;
+    let public_endpoint = LocalEndpoint::for_runtime(&runtime_dir, LocalChannel::Public);
+    let controller_endpoint = LocalEndpoint::for_runtime(&runtime_dir, LocalChannel::Controller);
+    let public = bind(&public_endpoint)?;
+    let controller = bind(&controller_endpoint)?;
     println!(
         "arkforged {DAEMON_VERSION} listening: public={} controller={}",
-        runtime_dir.join("public.sock").display(),
-        runtime_dir.join("controller.sock").display()
+        public_endpoint.display(),
+        controller_endpoint.display()
     );
     // The dispatcher runs on its own thread and takes the service lock only
     // for the hand-off at either end. A partition write takes minutes; holding
@@ -296,43 +295,30 @@ where
     })
 }
 
-fn bind(path: &Path) -> Result<UnixListener, String> {
-    // A stale socket from a previous run would otherwise make bind fail.
-    let _ = std::fs::remove_file(path);
-    let listener =
-        UnixListener::bind(path).map_err(|error| format!("{}: {error}", path.display()))?;
-    set_private(path)?;
-    Ok(listener)
+fn bind(endpoint: &LocalEndpoint) -> Result<LocalListener, String> {
+    LocalListener::bind(endpoint).map_err(|error| format!("{}: {error}", endpoint.display()))
 }
 
-#[cfg(unix)]
-fn set_private(path: &Path) -> Result<(), String> {
-    use std::os::unix::fs::PermissionsExt;
-    std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o600))
-        .map_err(|error| format!("{}: {error}", path.display()))
-}
-
-fn serve(listener: UnixListener, kind: SessionKind, service: Arc<Mutex<Service>>) {
-    for stream in listener.incoming() {
-        match stream {
-            Ok(stream) => {
-                let service = Arc::clone(&service);
-                std::thread::spawn(move || {
-                    if let Err(error) = handle_connection(stream, kind, service) {
-                        eprintln!("arkforged: {kind:?} connection ended: {error}");
-                    }
-                });
-            }
+fn serve(mut listener: LocalListener, kind: SessionKind, service: Arc<Mutex<Service>>) {
+    loop {
+        let stream = match listener.accept() {
+            Ok(stream) => stream,
             Err(error) => {
                 eprintln!("arkforged: accept failed: {error}");
                 return;
             }
-        }
+        };
+        let service = Arc::clone(&service);
+        std::thread::spawn(move || {
+            if let Err(error) = handle_connection(stream, kind, service) {
+                eprintln!("arkforged: {kind:?} connection ended: {error}");
+            }
+        });
     }
 }
 
 fn handle_connection(
-    stream: UnixStream,
+    stream: LocalStream,
     kind: SessionKind,
     service: Arc<Mutex<Service>>,
 ) -> Result<(), String> {
@@ -432,14 +418,14 @@ fn handle_connection(
 /// version; what it forbids is the daemon reopening a path the caller named,
 /// and this reads only from the already-authenticated connection.
 struct ContentStream<'a> {
-    source: &'a mut UnixStream,
+    source: &'a mut LocalStream,
     buffer: Vec<u8>,
     position: usize,
     finished: bool,
 }
 
 impl<'a> ContentStream<'a> {
-    fn new(source: &'a mut UnixStream) -> Self {
+    fn new(source: &'a mut LocalStream) -> Self {
         ContentStream {
             source,
             buffer: Vec::new(),

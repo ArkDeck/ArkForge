@@ -87,7 +87,8 @@ ArkDeck 不应再包含：
 - arkforged 的 macOS 签名/entitlement/打包契约对齐(#1299 体系与 entitlement 死锁教训)列为 Stage B 显式工作项；
 - evidence ledger 新增 AD-006(读写面不对称定案)与 AD-007(entitlement 死锁)，仓内证据改为仓相对路径；
 - DAYU600 证据门前 discover/probe 表述统一为条件式；
-- Windows IPC 明确为设计预留，退出 v1 验收范围；
+- Windows IPC、ACL 与 WinUSB 实现放入独立平台叶子；它们不追溯改写 AF-V1/AF-V2
+  的 macOS 验收，Windows 组合必须用自己的签名驱动包和真实硬件证据发布；
 - CAS 大文件导入给出实测锚点与验收预算；
 - AF-V1/AF-V2 任务补 golden transcript、read-domain 验收与打包工作项。
 
@@ -330,21 +331,26 @@ flowchart LR
 
 ### 4.2 建议的首版 workspace
 
-首版不建议一开始拆成二十多个 crate。首版为八个稳定边界；NRU-001 起为九个——
-新增 `arkforge-usb`（唯一允许 `unsafe`/FFI 的 IOKit 传输 crate，叶子依赖，
-只有 `arkforged` 可以依赖它，均由架构守卫强制）：
+首版不建议一开始拆成二十多个 crate。机械层为九个稳定边界；独立产品形态成熟后
+新增两个消费边界：`arkforge-client` 收拢跨语言一致的 typed IPC client，
+`arkforge-standalone` 收拢 CLI 与未来 ArkFlash 共用的本地 authority、daemon lifecycle
+与 managed HDC control。平台 FFI 只允许存在于两个叶子：`arkforge-usb` 隔离
+IOKit/WinUSB，`arkforge-platform` 隔离 Unix socket / Windows Named Pipe、ACL 与 CSPRNG：
 
 ~~~text
 arkforge/
 ├── crates/
 │   ├── arkforge-core
 │   ├── arkforge-usb
+│   ├── arkforge-platform
 │   ├── arkforge-authority-api
 │   ├── arkforge-artifact
 │   ├── arkforge-transport
 │   ├── arkforge-provider
 │   ├── arkforge-engine
 │   ├── arkforge-ipc
+│   ├── arkforge-client
+│   ├── arkforge-standalone
 │   └── arkforged
 ├── adapters/
 │   └── arkforge-arkdeck-adapter
@@ -367,6 +373,8 @@ authority-api / artifact / transport / provider
 engine
   ↑
 ipc / daemon
+
+ipc + platform-local-ipc ← client ← standalone ← CLI / ArkFlash backend
 
 arkdeck-adapter → authority-api + ipc client
 ~~~
@@ -1502,7 +1510,12 @@ SupersedingRecoveryPlan 必须：
 - destructive controller 优先使用 ArkDeck 启动 daemon 时继承的 handle/secret；
 - public socket 不提供 startExecution。
 
-Windows Named Pipe 为设计预留：ArkDeck 唯一生产平台是 macOS，Windows 传输面不进入 AF-V1/AF-V2 验收范围，待真实 Windows 产品需求出现时按 maturity 组合键单独验收。
+Windows 实现使用 byte-mode Named Pipe、`PIPE_REJECT_REMOTE_CLIENTS`、
+`FILE_FLAG_FIRST_PIPE_INSTANCE` 和仅含当前登录 SID 的显式 DACL；client 使用
+identification-level SQOS。它与 Unix socket 共享同一 framing/protocol，不引入第二套
+业务 API。该实现通过 `x86_64-pc-windows-msvc` 全 workspace 交叉检查，但不会追溯计入
+AF-V1/AF-V2 的 macOS 证据；Windows 发布组合仍须在真实 Windows 主机完成包签名、
+跨账户拒绝、DAYU200 WinUSB/HDC 与受控刷机验收。
 
 ### 15.3 API
 

@@ -1,4 +1,4 @@
-//! Typed client for ArkForge's public, read-only local socket.
+//! Typed client for ArkForge's public, read-only local endpoint.
 //!
 //! The canonical CLI derives `public.sock` from one runtime directory. It does
 //! not accept an arbitrary socket path and it never opens the controller
@@ -10,19 +10,22 @@ use arkforge_ipc::messages::{
     KeyValue, MaterializePlanResponse, Request, Response, WatchJobRequest,
 };
 use arkforge_ipc::{Api, PROTOCOL_MAJOR, PROTOCOL_MINOR, SessionKind, Status, wire};
-use std::os::unix::net::UnixStream;
+use arkforge_platform::{LocalChannel, LocalEndpoint, LocalStream};
 use std::path::Path;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct PublicClientError {
+pub struct ClientError {
     pub code: String,
     pub message: String,
     pub exit_code: i32,
     pub retryable: bool,
 }
 
-impl PublicClientError {
-    fn new(
+/// Compatibility name retained for existing CLI consumers.
+pub type PublicClientError = ClientError;
+
+impl ClientError {
+    pub(crate) fn new(
         code: impl Into<String>,
         message: impl Into<String>,
         exit_code: i32,
@@ -100,20 +103,20 @@ pub struct PublicRuntimeInfo {
 
 #[derive(Debug)]
 pub struct PublicClient {
-    stream: UnixStream,
+    stream: LocalStream,
     next_request: u64,
     runtime_info: PublicRuntimeInfo,
 }
 
 impl PublicClient {
-    pub fn connect(runtime_dir: &Path) -> Result<Self, PublicClientError> {
-        let socket = runtime_dir.join("public.sock");
-        let mut stream = UnixStream::connect(&socket).map_err(|error| {
-            PublicClientError::new(
+    pub fn connect(runtime_dir: &Path) -> Result<Self, ClientError> {
+        let endpoint = LocalEndpoint::for_runtime(runtime_dir, LocalChannel::Public);
+        let mut stream = LocalStream::connect(&endpoint).map_err(|error| {
+            ClientError::new(
                 "DAEMON_UNAVAILABLE",
                 format!(
                     "Cannot connect to the ArkForge public runtime at {}: {error}",
-                    socket.display()
+                    endpoint.display()
                 ),
                 5,
                 true,
@@ -125,21 +128,21 @@ impl PublicClient {
             session_kind: SessionKind::Public,
         };
         write_frame(&mut stream, &hello.encode()).map_err(|error| {
-            PublicClientError::transport(format!("Cannot send the public handshake: {error}"))
+            ClientError::transport(format!("Cannot send the public handshake: {error}"))
         })?;
         let frame = read_frame(&mut stream)
             .map_err(|error| {
-                PublicClientError::transport(format!(
+                ClientError::transport(format!(
                     "Cannot read the public handshake response: {error}"
                 ))
             })?
             .ok_or_else(|| {
-                PublicClientError::transport("The daemon closed during the public handshake.")
+                ClientError::transport("The daemon closed during the public handshake.")
             })?;
         let ack = HelloAck::decode(&frame)
-            .map_err(|error| PublicClientError::decode("Invalid public handshake", error))?;
+            .map_err(|error| ClientError::decode("Invalid public handshake", error))?;
         if let Some(refusal) = ack.refusal {
-            return Err(PublicClientError::new(
+            return Err(ClientError::new(
                 "PROTOCOL_REFUSED",
                 format!("The daemon refused the public session: {refusal}"),
                 3,
@@ -147,7 +150,7 @@ impl PublicClient {
             ));
         }
         if ack.protocol_major != PROTOCOL_MAJOR || ack.session_kind != SessionKind::Public {
-            return Err(PublicClientError::new(
+            return Err(ClientError::new(
                 "PROTOCOL_REFUSED",
                 format!(
                     "The daemon acknowledged protocol {}.{} as {:?}, not ArkForge public protocol {}.{}.",
@@ -180,7 +183,7 @@ impl PublicClient {
         &self.runtime_info
     }
 
-    pub fn device_list(&mut self) -> Result<Vec<DeviceObservationView>, PublicClientError> {
+    pub fn device_list(&mut self) -> Result<Vec<DeviceObservationView>, ClientError> {
         let payload = self.call(Api::DiscoverDevices, Vec::new())?;
         decode_observations(&payload)
     }
@@ -189,7 +192,7 @@ impl PublicClient {
         &mut self,
         device_id: &str,
         profile_id: &str,
-    ) -> Result<DeviceProbeView, PublicClientError> {
+    ) -> Result<DeviceProbeView, ClientError> {
         let mut request = Vec::new();
         wire::write_string(&mut request, 1, device_id);
         wire::write_string(&mut request, 2, profile_id);
@@ -200,12 +203,12 @@ impl PublicClient {
     pub fn artifact_show(
         &mut self,
         artifact_id: &str,
-    ) -> Result<InspectArtifactResponse, PublicClientError> {
+    ) -> Result<InspectArtifactResponse, ClientError> {
         let mut request = Vec::new();
         wire::write_string(&mut request, 1, artifact_id);
         let payload = self.call(Api::InspectArtifact, request)?;
         InspectArtifactResponse::decode(&payload)
-            .map_err(|error| PublicClientError::decode("Invalid artifact manifest", error))
+            .map_err(|error| ClientError::decode("Invalid artifact manifest", error))
     }
 
     pub fn flash_assess(
@@ -213,7 +216,7 @@ impl PublicClient {
         artifact_id: &str,
         profile_id: &str,
         device_id: &str,
-    ) -> Result<Assessment, PublicClientError> {
+    ) -> Result<Assessment, ClientError> {
         let mut request = Vec::new();
         wire::write_string(&mut request, 1, artifact_id);
         wire::write_string(&mut request, 2, profile_id);
@@ -221,10 +224,10 @@ impl PublicClient {
         wire::write_string(&mut request, 4, "fullRestore");
         let payload = self.call(Api::MaterializePlan, request)?;
         match MaterializePlanResponse::decode(&payload)
-            .map_err(|error| PublicClientError::decode("Invalid flash assessment", error))?
+            .map_err(|error| ClientError::decode("Invalid flash assessment", error))?
         {
             MaterializePlanResponse::Assessment(assessment) => Ok(assessment),
-            MaterializePlanResponse::Plan(_) => Err(PublicClientError::new(
+            MaterializePlanResponse::Plan(_) => Err(ClientError::new(
                 "PUBLIC_ASSESSMENT_VIOLATION",
                 "The public runtime returned an executable plan to a read-only client.",
                 10,
@@ -233,18 +236,18 @@ impl PublicClient {
         }
     }
 
-    pub fn job_list(&mut self) -> Result<Vec<JobSummary>, PublicClientError> {
+    pub fn job_list(&mut self) -> Result<Vec<JobSummary>, ClientError> {
         let payload = self.call(Api::ListJobs, Vec::new())?;
         decode_job_summaries(&payload)
     }
 
-    pub fn job_show(&mut self, job_id: &str) -> Result<JobSummary, PublicClientError> {
+    pub fn job_show(&mut self, job_id: &str) -> Result<JobSummary, ClientError> {
         let mut request = Vec::new();
         wire::write_string(&mut request, 1, job_id);
         let payload = self.call(Api::GetJob, request)?;
         let mut summaries = decode_job_summaries(&payload)?;
         if summaries.len() != 1 {
-            return Err(PublicClientError::new(
+            return Err(ClientError::new(
                 "IPC_RESPONSE_INVALID",
                 format!(
                     "getJob returned {} summaries; exactly one is required.",
@@ -261,7 +264,7 @@ impl PublicClient {
         &mut self,
         job_id: &str,
         after_sequence: u64,
-    ) -> Result<Vec<JobEvent>, PublicClientError> {
+    ) -> Result<Vec<JobEvent>, ClientError> {
         let request = WatchJobRequest {
             job_id: job_id.to_string(),
             from_sequence: after_sequence,
@@ -271,16 +274,16 @@ impl PublicClient {
         let mut reader = wire::Reader::new(&payload);
         while let Some((field, value)) = reader
             .next_field()
-            .map_err(|error| PublicClientError::decode("Invalid job event list", error))?
+            .map_err(|error| ClientError::decode("Invalid job event list", error))?
         {
             if field == 1 {
                 events.push(
                     JobEvent::decode(
-                        value.as_bytes().map_err(|error| {
-                            PublicClientError::decode("Invalid job event", error)
-                        })?,
+                        value
+                            .as_bytes()
+                            .map_err(|error| ClientError::decode("Invalid job event", error))?,
                     )
-                    .map_err(|error| PublicClientError::decode("Invalid job event", error))?,
+                    .map_err(|error| ClientError::decode("Invalid job event", error))?,
                 );
             }
         }
@@ -288,7 +291,7 @@ impl PublicClient {
             .windows(2)
             .any(|pair| pair[0].sequence >= pair[1].sequence)
         {
-            return Err(PublicClientError::new(
+            return Err(ClientError::new(
                 "IPC_RESPONSE_INVALID",
                 "watchJob returned events outside strict sequence order.",
                 10,
@@ -298,14 +301,14 @@ impl PublicClient {
         Ok(events)
     }
 
-    pub fn recovery_guide(&mut self, job_id: &str) -> Result<RecoveryGuideView, PublicClientError> {
+    pub fn recovery_guide(&mut self, job_id: &str) -> Result<RecoveryGuideView, ClientError> {
         let mut request = Vec::new();
         wire::write_string(&mut request, 1, job_id);
         let payload = self.call(Api::GetRecoveryGuide, request)?;
         decode_recovery_guide(&payload)
     }
 
-    fn call(&mut self, api: Api, payload: Vec<u8>) -> Result<Vec<u8>, PublicClientError> {
+    fn call(&mut self, api: Api, payload: Vec<u8>) -> Result<Vec<u8>, ClientError> {
         let request_id = format!("arkforge-{}-{}", std::process::id(), self.next_request);
         self.next_request += 1;
         let request = Request {
@@ -314,20 +317,20 @@ impl PublicClient {
             payload,
         };
         write_frame(&mut self.stream, &request.encode())
-            .map_err(|error| PublicClientError::transport(format!("Cannot send {api}: {error}")))?;
+            .map_err(|error| ClientError::transport(format!("Cannot send {api}: {error}")))?;
         let frame = read_frame(&mut self.stream)
             .map_err(|error| {
-                PublicClientError::transport(format!("Cannot read the {api} response: {error}"))
+                ClientError::transport(format!("Cannot read the {api} response: {error}"))
             })?
             .ok_or_else(|| {
-                PublicClientError::transport(format!(
+                ClientError::transport(format!(
                     "The daemon closed before returning the {api} response."
                 ))
             })?;
         let response = Response::decode(&frame)
-            .map_err(|error| PublicClientError::decode("Invalid response envelope", error))?;
+            .map_err(|error| ClientError::decode("Invalid response envelope", error))?;
         if response.request_id != request_id || response.api != api {
-            return Err(PublicClientError::new(
+            return Err(ClientError::new(
                 "IPC_RESPONSE_MISMATCH",
                 format!(
                     "Expected {api} response {request_id}, received {} response {}.",
@@ -341,7 +344,7 @@ impl PublicClient {
             return Ok(response.payload);
         }
         let error = ErrorBody::decode(&response.payload)
-            .map_err(|decode| PublicClientError::decode("Invalid daemon error", decode))?;
+            .map_err(|decode| ClientError::decode("Invalid daemon error", decode))?;
         let (exit_code, retryable) = match response.status {
             Status::InvalidArgument => (2, false),
             Status::NotFound => (5, false),
@@ -350,7 +353,7 @@ impl PublicClient {
             Status::Internal => (10, true),
             Status::Ok => unreachable!(),
         };
-        Err(PublicClientError::new(
+        Err(ClientError::new(
             error.code,
             error.message,
             exit_code,
@@ -359,34 +362,34 @@ impl PublicClient {
     }
 }
 
-fn decode_observations(payload: &[u8]) -> Result<Vec<DeviceObservationView>, PublicClientError> {
+fn decode_observations(payload: &[u8]) -> Result<Vec<DeviceObservationView>, ClientError> {
     let mut observations = Vec::new();
     let mut reader = wire::Reader::new(payload);
     while let Some((field, value)) = reader
         .next_field()
-        .map_err(|error| PublicClientError::decode("Invalid device list", error))?
+        .map_err(|error| ClientError::decode("Invalid device list", error))?
     {
         if field == 1 {
             observations.push(decode_observation(value.as_bytes().map_err(|error| {
-                PublicClientError::decode("Invalid device observation", error)
+                ClientError::decode("Invalid device observation", error)
             })?)?);
         }
     }
     Ok(observations)
 }
 
-fn decode_observation(payload: &[u8]) -> Result<DeviceObservationView, PublicClientError> {
+fn decode_observation(payload: &[u8]) -> Result<DeviceObservationView, ClientError> {
     let mut observation = DeviceObservationView::default();
     let mut reader = wire::Reader::new(payload);
     while let Some((field, value)) = reader
         .next_field()
-        .map_err(|error| PublicClientError::decode("Invalid device observation", error))?
+        .map_err(|error| ClientError::decode("Invalid device observation", error))?
     {
         match field {
             1 => observation.observation_id = string_value(value, field, "device observation")?,
             2 => {
                 observation.observed_at_epoch_ms = value.as_u64().map_err(|error| {
-                    PublicClientError::decode("Invalid device observation time", error)
+                    ClientError::decode("Invalid device observation time", error)
                 })?
             }
             3 => observation.mode = string_value(value, field, "device mode")?,
@@ -394,16 +397,18 @@ fn decode_observation(payload: &[u8]) -> Result<DeviceObservationView, PublicCli
             5 => observation.descriptor_sha256 = string_value(value, field, "descriptor digest")?,
             6 => observation.identity_strength = string_value(value, field, "identity strength")?,
             7 => {
-                observation.malformed_descriptor = value.as_bool().map_err(|error| {
-                    PublicClientError::decode("Invalid descriptor status", error)
-                })?
+                observation.malformed_descriptor = value
+                    .as_bool()
+                    .map_err(|error| ClientError::decode("Invalid descriptor status", error))?
             }
-            8 => observation.protocol_identity.push(
-                KeyValue::decode(value.as_bytes().map_err(|error| {
-                    PublicClientError::decode("Invalid protocol identity", error)
-                })?)
-                .map_err(|error| PublicClientError::decode("Invalid protocol identity", error))?,
-            ),
+            8 => {
+                observation.protocol_identity.push(
+                    KeyValue::decode(value.as_bytes().map_err(|error| {
+                        ClientError::decode("Invalid protocol identity", error)
+                    })?)
+                    .map_err(|error| ClientError::decode("Invalid protocol identity", error))?,
+                )
+            }
             9 => observation.serial_sha256 = string_value(value, field, "serial digest")?,
             10 => {
                 observation.serial_evidence_kind =
@@ -413,7 +418,7 @@ fn decode_observation(payload: &[u8]) -> Result<DeviceObservationView, PublicCli
         }
     }
     if observation.observation_id.is_empty() {
-        return Err(PublicClientError::new(
+        return Err(ClientError::new(
             "IPC_RESPONSE_INVALID",
             "A device observation has no observation_id.",
             10,
@@ -423,7 +428,7 @@ fn decode_observation(payload: &[u8]) -> Result<DeviceObservationView, PublicCli
     Ok(observation)
 }
 
-fn decode_probe(payload: &[u8]) -> Result<DeviceProbeView, PublicClientError> {
+fn decode_probe(payload: &[u8]) -> Result<DeviceProbeView, ClientError> {
     let mut observation = None;
     let mut protocol_facts = Vec::new();
     let mut profile_id = String::new();
@@ -431,21 +436,21 @@ fn decode_probe(payload: &[u8]) -> Result<DeviceProbeView, PublicClientError> {
     let mut reader = wire::Reader::new(payload);
     while let Some((field, value)) = reader
         .next_field()
-        .map_err(|error| PublicClientError::decode("Invalid device probe", error))?
+        .map_err(|error| ClientError::decode("Invalid device probe", error))?
     {
         match field {
             1 => {
                 observation = Some(decode_observation(value.as_bytes().map_err(|error| {
-                    PublicClientError::decode("Invalid probed observation", error)
+                    ClientError::decode("Invalid probed observation", error)
                 })?)?)
             }
             2 => protocol_facts.push(
                 KeyValue::decode(
                     value
                         .as_bytes()
-                        .map_err(|error| PublicClientError::decode("Invalid probe fact", error))?,
+                        .map_err(|error| ClientError::decode("Invalid probe fact", error))?,
                 )
-                .map_err(|error| PublicClientError::decode("Invalid probe fact", error))?,
+                .map_err(|error| ClientError::decode("Invalid probe fact", error))?,
             ),
             3 => profile_id = string_value(value, field, "probe profile")?,
             4 => facts_sha256 = string_value(value, field, "probe facts digest")?,
@@ -454,7 +459,7 @@ fn decode_probe(payload: &[u8]) -> Result<DeviceProbeView, PublicClientError> {
     }
     Ok(DeviceProbeView {
         observation: observation.ok_or_else(|| {
-            PublicClientError::new(
+            ClientError::new(
                 "IPC_RESPONSE_INVALID",
                 "The device probe has no observation.",
                 10,
@@ -467,54 +472,54 @@ fn decode_probe(payload: &[u8]) -> Result<DeviceProbeView, PublicClientError> {
     })
 }
 
-fn decode_job_summaries(payload: &[u8]) -> Result<Vec<JobSummary>, PublicClientError> {
+fn decode_job_summaries(payload: &[u8]) -> Result<Vec<JobSummary>, ClientError> {
     let mut summaries = Vec::new();
     let mut reader = wire::Reader::new(payload);
     while let Some((field, value)) = reader
         .next_field()
-        .map_err(|error| PublicClientError::decode("Invalid job list", error))?
+        .map_err(|error| ClientError::decode("Invalid job list", error))?
     {
         if field == 1 {
             summaries.push(
                 JobSummary::decode(
                     value
                         .as_bytes()
-                        .map_err(|error| PublicClientError::decode("Invalid job summary", error))?,
+                        .map_err(|error| ClientError::decode("Invalid job summary", error))?,
                 )
-                .map_err(|error| PublicClientError::decode("Invalid job summary", error))?,
+                .map_err(|error| ClientError::decode("Invalid job summary", error))?,
             );
         }
     }
     Ok(summaries)
 }
 
-fn decode_recovery_guide(payload: &[u8]) -> Result<RecoveryGuideView, PublicClientError> {
+fn decode_recovery_guide(payload: &[u8]) -> Result<RecoveryGuideView, ClientError> {
     let mut guide = RecoveryGuideView::default();
     let mut reader = wire::Reader::new(payload);
     while let Some((field, value)) = reader
         .next_field()
-        .map_err(|error| PublicClientError::decode("Invalid recovery guide", error))?
+        .map_err(|error| ClientError::decode("Invalid recovery guide", error))?
     {
         match field {
             1 => guide.job_id = string_value(value, field, "recovery job")?,
             2 => guide.original_state = string_value(value, field, "original job state")?,
             3 => {
                 guide.original_outcome_immutable = value.as_bool().map_err(|error| {
-                    PublicClientError::decode("Invalid recovery immutability flag", error)
+                    ClientError::decode("Invalid recovery immutability flag", error)
                 })?
             }
             4 => {
-                guide.automatic_replay_forbidden = value.as_bool().map_err(|error| {
-                    PublicClientError::decode("Invalid recovery replay flag", error)
-                })?
+                guide.automatic_replay_forbidden = value
+                    .as_bool()
+                    .map_err(|error| ClientError::decode("Invalid recovery replay flag", error))?
             }
             5 => guide
                 .actions
                 .push(string_value(value, field, "recovery action")?),
             6 => {
-                guide.complete_overwrite_supported = value.as_bool().map_err(|error| {
-                    PublicClientError::decode("Invalid recovery support flag", error)
-                })?
+                guide.complete_overwrite_supported = value
+                    .as_bool()
+                    .map_err(|error| ClientError::decode("Invalid recovery support flag", error))?
             }
             7 => guide.contract_id = string_value(value, field, "recovery contract id")?,
             8 => guide.contract_version = string_value(value, field, "recovery contract version")?,
@@ -523,7 +528,7 @@ fn decode_recovery_guide(payload: &[u8]) -> Result<RecoveryGuideView, PublicClie
         }
     }
     if guide.job_id.is_empty() {
-        return Err(PublicClientError::new(
+        return Err(ClientError::new(
             "IPC_RESPONSE_INVALID",
             "The recovery guide has no job_id.",
             10,
@@ -537,11 +542,11 @@ fn string_value(
     value: wire::FieldValue<'_>,
     field: u32,
     context: &str,
-) -> Result<String, PublicClientError> {
+) -> Result<String, ClientError> {
     value
         .as_str(field)
         .map(str::to_string)
-        .map_err(|error| PublicClientError::decode(&format!("Invalid {context}"), error))
+        .map_err(|error| ClientError::decode(&format!("Invalid {context}"), error))
 }
 
 #[cfg(test)]

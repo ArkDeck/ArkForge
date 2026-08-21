@@ -1,4 +1,4 @@
-//! Independent release gate for the direct CLI authority implementation.
+//! Independent release gate for the reusable standalone authority implementation.
 //!
 //! Mechanics maturity and authority maturity are deliberately different keys.
 //! An ArkDeck record, another CLI build, another control map, another permit

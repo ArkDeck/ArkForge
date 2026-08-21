@@ -9,9 +9,8 @@
 //!   [`SessionKind::may_call`] rather than in a handler's first `if`;
 //! - an unknown enum value fails closed (see `wire`).
 //!
-//! Windows named pipes are a design reservation and out of AF-V1/AF-V2
-//! acceptance (architecture.md 15.2); the framing here is transport-agnostic
-//! and the daemon binds a Unix domain socket.
+//! Framing is transport-agnostic. `arkforge-platform` binds owner-only Unix
+//! sockets or local-only Windows named pipes without changing these messages.
 
 #![forbid(unsafe_code)]
 

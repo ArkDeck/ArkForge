@@ -1,0 +1,11 @@
+[package]
+name = "arkforge-client"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+arkforge-ipc = { path = "../arkforge-ipc" }
+arkforge-platform = { path = "../arkforge-platform" }

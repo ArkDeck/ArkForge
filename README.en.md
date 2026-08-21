@@ -39,7 +39,7 @@ See the [implementation tracker](TASKS.md) and [evidence ledger](docs/evidence/l
 
 ## Quick start
 
-The executable runtime and release package currently target macOS. The repository pins Rust 1.97.1 and Edition 2024. Build the workspace, then ask ArkForge what the current host can do:
+The runtime supports macOS and Windows x64; Windows signing and physical-device evidence remain a separately accepted maturity combination. The repository pins Rust 1.97.1 and Edition 2024. Build the workspace, then ask ArkForge what the current host can do:
 
 ```bash
 cargo build --workspace
@@ -139,6 +139,13 @@ cargo test --workspace --all-targets
 The workspace has no third-party Rust runtime dependencies. SHA-256, deterministic CBOR, DEFLATE, tar, and the Protobuf wire codec are implemented in the repository and checked against published test vectors. See [AFD-0001](docs/decisions/AFD-0001-zero-dependency-core.md) for the rationale.
 
 A macOS release consists of separately signed sibling `arkforge` and `arkforged` binaries. [`packaging/macos/package-arkforge.sh`](packaging/macos/package-arkforge.sh) is the packaging entry point, and the release bundle contains no vendor RockUSB tool.
+
+The Windows release surface uses local-only Named Pipes, current-user ACLs,
+WinUSB, and Authenticode. See
+[`packaging/windows/README.md`](packaging/windows/README.md) for packaging,
+driver binding, installation, and tiered acceptance. A production package must
+use a catalog returned by the Windows Hardware Developer Program; an
+application certificate is not treated as a production driver signature.
 
 ## Learn more
 

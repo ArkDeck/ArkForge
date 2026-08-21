@@ -23,6 +23,7 @@ arkforge-transport = { path = "../arkforge-transport" }
 arkforge-provider = { path = "../arkforge-provider" }
 arkforge-engine = { path = "../arkforge-engine" }
 arkforge-ipc = { path = "../arkforge-ipc" }
+arkforge-platform = { path = "../arkforge-platform" }
 
 [dev-dependencies]
 arkforge-arkdeck-adapter = { path = "../../adapters/arkforge-arkdeck-adapter" }

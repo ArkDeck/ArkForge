@@ -82,10 +82,14 @@ fn core_depends_on_nothing() {
 fn the_dependency_direction_matches_the_architecture() {
     // architecture.md 4.3:
     //   core ← {authority-api, artifact, transport, provider} ← engine ← ipc/daemon
-    //   arkdeck-adapter → authority-api + ipc client
+    //   client → ipc
+    //   standalone → client + authority-api + daemon host helpers
+    //   presentation frontends → client/standalone
     let graph = dependency_graph();
     let allowed: BTreeMap<&str, BTreeSet<&str>> = BTreeMap::from([
         ("arkforge-core", BTreeSet::new()),
+        // Win32 named-pipe/ACL/CSPRNG FFI is confined to this leaf.
+        ("arkforge-platform", BTreeSet::new()),
         // CHG-2026-063: the sole IOKit/unsafe containment crate is a leaf.
         ("arkforge-usb", BTreeSet::new()),
         ("arkforge-authority-api", BTreeSet::from(["arkforge-core"])),
@@ -107,6 +111,10 @@ fn the_dependency_direction_matches_the_architecture() {
         ),
         ("arkforge-ipc", BTreeSet::from(["arkforge-core"])),
         (
+            "arkforge-client",
+            BTreeSet::from(["arkforge-ipc", "arkforge-platform"]),
+        ),
+        (
             "arkforged",
             BTreeSet::from([
                 "arkforge-core",
@@ -117,6 +125,7 @@ fn the_dependency_direction_matches_the_architecture() {
                 "arkforge-provider",
                 "arkforge-engine",
                 "arkforge-ipc",
+                "arkforge-platform",
             ]),
         ),
         (
@@ -124,8 +133,23 @@ fn the_dependency_direction_matches_the_architecture() {
             BTreeSet::from(["arkforge-core", "arkforge-authority-api", "arkforge-ipc"]),
         ),
         (
+            "arkforge-standalone",
+            BTreeSet::from([
+                "arkforge-client",
+                "arkforge-artifact",
+                "arkforge-core",
+                "arkforge-authority-api",
+                "arkforge-ipc",
+                "arkforge-platform",
+                "arkforge-transport",
+                "arkforged",
+            ]),
+        ),
+        (
             "arkforge-cli",
             BTreeSet::from([
+                "arkforge-client",
+                "arkforge-standalone",
                 "arkforge-core",
                 "arkforge-authority-api",
                 "arkforge-artifact",
@@ -158,7 +182,10 @@ fn unsafe_is_confined_to_the_usb_ffi_crate() {
     for directory in ["crates", "adapters"] {
         for entry in std::fs::read_dir(root.join(directory)).expect("workspace directory") {
             let entry = entry.expect("directory entry");
-            if entry.file_name() == "arkforge-usb" {
+            if matches!(
+                entry.file_name().to_str(),
+                Some("arkforge-usb" | "arkforge-platform")
+            ) {
                 continue;
             }
             let src = entry.path().join("src");
@@ -177,14 +204,17 @@ fn unsafe_is_confined_to_the_usb_ffi_crate() {
 }
 
 #[test]
-fn only_the_process_frontend_may_compose_the_daemon_library() {
-    // The canonical CLI composes existing mechanics-side host helpers while
-    // keeping authority minting in its own executable crate. No reusable
-    // library may build on the daemon or one authority's adapter.
+fn only_the_standalone_authority_may_compose_the_daemon_library() {
+    // The standalone product layer composes the mechanics-side host helpers;
+    // CLI and future UI frontends consume that layer instead of each growing a
+    // second authority. No neutral or authority-adapter crate may build on the
+    // daemon or one authority's adapter.
     let graph = dependency_graph();
     for (crate_name, dependencies) in &graph {
         for forbidden in ["arkforged", "arkforge-arkdeck-adapter"] {
-            if crate_name == "arkforge-cli" && forbidden == "arkforged" {
+            if matches!(crate_name.as_str(), "arkforge-cli" | "arkforge-standalone")
+                && forbidden == "arkforged"
+            {
                 continue;
             }
             assert!(

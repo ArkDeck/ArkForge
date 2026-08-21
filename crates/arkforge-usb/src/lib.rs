@@ -104,7 +104,7 @@ impl fmt::Display for UsbError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             UsbError::UnsupportedPlatform => {
-                f.write_str("native IOKit USB is available on macOS only")
+                f.write_str("native USB is available through IOKit on macOS and WinUSB on Windows")
             }
             UsbError::Enumeration(detail) => write!(f, "USB enumeration: {detail}"),
             UsbError::NoMatchingInterface(selector) => write!(
@@ -190,7 +190,11 @@ impl NativeUsb {
 #[cfg(target_os = "macos")]
 mod platform;
 
-#[cfg(not(target_os = "macos"))]
+#[cfg(windows)]
+#[path = "platform_windows.rs"]
+mod platform;
+
+#[cfg(not(any(target_os = "macos", windows)))]
 mod platform {
     use super::*;
 

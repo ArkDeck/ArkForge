@@ -39,7 +39,8 @@ ArkForge 目前处于**硬件准入阶段**，还不是面向普通用户的一�
 
 ## 快速体验
 
-当前可执行 runtime 与发布打包面向 macOS，仓库固定使用 Rust 1.97.1 / Edition 2024。先构建工作区并查看当前主机能做什么：
+当前 runtime 支持 macOS 与 Windows x64；Windows 的发布签名与真机证据仍按独立组合
+验收。仓库固定使用 Rust 1.97.1 / Edition 2024。先构建工作区并查看当前主机能做什么：
 
 ```bash
 cargo build --workspace
@@ -139,6 +140,11 @@ cargo test --workspace --all-targets
 工作区没有第三方 Rust 运行时依赖。SHA-256、deterministic CBOR、DEFLATE、tar 和 Protobuf wire codec 均在仓内实现并使用公开测试向量验证，设计理由见 [AFD-0001](docs/decisions/AFD-0001-zero-dependency-core.md)。
 
 macOS 发布物是一对位于同一目录、分别签名的 `arkforge` 和 `arkforged`。打包入口为 [`packaging/macos/package-arkforge.sh`](packaging/macos/package-arkforge.sh)，发布包不携带 vendor RockUSB 工具。
+
+Windows 发布面使用 local-only Named Pipe、当前用户 ACL、WinUSB 和 Authenticode。
+打包、驱动绑定、安装/卸载及软件/真机分级验收入口见
+[`packaging/windows/README.md`](packaging/windows/README.md)。生产包必须使用 Windows
+Hardware Developer Program 返回的签名 catalog；仓库不会用应用证书伪装生产驱动签名。
 
 ## 进一步了解
 

@@ -28,6 +28,7 @@ use arkforge_artifact::staging::stage_members;
 use arkforge_core::Sha256Digest;
 use arkforge_core::digest::Sha256;
 use arkforge_core::outcome::ActionDisposition;
+use arkforge_platform::sync_directory;
 use arkforge_provider::rockchip_execute::{
     ExecutionError, ExecutionSession, RockUsbDevice, RockUsbLocation, RockUsbMutationReceipt,
     RockUsbObservation, RockUsbPort, RockUsbPortFailure, RockUsbWriteProgress, StagedImage,
@@ -542,9 +543,7 @@ fn create_cache_directory(path: &Path) -> Result<(), DispatchFailure> {
 }
 
 fn sync_cache_directory(path: &Path) -> Result<(), DispatchFailure> {
-    fs::File::open(path)
-        .and_then(|directory| directory.sync_all())
-        .map_err(cache_io)
+    sync_directory(path).map_err(cache_io)
 }
 
 fn cache_io(error: std::io::Error) -> DispatchFailure {

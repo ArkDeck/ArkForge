@@ -17,6 +17,7 @@ use arkforge_core::digest::{
     CanonicalCbor, CborValue, Domain, Sha256Digest, decode_canonical, digest_in_domain, sha256,
 };
 use arkforge_core::profile::DeviceProfile;
+use arkforge_platform::{protect_path, sync_directory};
 use arkforge_provider::rockchip_execute::{
     ROCKUSB_SECTOR_BYTES, RockUsbDevice, RockUsbLocation, RockUsbMutationReceipt,
     RockUsbObservation, RockUsbPort, RockUsbPortFailure, StagedImage, observed_layout_digest,
@@ -1409,12 +1410,8 @@ pub fn now_epoch_ms() -> Result<u64, RescueError> {
 fn create_private_dir(path: &Path) -> Result<(), RescueError> {
     fs::create_dir_all(path)
         .map_err(|error| RescueError::io(&format!("create {}", path.display()), error))?;
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        fs::set_permissions(path, fs::Permissions::from_mode(0o700))
-            .map_err(|error| RescueError::io(&format!("protect {}", path.display()), error))?;
-    }
+    protect_path(path, true)
+        .map_err(|error| RescueError::io(&format!("protect {}", path.display()), error))?;
     Ok(())
 }
 
@@ -1462,8 +1459,7 @@ fn sync_parent(path: &Path) -> Result<(), RescueError> {
     let parent = path
         .parent()
         .ok_or_else(|| RescueError::io("sync parent", "path has no parent"))?;
-    File::open(parent)
-        .and_then(|directory| directory.sync_all())
+    sync_directory(parent)
         .map_err(|error| RescueError::io(&format!("sync {}", parent.display()), error))
 }
 

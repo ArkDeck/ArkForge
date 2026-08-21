@@ -1,4 +1,4 @@
-//! The macOS signing/entitlement/packaging contract, checked rather than
+//! The host signing/entitlement/packaging contracts, checked rather than
 //! written down (AD-007, `docs/decisions/AFD-0003-arkforged-signing-packaging.md`).
 //!
 //! Two kinds of assertion live here:
@@ -59,6 +59,39 @@ fn the_release_packager_contains_only_the_canonical_cli_daemon_pair() {
             "the release packager still carries retired vendor surface {retired}"
         );
     }
+}
+
+#[test]
+fn the_windows_driver_and_winusb_backend_share_one_exact_interface_identity() {
+    const INF: &str = include_str!("../../../packaging/windows/driver/arkforge-rockusb.inf");
+    const BACKEND: &str = include_str!("../../arkforge-usb/src/platform_windows.rs");
+    const GUID: &str = "6A4E21F0-50A4-4D7A-B71B-9E945B3F6B7B";
+
+    assert!(INF.contains("USB\\VID_2207&PID_350A"));
+    assert!(INF.contains("Needs   = WINUSB.NT"));
+    assert!(INF.contains(GUID));
+    assert!(BACKEND.contains("0x6a4e_21f0"));
+    assert!(BACKEND.contains("0x50a4"));
+    assert!(BACKEND.contains("0x4d7a"));
+    assert!(BACKEND.contains("PIPE_TRANSFER_TIMEOUT"));
+}
+
+#[test]
+fn the_windows_release_refuses_unsigned_or_unbound_payloads() {
+    const PACKAGER: &str = include_str!("../../../packaging/windows/package-arkforge.ps1");
+    const INSTALLER: &str = include_str!("../../../packaging/windows/Install-ArkForge.ps1");
+    const ACCEPTANCE: &str = include_str!("../../../packaging/windows/Test-ArkForgePackage.ps1");
+
+    assert!(PACKAGER.contains("'verify', '/kp', '/all', '/v', $driverCatalog"));
+    assert!(PACKAGER.contains("arkforge.windows-trusted-manifest/v1"));
+    assert!(PACKAGER.contains("Set-AuthenticodeSignature"));
+    assert!(PACKAGER.contains("tools\\hdc.exe"));
+    assert!(INSTALLER.contains("ArkForge.PackageManifest.ps1"));
+    assert!(INSTALLER.contains("Assert-PackageFile $packageRoot $fact"));
+    assert!(INSTALLER.contains("/add-driver"));
+    assert!(ACCEPTANCE.contains("--require-release-signing"));
+    assert!(ACCEPTANCE.contains("DEVPKEY_Device_Service"));
+    assert!(ACCEPTANCE.contains("Runtime ACL is not owner-only"));
 }
 
 #[test]
