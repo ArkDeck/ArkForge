@@ -43,9 +43,15 @@ The runtime supports macOS and Windows x64; Windows signing and physical-device 
 
 ```bash
 cargo build --workspace
-target/debug/arkforge help --format json
-target/debug/arkforge --runtime-dir /tmp/arkforge doctor
+target/debug/arkforge help --all --format json
+target/debug/arkforge --runtime-dir /tmp/arkforge status
 ```
+
+`status` — which is also what a bare `arkforge` runs — aggregates host, runtime,
+devices, artifacts, jobs, and blockers into one `arkforge.status/v1` document. A
+section that could not be observed reports `items: null` with a typed `reason`;
+only a completed enumeration of zero is `items: []`. It never starts a runtime on
+the way to answering.
 
 Start a local runtime and list observed devices:
 
@@ -95,19 +101,19 @@ target/debug/arkforge completion --shell zsh
 `arkforge` covers the complete lifecycle:
 
 ```text
-doctor
+status      aggregate host / runtime / device / artifact / job / blocker snapshot
 device      list / show / probe / wait
 artifact    import / inspect / list / show
 flash       assess / plan / apply
 job         list / show / watch / cancel / reconcile / recovery
 rescue      list / inspect / read / plan / apply
-daemon      run / start / stop / status
+daemon      run / start / stop
 signing     verify
 completion
-help
+help        [<command path>] / --all
 ```
 
-Every command level has stable human-readable help and an `arkforge.command-help/v1` JSON description. Structured output never mixes in colors, progress bars, or prompts. Errors include a stable code, remediation, and executable next commands.
+Every command level has stable human-readable help and an `arkforge.command-help/v1` JSON description. `help --all` — and structured `help` without a path — returns the whole tree as one `arkforge.command-help-index/v1`, whose leaves are byte-identical to the per-path queries and each declare `runtime_effect` and `facts_projections`. Structured output never mixes in colors, progress bars, or prompts. Errors include a stable code, remediation, and executable next commands.
 
 ### An auditable safety model
 

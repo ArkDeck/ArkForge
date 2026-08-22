@@ -112,7 +112,7 @@ pub fn classify(
 
 /// Whether this build contains any maintainer-reviewed support record. Exact
 /// execution still requires [`lookup`] for the full key; this coarse fact is
-/// only for `daemon status`/`doctor` readiness reporting.
+/// only for `status` readiness reporting.
 pub const fn has_reviewed_support_records() -> bool {
     false
 }

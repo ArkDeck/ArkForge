@@ -31,6 +31,8 @@ use arkforge_standalone::StandaloneError;
 use arkforge_standalone::supervisor;
 
 const HELP_SCHEMA: &str = "arkforge.command-help/v1";
+const HELP_INDEX_SCHEMA: &str = "arkforge.command-help-index/v1";
+const STATUS_SCHEMA: &str = "arkforge.status/v1";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Output {
@@ -67,6 +69,10 @@ struct CliError {
     exit_code: i32,
     retryable: bool,
     required_acknowledgements: Vec<String>,
+    /// Composite facts already established before the refusal, rendered as one
+    /// canonical JSON object body. It is the additive `facts` member of
+    /// `arkforge.command-result/v1.error`; the v1 members keep their meaning.
+    facts: Option<String>,
 }
 
 impl CliError {
@@ -82,6 +88,7 @@ impl CliError {
             exit_code,
             retryable,
             required_acknowledgements: Vec::new(),
+            facts: None,
         }
     }
 
@@ -95,6 +102,14 @@ impl CliError {
             self.retryable = true;
         }
         self.required_acknowledgements = tokens;
+        self
+    }
+
+    /// Attach the composite facts established before this refusal so a failure
+    /// path carries the same information a success path would have returned.
+    #[allow(dead_code)]
+    fn with_facts(mut self, facts: impl Into<String>) -> Self {
+        self.facts = Some(facts.into());
         self
     }
 }
@@ -112,6 +127,7 @@ impl From<RescueError> for CliError {
             exit_code: error.exit_code,
             retryable: error.retryable,
             required_acknowledgements,
+            facts: None,
         }
     }
 }
@@ -124,6 +140,7 @@ impl From<PublicClientError> for CliError {
             exit_code: error.exit_code,
             retryable: error.retryable,
             required_acknowledgements: Vec::new(),
+            facts: None,
         }
     }
 }
@@ -136,6 +153,7 @@ impl From<StandaloneError> for CliError {
             exit_code: error.exit_code,
             retryable: error.retryable,
             required_acknowledgements: error.required_acknowledgements,
+            facts: None,
         }
     }
 }
@@ -267,13 +285,30 @@ impl HelpSpec {
             .collect()
     }
 
+    /// Whether running this command may bring a local runtime into existence.
+    /// It is deliberately separate from `effect`, which grades the business and
+    /// device effect: a read-only query that starts a service is still not a
+    /// device write, and reporting it as one would make `effect` useless.
+    fn runtime_effect(&self) -> &'static str {
+        match self.command {
+            "daemon run" | "daemon start" => "may-start-service",
+            _ => "none",
+        }
+    }
+
+    /// The `facts` projections this command may attach to a refusal envelope,
+    /// as `(name, schema, max_items)`. No command carries composite refusal
+    /// facts yet; each composite surface declares its own as it lands.
+    fn facts_projections(&self) -> &'static [(&'static str, &'static str, u64)] {
+        &[]
+    }
+
     fn effect_class(&self) -> &'static str {
         match self.command {
             "flash apply" | "rescue apply" => "destructive",
             "job cancel" => "mutating-control",
             "artifact import" | "rescue read" => "host-write",
             "flash plan" | "job recovery plan" | "rescue plan" => "read-device-and-host-write",
-            "daemon status" => "read-only",
             command if command.starts_with("daemon") => "service-lifecycle",
             _ => "read-only",
         }
@@ -318,7 +353,7 @@ impl HelpSpec {
             || self.command == "artifact show"
             || self.command.starts_with("flash ")
             || self.command.starts_with("job ")
-            || matches!(self.command, "daemon status" | "daemon stop")
+            || self.command == "daemon stop"
     }
 }
 
@@ -521,9 +556,10 @@ fn main() {
 
 fn run(arguments: &[String]) -> Result<i32, CliError> {
     let (globals, command) = parse_globals(arguments)?;
+    // A bare invocation answers "what is going on here", not "what could I
+    // type": `arkforge help` is one keystroke away and still prints the tree.
     if command.is_empty() {
-        print_help(help_spec(&[])?, globals.output);
-        return Ok(0);
+        return run_status(globals);
     }
     if command == ["--version"] || command == ["-V"] {
         match globals.output {
@@ -547,12 +583,21 @@ fn run(arguments: &[String]) -> Result<i32, CliError> {
             .take_while(|argument| !argument.starts_with('-'))
             .cloned()
             .collect::<Vec<_>>();
-        print_help(help_spec(&topic)?, globals.output);
+        // One rule for structured callers: help without a path is the whole
+        // tree, whether it was asked for as `help` or as `--help`.
+        if topic.is_empty() && globals.output == Output::Json {
+            print_help_index(globals.output);
+        } else {
+            print_help(help_spec(&topic)?, globals.output);
+        }
         return Ok(0);
     }
     validate_against_command_tree(&command)?;
     match command[0].as_str() {
-        "doctor" => run_doctor(globals),
+        "status" => {
+            reject_extra(&command[1..], "status")?;
+            run_status(globals)
+        }
         "device" => run_device(&command[1..], globals),
         "artifact" => run_artifact(&command[1..], globals),
         "flash" => run_flash(&command[1..], globals),
@@ -586,12 +631,6 @@ fn run_daemon(arguments: &[String], globals: Globals) -> Result<i32, CliError> {
         "start" => {
             let options = supervisor::DaemonOptions::parse(&arguments[1..])?;
             let status = supervisor::start(runtime_dir, options)?;
-            print_daemon_status(&status, globals.output);
-            Ok(0)
-        }
-        "status" => {
-            reject_extra(&arguments[1..], "daemon status")?;
-            let status = supervisor::status(&runtime_dir)?;
             print_daemon_status(&status, globals.output);
             Ok(0)
         }
@@ -682,7 +721,7 @@ fn daemon_next_commands(status: &supervisor::DaemonStatus) -> Vec<String> {
     if status.mechanics_ready && status.blockers.is_empty() {
         vec!["arkforge device list".into()]
     } else {
-        vec!["arkforge daemon status".into()]
+        vec!["arkforge status".into()]
     }
 }
 
@@ -760,9 +799,11 @@ fn requested_output(arguments: &[String]) -> Option<Output> {
 fn run_help(arguments: &[String], global_output: Output) -> Result<i32, CliError> {
     let mut topic = Vec::new();
     let mut output = global_output;
+    let mut all = false;
     let mut index = 0;
     while index < arguments.len() {
         match arguments[index].as_str() {
+            "--all" => all = true,
             "--format" => {
                 index += 1;
                 output = match arguments
@@ -788,32 +829,132 @@ fn run_help(arguments: &[String], global_output: Output) -> Result<i32, CliError
         }
         index += 1;
     }
+    if all && !topic.is_empty() {
+        return Err(CliError::invalid(
+            "--all describes the whole command tree and takes no topic path.",
+        ));
+    }
+    // A structured caller asking for help without a path wants the contract for
+    // every command, not the root leaf: one call, whole tree.
+    if all || (topic.is_empty() && output == Output::Json) {
+        print_help_index(output);
+        return Ok(0);
+    }
     print_help(help_spec(&topic)?, output);
     Ok(0)
 }
 
-fn run_doctor(globals: Globals) -> Result<i32, CliError> {
+/// One aggregate host and runtime snapshot.
+///
+/// It deliberately never starts a runtime: a caller asking "what is going on"
+/// must be able to learn "nothing is running" without that question changing
+/// the answer. Every section separates three states that a bare array cannot —
+/// not observable, observed and empty, observed and populated.
+fn run_status(globals: Globals) -> Result<i32, CliError> {
     let runtime_dir = command_runtime_dir(&globals)?;
+    // Refuse before any IPC when the host clock itself is unusable: an
+    // unstampable snapshot is a failed host assessment, not a partial one.
+    let captured_at_epoch_ms = now_epoch_ms()?;
     let platform_supported = cfg!(any(target_os = "macos", target_os = "windows"));
-    let runtime = supervisor::status(&runtime_dir).ok();
-    let runtime_running = runtime.is_some();
-    let mechanics_ready = runtime
-        .as_ref()
-        .is_some_and(|status| status.mechanics_ready);
-    let blockers = runtime
-        .as_ref()
-        .map(|status| status.blockers.clone())
-        .unwrap_or_else(|| vec!["DAEMON_UNAVAILABLE".into()]);
     let inspect_ready = platform_supported;
-    let authority_ready = runtime
-        .as_ref()
-        .is_some_and(|status| status.authority_support_available);
-    let hdc_bound = runtime.as_ref().is_some_and(|status| status.hdc_bound);
+    let runtime = supervisor::status(&runtime_dir).ok();
+
+    let mut connection = runtime.as_ref().map(|_| public_client(&globals));
+    let devices = match connection.as_mut() {
+        None => StatusSection::unobservable("RUNTIME_NOT_RUNNING"),
+        Some(Err(error)) => StatusSection::unobservable(error.code.clone()),
+        Some(Ok(client)) => match client.device_list() {
+            Ok(observations) => StatusSection::enumerated(
+                observations.iter().map(status_device_json).collect(),
+                observations
+                    .iter()
+                    .map(|observation| {
+                        format!(
+                            "{}  mode={}  identity={}",
+                            observation.observation_id,
+                            observation.mode,
+                            observation.identity_strength
+                        )
+                    })
+                    .collect(),
+            ),
+            Err(error) => StatusSection::unobservable(error.code),
+        },
+    };
+    // Held beside the section because an unknown job set must not render as
+    // "none are running": null and [] are different answers.
+    let mut active_job_ids: Option<Vec<String>> = None;
+    let jobs = match connection.as_mut() {
+        None => StatusSection::unobservable("RUNTIME_NOT_RUNNING"),
+        Some(Err(error)) => StatusSection::unobservable(error.code.clone()),
+        Some(Ok(client)) => match client.job_list() {
+            Ok(summaries) => {
+                active_job_ids = Some(
+                    summaries
+                        .iter()
+                        .filter(|job| !job.terminal)
+                        .map(|job| job.job_id.clone())
+                        .collect(),
+                );
+                StatusSection::enumerated(
+                    summaries.iter().map(status_job_json).collect(),
+                    summaries
+                        .iter()
+                        .map(|job| {
+                            format!("{}  state={}  plan={}", job.job_id, job.state, job.plan_id)
+                        })
+                        .collect(),
+                )
+            }
+            Err(error) => StatusSection::unobservable(error.code),
+        },
+    };
+    // The content store is host-local, so it stays readable while no runtime is
+    // paired. An absent store is a complete enumeration of zero, not unknown.
+    let artifacts = match list_artifacts(&globals) {
+        Ok(objects) => StatusSection::enumerated(
+            objects
+                .iter()
+                .map(|(digest, size)| {
+                    format!(
+                        "{{\"artifact_id\":{},\"sha256\":{},\"size_bytes\":{size}}}",
+                        json(&digest.to_hex()),
+                        json(&digest.to_hex())
+                    )
+                })
+                .collect(),
+            objects
+                .iter()
+                .map(|(digest, size)| format!("{}  size_bytes={size}", digest.to_hex()))
+                .collect(),
+        ),
+        Err(error) => StatusSection::unobservable(error.code),
+    };
+
+    let mut blockers: Vec<String> = Vec::new();
+    if !platform_supported {
+        blockers.push("PLATFORM_UNSUPPORTED".into());
+    }
+    match &runtime {
+        None => blockers.push("RUNTIME_NOT_RUNNING".into()),
+        Some(status) => blockers.extend(status.blockers.iter().cloned()),
+    }
+    for section in [&devices, &artifacts, &jobs] {
+        if let Some(reason) = section.reason.as_deref()
+            && !blockers.iter().any(|blocker| blocker == reason)
+        {
+            blockers.push(reason.to_string());
+        }
+    }
+    let complete = devices.complete() && artifacts.complete() && jobs.complete();
+
     let execute_ready = platform_supported
-        && mechanics_ready
-        && authority_ready
-        && hdc_bound
-        && blockers.is_empty();
+        && runtime.as_ref().is_some_and(|status| {
+            status.mechanics_ready
+                && status.authority_support_available
+                && status.hdc_bound
+                && status.blockers.is_empty()
+        });
     let next = runtime.as_ref().map_or_else(
         || vec!["arkforge daemon start".to_string()],
         daemon_next_commands,
@@ -822,37 +963,197 @@ fn run_doctor(globals: Globals) -> Result<i32, CliError> {
     match globals.output {
         Output::Human => {
             if !globals.quiet {
-                println!("ArkForge host assessment");
+                println!("ArkForge status");
             }
+            println!("host");
             println!("  platform supported: {platform_supported}");
             println!("  inspect ready:      {inspect_ready}");
-            println!("  runtime running:    {runtime_running}");
-            println!("  mechanics ready:    {mechanics_ready}");
-            println!("  authority ready:    {authority_ready}");
-            println!("  HDC bound:          {hdc_bound}");
-            println!("  execute ready:      {execute_ready}");
             if globals.verbose {
-                println!("  structured output disables color: {}", globals.no_color);
-                for blocker in &blockers {
-                    println!("  blocker: {blocker}");
+                println!("  runtime dir set:    {}", globals.runtime_dir.is_some());
+                println!("  color disabled:     {}", globals.no_color);
+            }
+            match &runtime {
+                None => {
+                    println!("runtime");
+                    println!("  running:            false");
                 }
+                Some(status) => {
+                    println!("runtime");
+                    println!("  running:            true");
+                    println!("  pairing epoch:      {}", status.epoch);
+                    println!("  mechanics ready:    {}", status.mechanics_ready);
+                    println!(
+                        "  authority support:  {}",
+                        status.authority_support_available
+                    );
+                    println!("  HDC bound:          {}", status.hdc_bound);
+                    if !status.hardware_campaign.is_empty() {
+                        println!("  hardware campaign:  {}", status.hardware_campaign);
+                    }
+                    println!("  execute ready:      {execute_ready}");
+                    println!("  active jobs:        {}", status.active_jobs);
+                }
+            }
+            devices.print_human("devices", "No device observations are available.");
+            artifacts.print_human("artifacts", "No artifacts are stored in this runtime.");
+            jobs.print_human("jobs", "No durable jobs are recorded in this runtime.");
+            if !blockers.is_empty() {
+                println!("blockers");
+                for blocker in &blockers {
+                    println!("  {blocker}  ({})", blocker_remediation(blocker));
+                }
+            }
+            if !complete {
+                println!("This snapshot is partial; at least one section could not be observed.");
             }
             println!("Next: {}", next[0]);
         }
-        Output::Json => println!(
-            "{{\"schema\":\"arkforge.doctor/v1\",\"ok\":true,\"platform_supported\":{},\"inspect_ready\":{},\"runtime_running\":{},\"mechanics_ready\":{},\"authority_support_available\":{},\"hdc_bound\":{},\"execute_ready\":{},\"blockers\":{},\"next_commands\":{}}}",
-            platform_supported,
-            inspect_ready,
-            runtime_running,
-            mechanics_ready,
-            authority_ready,
-            hdc_bound,
-            execute_ready,
-            json_strings(&blockers),
-            json_strings(&next),
-        ),
+        Output::Json => {
+            let runtime_json = match &runtime {
+                None => "{\"running\":false}".to_string(),
+                Some(status) => format!(
+                    "{{\"running\":true,\"pairing_epoch\":{},\"protocol\":{{\"major\":{},\"minor\":{}}},\"daemon_version\":{},\"mechanics_ready\":{},\"authority_support_available\":{},\"hdc_bound\":{},\"hardware_campaign\":{},\"execute_ready\":{},\"active_job_count\":{},\"active_jobs\":{}}}",
+                    status.epoch,
+                    status.protocol_major,
+                    status.protocol_minor,
+                    json(&status.daemon_version),
+                    status.mechanics_ready,
+                    status.authority_support_available,
+                    status.hdc_bound,
+                    optional_json(
+                        (!status.hardware_campaign.is_empty())
+                            .then_some(status.hardware_campaign.as_str())
+                    ),
+                    execute_ready,
+                    status.active_jobs,
+                    active_job_ids
+                        .as_ref()
+                        .map_or_else(|| "null".to_string(), |ids| json_strings(ids)),
+                ),
+            };
+            let blocker_values = blockers
+                .iter()
+                .map(|code| {
+                    format!(
+                        "{{\"code\":{},\"remediation\":{}}}",
+                        json(code),
+                        json(blocker_remediation(code))
+                    )
+                })
+                .collect::<Vec<_>>()
+                .join(",");
+            println!(
+                "{{\"schema\":{},\"captured_at_epoch_ms\":{captured_at_epoch_ms},\"complete\":{complete},\"host\":{{\"platform_supported\":{platform_supported},\"inspect_ready\":{inspect_ready}}},\"runtime\":{runtime_json},\"devices\":{},\"artifacts\":{},\"jobs\":{},\"blockers\":[{blocker_values}],\"next_commands\":{}}}",
+                json(STATUS_SCHEMA),
+                devices.json(),
+                artifacts.json(),
+                jobs.json(),
+                json_strings(&next),
+            );
+        }
     }
     Ok(0)
+}
+
+/// One `status` section. `available`/`complete` exist so "not observable" never
+/// renders as the empty list that "observed nothing" earns.
+struct StatusSection {
+    available: bool,
+    reason: Option<String>,
+    items: Option<Vec<String>>,
+    lines: Vec<String>,
+}
+
+impl StatusSection {
+    fn enumerated(items: Vec<String>, lines: Vec<String>) -> Self {
+        Self {
+            available: true,
+            reason: None,
+            items: Some(items),
+            lines,
+        }
+    }
+
+    fn unobservable(reason: impl Into<String>) -> Self {
+        Self {
+            available: false,
+            reason: Some(reason.into()),
+            items: None,
+            lines: Vec::new(),
+        }
+    }
+
+    fn complete(&self) -> bool {
+        self.items.is_some()
+    }
+
+    fn json(&self) -> String {
+        format!(
+            "{{\"available\":{},\"complete\":{},\"reason\":{},\"items\":{}}}",
+            self.available,
+            self.complete(),
+            optional_json(self.reason.as_deref()),
+            self.items.as_ref().map_or_else(
+                || "null".to_string(),
+                |items| format!("[{}]", items.join(","))
+            ),
+        )
+    }
+
+    fn print_human(&self, title: &str, empty: &str) {
+        println!("{title}");
+        match (&self.items, &self.reason) {
+            (None, reason) => println!(
+                "  not observable ({})",
+                reason.as_deref().unwrap_or("UNKNOWN")
+            ),
+            (Some(items), _) if items.is_empty() => println!("  {empty}"),
+            (Some(_), _) => {
+                for line in &self.lines {
+                    println!("  {line}");
+                }
+            }
+        }
+    }
+}
+
+/// The bounded device summary `status` denormalizes. Raw descriptor serials
+/// never leave the mechanics daemon, so only the domain-separated digest is
+/// reported here.
+fn status_device_json(observation: &DeviceObservationView) -> String {
+    format!(
+        "{{\"observation_id\":{},\"observed_at_epoch_ms\":{},\"mode\":{},\"serial_sha256\":{},\"identity_strength\":{}}}",
+        json(&observation.observation_id),
+        observation.observed_at_epoch_ms,
+        json(&observation.mode),
+        optional_json(
+            (!observation.serial_sha256.is_empty()).then_some(observation.serial_sha256.as_str())
+        ),
+        json(&observation.identity_strength),
+    )
+}
+
+fn status_job_json(job: &JobSummary) -> String {
+    format!(
+        "{{\"job_id\":{},\"plan_id\":{},\"state\":{},\"terminal\":{}}}",
+        json(&job.job_id),
+        json(&job.plan_id),
+        json(&job.state),
+        job.terminal,
+    )
+}
+
+fn blocker_remediation(code: &str) -> &'static str {
+    match code {
+        "RUNTIME_NOT_RUNNING" => "arkforge daemon start",
+        "PLATFORM_UNSUPPORTED" => "arkforge help --all --format json",
+        "AUTHORITY_HDC_UNBOUND" | "AUTHORITY_SUPPORT_UNPUBLISHED" => {
+            "arkforge help daemon start --format json"
+        }
+        "NO_PAIRED_AUTHORITY" | "NO_DISPATCHER" => "arkforge daemon stop",
+        "TOOLCHAIN_DIGEST_MISMATCH" => "arkforge help flash plan --format json",
+        _ => remediation(code).unwrap_or("arkforge help --all --format json"),
+    }
 }
 
 fn run_completion(arguments: &[String], output: Output) -> Result<i32, CliError> {
@@ -2201,7 +2502,7 @@ fn print_flash_assessment(
             "arkforge flash plan --artifact {artifact} --profile {profile} --device {device} --intent {intent}"
         )]
     } else {
-        vec!["arkforge daemon status".to_string()]
+        vec!["arkforge status".to_string()]
     };
     let mut blockers = Vec::new();
     let mut blocker_codes = Vec::new();
@@ -3167,7 +3468,7 @@ fn print_error(output: Output, command: &[String], arguments: &[String], error: 
             }
         }
         Output::Json => println!(
-            "{{\"schema\":\"arkforge.command-result/v1\",\"ok\":false,\"command\":{},\"error\":{{\"code\":{},\"message\":{},\"remediation\":{},\"retryable\":{},\"required_acknowledgements\":{},\"next_commands\":{}}}}}",
+            "{{\"schema\":\"arkforge.command-result/v1\",\"ok\":false,\"command\":{},\"error\":{{\"code\":{},\"message\":{},\"remediation\":{},\"retryable\":{},\"required_acknowledgements\":{},\"next_commands\":{},\"facts\":{}}}}}",
             json_strings(command),
             json(&error.code),
             json(&structured_message),
@@ -3175,6 +3476,7 @@ fn print_error(output: Output, command: &[String], arguments: &[String], error: 
             error.retryable,
             json_strings(&error.required_acknowledgements),
             json_strings(&next_commands),
+            error.facts.as_deref().unwrap_or("null"),
         ),
     }
 }
@@ -3318,7 +3620,7 @@ fn remediation(code: &str) -> Option<&'static str> {
         | "AUTHORITY_SUPPORT_SEAL_MISMATCH"
         | "MECHANICS_MATURITY_KEY_INVALID"
         | "HDC_BINDING_REFUSED"
-        | "HDC_DIGEST_MISMATCH" => Some("arkforge daemon status"),
+        | "HDC_DIGEST_MISMATCH" => Some("arkforge status"),
         "MECHANICS_RUNTIME_CHANGED" => Some("arkforge help flash plan --format json"),
         "PLAN_DIGEST_MISMATCH" | "UNEXPECTED_ACKNOWLEDGEMENT" => {
             Some("arkforge help flash apply --format json")
@@ -3427,66 +3729,124 @@ fn print_help(spec: &HelpSpec, output: Output) {
                 println!("  {code:<3} {meaning}");
             }
         }
+        Output::Json => println!("{}", help_leaf_json(spec)),
+    }
+}
+
+/// One `arkforge.command-help/v1` leaf. `help --all` embeds exactly this
+/// rendering, so a per-path query and the index can never disagree.
+fn help_leaf_json(spec: &HelpSpec) -> String {
+    let options = spec
+        .typed_options()
+        .into_iter()
+        .map(|option| {
+            format!(
+                "{{\"name\":{},\"type\":{},\"required\":{},\"repeatable\":{},\"enum_values\":{},\"sensitive\":{},\"effect_relevant\":{},\"requires\":{},\"conflicts\":{},\"description\":{}}}",
+                json(&format!("--{}", option.name)),
+                json(&option.value_type),
+                option.required,
+                option.repeatable,
+                json_strings(&option.enum_values),
+                option.sensitive,
+                option.effect_relevant,
+                json_strings(&option.requires),
+                json_strings(&option.conflicts),
+                json(option.description)
+            )
+        })
+        .collect::<Vec<_>>()
+        .join(",");
+    let exits = spec
+        .exits
+        .iter()
+        .map(|(code, meaning)| format!("{{\"code\":{code},\"meaning\":{}}}", json(meaning)))
+        .collect::<Vec<_>>()
+        .join(",");
+    let subcommands = child_specs(spec.command)
+        .iter()
+        .map(|child| {
+            format!(
+                "{{\"command\":{},\"summary\":{}}}",
+                json(child.command),
+                json(child.summary)
+            )
+        })
+        .collect::<Vec<_>>()
+        .join(",");
+    let constraints = help_constraints(spec).join(",");
+    let facts_projections = spec
+        .facts_projections()
+        .iter()
+        .map(|(name, schema, max_items)| {
+            format!(
+                "{{\"name\":{},\"schema\":{},\"max_items\":{max_items}}}",
+                json(name),
+                json(schema)
+            )
+        })
+        .collect::<Vec<_>>()
+        .join(",");
+    format!(
+        "{{\"schema\":{},\"path\":{},\"command\":{},\"summary\":{},\"usage\":{},\"effect\":{},\"effect_detail\":{},\"runtime_effect\":{},\"interactive\":false,\"availability\":{{\"platforms\":{},\"requires_daemon\":{},\"requires_controller\":{}}},\"subcommands\":[{}],\"requires\":{},\"outputs\":{},\"output_descriptions\":{},\"options\":[{}],\"constraints\":[{}],\"facts_projections\":[{}],\"examples\":{},\"next_commands\":{},\"exit_codes\":[{}]}}",
+        json(HELP_SCHEMA),
+        json_array(&spec.path()),
+        json(spec.command),
+        json(spec.summary),
+        json(spec.usage),
+        json(spec.effect_class()),
+        json(spec.effect),
+        json(spec.runtime_effect()),
+        supported_platforms_json(),
+        spec.requires_daemon(),
+        spec.requires_controller(),
+        subcommands,
+        json_array(spec.requires),
+        json_strings(&spec.output_schemas()),
+        json_array(spec.produces),
+        options,
+        constraints,
+        facts_projections,
+        json_array(spec.examples),
+        json_array(spec.next),
+        exits
+    )
+}
+
+/// The whole command tree in one document, ordered by path so two builds of the
+/// same tree render byte-identically.
+fn help_index_specs() -> Vec<&'static HelpSpec> {
+    let mut specs = HELP.iter().collect::<Vec<_>>();
+    specs.sort_by(|left, right| left.path().cmp(&right.path()));
+    specs
+}
+
+fn print_help_index(output: Output) {
+    let specs = help_index_specs();
+    match output {
+        Output::Human => {
+            println!("ArkForge command tree ({} commands)", specs.len());
+            for spec in &specs {
+                let path = if spec.command.is_empty() {
+                    "arkforge".to_string()
+                } else {
+                    format!("arkforge {}", spec.command)
+                };
+                println!("  {path:<28} {}", spec.summary);
+            }
+            println!();
+            println!("Next: arkforge help <command> --format json");
+        }
         Output::Json => {
-            let options = spec
-                .typed_options()
-                .into_iter()
-                .map(|option| {
-                    format!(
-                        "{{\"name\":{},\"type\":{},\"required\":{},\"repeatable\":{},\"enum_values\":{},\"sensitive\":{},\"effect_relevant\":{},\"requires\":{},\"conflicts\":{},\"description\":{}}}",
-                        json(&format!("--{}", option.name)),
-                        json(&option.value_type),
-                        option.required,
-                        option.repeatable,
-                        json_strings(&option.enum_values),
-                        option.sensitive,
-                        option.effect_relevant,
-                        json_strings(&option.requires),
-                        json_strings(&option.conflicts),
-                        json(option.description)
-                    )
-                })
-                .collect::<Vec<_>>()
-                .join(",");
-            let exits = spec
-                .exits
+            let commands = specs
                 .iter()
-                .map(|(code, meaning)| format!("{{\"code\":{code},\"meaning\":{}}}", json(meaning)))
+                .map(|spec| help_leaf_json(spec))
                 .collect::<Vec<_>>()
                 .join(",");
-            let subcommands = children
-                .iter()
-                .map(|child| {
-                    format!(
-                        "{{\"command\":{},\"summary\":{}}}",
-                        json(child.command),
-                        json(child.summary)
-                    )
-                })
-                .collect::<Vec<_>>()
-                .join(",");
-            let constraints = help_constraints(spec).join(",");
             println!(
-                "{{\"schema\":{},\"path\":{},\"command\":{},\"summary\":{},\"usage\":{},\"effect\":{},\"effect_detail\":{},\"interactive\":false,\"availability\":{{\"platforms\":{},\"requires_daemon\":{},\"requires_controller\":{}}},\"subcommands\":[{}],\"requires\":{},\"outputs\":{},\"output_descriptions\":{},\"options\":[{}],\"constraints\":[{}],\"examples\":{},\"next_commands\":{},\"exit_codes\":[{}]}}",
-                json(HELP_SCHEMA),
-                json_array(&spec.path()),
-                json(spec.command),
-                json(spec.summary),
-                json(spec.usage),
-                json(spec.effect_class()),
-                json(spec.effect),
-                supported_platforms_json(),
-                spec.requires_daemon(),
-                spec.requires_controller(),
-                subcommands,
-                json_array(spec.requires),
-                json_strings(&spec.output_schemas()),
-                json_array(spec.produces),
-                options,
-                constraints,
-                json_array(spec.examples),
-                json_array(spec.next),
-                exits
+                "{{\"schema\":{},\"command_count\":{},\"commands\":[{}]}}",
+                json(HELP_INDEX_SCHEMA),
+                specs.len(),
+                commands
             );
         }
     }
@@ -3578,10 +3938,12 @@ static HELP: &[HelpSpec] = &[
     HelpSpec {
         command: "",
         summary: "ArkForge plans, executes, verifies, and recovers device firmware operations.",
-        usage: "arkforge [global options] <command> [<subcommand>] [options]",
-        effect: "The root command only describes capabilities. It does not access or mutate a device.",
+        usage: "arkforge [global options] [<command> [<subcommand>]] [options]",
+        effect: "With no command the root reports the aggregate host and runtime status. It never starts a runtime and never accesses a device for mutation.",
         requires: &[],
-        produces: &["Human help or arkforge.command-help/v1 JSON."],
+        produces: &[
+            "arkforge.status/v1 for a bare invocation, or human help and arkforge.command-help-index/v1 for help.",
+        ],
         options: &[
             ("--runtime-dir <dir>", "Per-user ArkForge state directory."),
             (
@@ -3601,31 +3963,34 @@ static HELP: &[HelpSpec] = &[
             ("-V, --version", "Print this build's ArkForge version."),
         ],
         examples: &[
-            "arkforge help --format json",
-            "arkforge help flash assess --format json",
+            "arkforge help --all --format json",
+            "arkforge help flash plan --format json",
         ],
-        next: &["arkforge doctor"],
+        next: &["arkforge status"],
         exits: &[
-            (0, "Help or version produced."),
+            (0, "Status, help, or version produced."),
             (2, "Command or option is invalid."),
         ],
     },
     HelpSpec {
-        command: "doctor",
-        summary: "Check whether this host can inspect or execute.",
-        usage: "arkforge doctor",
-        effect: "Read-only host and runtime assessment. It never starts services, opens a device for mutation, or changes local state.",
+        command: "status",
+        summary: "Report host, runtime, device, artifact, job, and blocker state in one document.",
+        usage: "arkforge status",
+        effect: "Read-only. It aggregates every fact this host can currently observe, never starts a runtime, and never opens a device for mutation.",
         requires: &[],
         produces: &[
-            "arkforge.doctor/v1 with inspect readiness, execution readiness, blockers, and an exact next command.",
+            "arkforge.status/v1 with per-section availability, so a section that could not be observed is never reported as an empty one.",
         ],
         options: &[],
-        examples: &["arkforge --output json doctor"],
+        examples: &["arkforge --output json status"],
         next: &["arkforge daemon start"],
         exits: &[
-            (0, "Assessment produced, including a not-ready result."),
+            (
+                0,
+                "A snapshot was produced, including a partial or not-ready one.",
+            ),
             (2, "A global option is invalid."),
-            (10, "The host itself could not be assessed."),
+            (10, "The host root assessment itself could not be produced."),
         ],
     },
     HelpSpec {
@@ -4487,14 +4852,14 @@ static HELP: &[HelpSpec] = &[
     HelpSpec {
         command: "daemon",
         summary: "Run and manage one paired local ArkForge runtime.",
-        usage: "arkforge daemon <run|start|stop|status> [options]",
+        usage: "arkforge daemon <run|start|stop> [options]",
         effect: "Service lifecycle. The supervisor owns pairing authority; lifecycle commands do not flash a device.",
         requires: &["arkforged installed beside the canonical arkforge executable."],
         produces: &[
             "Typed two-process runtime status with protocol, authority epoch, readiness, active jobs, and blockers.",
         ],
         options: &[],
-        examples: &["arkforge daemon start", "arkforge daemon status"],
+        examples: &["arkforge daemon start", "arkforge status"],
         next: &["arkforge device list"],
         exits: &[
             (0, "Requested lifecycle operation completed."),
@@ -4539,7 +4904,7 @@ static HELP: &[HelpSpec] = &[
             ),
         ],
         examples: &["arkforge --runtime-dir /tmp/arkforge daemon run"],
-        next: &["arkforge daemon status"],
+        next: &["arkforge status"],
         exits: &[
             (0, "Runtime stopped cleanly."),
             (2, "Options are invalid."),
@@ -4586,22 +4951,6 @@ static HELP: &[HelpSpec] = &[
             (5, "The mechanics daemon could not start."),
             (6, "The runtime is already running."),
             (10, "Supervisor startup failed."),
-        ],
-    },
-    HelpSpec {
-        command: "daemon status",
-        summary: "Show protocol, process, authority, readiness, job, and blocker state.",
-        usage: "arkforge daemon status",
-        effect: "Read-only local runtime observation.",
-        requires: &["A live CLI authority supervisor."],
-        produces: &["arkforge.daemon-status/v1."],
-        options: &[],
-        examples: &["arkforge --output json daemon status"],
-        next: &["arkforge device list"],
-        exits: &[
-            (0, "Runtime status produced."),
-            (5, "No runtime is listening."),
-            (10, "Status IPC failed."),
         ],
     },
     HelpSpec {
@@ -4708,16 +5057,24 @@ static HELP: &[HelpSpec] = &[
     HelpSpec {
         command: "help",
         summary: "Describe commands for humans or Agents without runtime access.",
-        usage: "arkforge help [<command> [<subcommand>...]] [--format <human|json>]",
+        usage: "arkforge help [<command> [<subcommand>...]] [--all] [--format <human|json>]",
         effect: "Read-only and offline. Help is generated from the canonical typed command tree.",
         requires: &[],
-        produces: &["Human command guidance or arkforge.command-help/v1."],
-        options: &[(
-            "--format <human|json>",
-            "Help presentation format; default follows --output.",
-        )],
+        produces: &[
+            "One arkforge.command-help/v1 leaf for a topic path, or the whole tree as arkforge.command-help-index/v1 for --all and for structured help without a path.",
+        ],
+        options: &[
+            (
+                "--all",
+                "Describe the whole command tree in one document; takes no topic path.",
+            ),
+            (
+                "--format <human|json>",
+                "Help presentation format; default follows --output.",
+            ),
+        ],
         examples: &[
-            "arkforge help --format json",
+            "arkforge help --all --format json",
             "arkforge help flash apply --format json",
         ],
         next: &["Follow one returned next_commands entry with exact identifiers."],
@@ -4733,7 +5090,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn daemon_status_next_commands_do_not_loop_on_authority_blockers() {
+    fn daemon_next_commands_do_not_loop_on_authority_blockers() {
         let mut status = supervisor::DaemonStatus {
             supervisor_pid: 1,
             daemon_pid: 2,
@@ -4807,7 +5164,7 @@ mod tests {
     #[test]
     fn help_tree_has_every_implemented_leaf_and_agent_fields() {
         for topic in [
-            "doctor",
+            "status",
             "device list",
             "device show",
             "device probe",
@@ -4833,7 +5190,6 @@ mod tests {
             "rescue apply",
             "daemon run",
             "daemon start",
-            "daemon status",
             "daemon stop",
             "signing verify",
             "completion",
@@ -4854,7 +5210,7 @@ mod tests {
         assert_eq!(
             root_children,
             vec![
-                "doctor",
+                "status",
                 "device",
                 "artifact",
                 "flash",
@@ -4999,7 +5355,7 @@ mod tests {
             ]))
             .is_err()
         );
-        assert!(parse_globals(&strings(&["--quiet", "--verbose", "doctor"])).is_err());
+        assert!(parse_globals(&strings(&["--quiet", "--verbose", "status"])).is_err());
     }
 
     #[test]
@@ -5137,7 +5493,9 @@ mod tests {
             let mut topic = Vec::new();
             let mut index = 1;
             while index < command.len() {
-                if command[index] == "--format" {
+                if command[index] == "--all" {
+                    index += 1;
+                } else if command[index] == "--format" {
                     let format = command
                         .get(index + 1)
                         .ok_or_else(|| CliError::invalid("--format requires a value."))?;

@@ -7,7 +7,7 @@
 
 ## TASK-WF-001 — `status` 聚合与 `help --all`
 
-- Status: pending
+- Status: done
 - 顶层 `status`（bare `arkforge` 等价）聚合 host/runtime/devices/artifacts/jobs/
   blockers，对 unknown/empty/partial 作显式区分；`help --all` 输出
   `arkforge.command-help-index/v1`。

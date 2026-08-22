@@ -83,8 +83,8 @@ try {
     }
     & $arkforge --runtime-dir $runtime daemon start --hdc $hdc --expect-hdc-sha256 $manifest.hdc.sha256 --require-release-signing
     if ($LASTEXITCODE -ne 0) { throw "daemon start failed with exit code $LASTEXITCODE" }
-    & $arkforge --runtime-dir $runtime daemon status
-    if ($LASTEXITCODE -ne 0) { throw "daemon status failed with exit code $LASTEXITCODE" }
+    & $arkforge --runtime-dir $runtime status
+    if ($LASTEXITCODE -ne 0) { throw "status failed with exit code $LASTEXITCODE" }
     if (-not $SkipDevice) {
         & $arkforge --runtime-dir $runtime device list
         if ($LASTEXITCODE -ne 0) { throw "WinUSB device discovery failed with exit code $LASTEXITCODE" }

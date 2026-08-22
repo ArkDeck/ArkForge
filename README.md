@@ -44,9 +44,13 @@ ArkForge 目前处于**硬件准入阶段**，还不是面向普通用户的一�
 
 ```bash
 cargo build --workspace
-target/debug/arkforge help --format json
-target/debug/arkforge --runtime-dir /tmp/arkforge doctor
+target/debug/arkforge help --all --format json
+target/debug/arkforge --runtime-dir /tmp/arkforge status
 ```
+
+`status`（等价于不带子命令的 `arkforge`）把主机、runtime、设备、artifact、任务与
+blocker 聚合成一份 `arkforge.status/v1`：无法观测的区段报告 `items: null` 与 typed
+`reason`，只有完成枚举且结果为零才是 `items: []`。它永远不会顺手把 runtime 拉起来。
 
 启动本地 runtime 并查看设备：
 
@@ -96,19 +100,23 @@ target/debug/arkforge completion --shell zsh
 `arkforge` 覆盖完整生命周期：
 
 ```text
-doctor
+status      主机 / runtime / 设备 / artifact / 任务 / blocker 聚合快照
 device      list / show / probe / wait
 artifact    import / inspect / list / show
 flash       assess / plan / apply
 job         list / show / watch / cancel / reconcile / recovery
 rescue      list / inspect / read / plan / apply
-daemon      run / start / stop / status
+daemon      run / start / stop
 signing     verify
 completion
-help
+help        [<命令路径>] / --all
 ```
 
-每一级命令都有稳定的人类帮助和 `arkforge.command-help/v1` JSON 描述。结构化输出不会混入颜色、进度条或提示符，错误会给出稳定 code、修复建议和下一条可执行命令。
+每一级命令都有稳定的人类帮助和 `arkforge.command-help/v1` JSON 描述；`help --all`
+（以及不带路径的结构化 `help`）一次返回整棵树的 `arkforge.command-help-index/v1`，
+其中每个 leaf 与逐路径查询逐字节一致，并各自声明 `runtime_effect` 与
+`facts_projections`。结构化输出不会混入颜色、进度条或提示符，错误会给出稳定 code、
+修复建议和下一条可执行命令。
 
 ### 可审计的安全模型
 
