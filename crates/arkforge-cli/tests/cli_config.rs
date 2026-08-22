@@ -2,7 +2,59 @@
 //! (WF-AC-23..25).
 
 use std::path::{Path, PathBuf};
-use std::process::{Command, Output};
+use std::process::{Command, Output, Stdio};
+use std::sync::mpsc;
+use std::time::{Duration, Instant};
+
+/// How long any single autostart command may take before this test gives up.
+///
+/// Generous next to the work — starting a supervisor and a daemon — and tiny
+/// next to the workflow ceiling, which is the point: a wedged autostart should
+/// fail this test with a reason, not consume the whole Windows job.
+const COMMAND_BUDGET: Duration = Duration::from_secs(90);
+
+/// Runs one CLI command under [`COMMAND_BUDGET`], reporting *which* wait failed.
+///
+/// `Command::output` cannot express this: it waits for exit and for the output
+/// pipes to close, and when it hangs it never says which. The two mean very
+/// different things once a command starts a background service. A process that
+/// never exits is stuck in its own work; a process that exited while its pipes
+/// stay open has left a child holding the inherited write end, which on Windows
+/// outlives it by default. Naming the difference is the whole value here.
+fn output_within(command: &mut Command, label: &str) -> Output {
+    let mut child = command
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("canonical arkforge CLI should start");
+
+    let deadline = Instant::now() + COMMAND_BUDGET;
+    loop {
+        match child.try_wait().expect("observe the command") {
+            Some(_) => break,
+            None if Instant::now() >= deadline => {
+                let _ = child.kill();
+                let _ = child.wait();
+                panic!("{label}: the command never exited within {COMMAND_BUDGET:?}");
+            }
+            None => std::thread::sleep(Duration::from_millis(25)),
+        }
+    }
+
+    // Exited. Collecting the output must not be able to hang either.
+    let (sender, receiver) = mpsc::channel();
+    std::thread::spawn(move || {
+        let _ = sender.send(child.wait_with_output());
+    });
+    match receiver.recv_timeout(COMMAND_BUDGET) {
+        Ok(collected) => collected.expect("collect the command output"),
+        Err(_) => panic!(
+            "{label}: the command exited but its output pipes never closed, \
+             so something it started is still holding them open"
+        ),
+    }
+}
 
 struct TempRuntime {
     root: PathBuf,
@@ -257,14 +309,15 @@ fn auto_start_is_opt_out_and_disclosed() {
         return;
     }
 
-    let started = Command::new(env!("CARGO_BIN_EXE_arkforge"))
-        .arg("--runtime-dir")
-        .arg(&runtime.root)
-        .arg("--output")
-        .arg("json")
-        .args(["device", "list"])
-        .output()
-        .unwrap();
+    let started = output_within(
+        Command::new(env!("CARGO_BIN_EXE_arkforge"))
+            .arg("--runtime-dir")
+            .arg(&runtime.root)
+            .arg("--output")
+            .arg("json")
+            .args(["device", "list"]),
+        "the autostarting device list",
+    );
     let document = stdout(&started);
     assert!(started.status.success(), "{started:?}");
     assert!(
@@ -274,22 +327,24 @@ fn auto_start_is_opt_out_and_disclosed() {
 
     // A second command attaches to the runtime the first one created rather
     // than starting another, and says nothing about starting anything.
-    let attached = Command::new(env!("CARGO_BIN_EXE_arkforge"))
-        .arg("--runtime-dir")
-        .arg(&runtime.root)
-        .arg("--output")
-        .arg("json")
-        .args(["job", "list"])
-        .output()
-        .unwrap();
+    let attached = output_within(
+        Command::new(env!("CARGO_BIN_EXE_arkforge"))
+            .arg("--runtime-dir")
+            .arg(&runtime.root)
+            .arg("--output")
+            .arg("json")
+            .args(["job", "list"]),
+        "the attaching job list",
+    );
     assert!(attached.status.success(), "{attached:?}");
     assert!(!stdout(&attached).contains("\"runtime_autostarted\""));
 
-    let stopped = Command::new(env!("CARGO_BIN_EXE_arkforge"))
-        .arg("--runtime-dir")
-        .arg(&runtime.root)
-        .args(["daemon", "stop"])
-        .output()
-        .unwrap();
+    let stopped = output_within(
+        Command::new(env!("CARGO_BIN_EXE_arkforge"))
+            .arg("--runtime-dir")
+            .arg(&runtime.root)
+            .args(["daemon", "stop"]),
+        "the daemon stop",
+    );
     assert!(stopped.status.success(), "{stopped:?}");
 }
