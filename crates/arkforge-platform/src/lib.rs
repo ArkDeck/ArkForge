@@ -10,6 +10,7 @@
 use std::fmt;
 use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
+use std::time::Duration;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum LocalChannel {
@@ -64,6 +65,18 @@ impl LocalStream {
 
     pub fn try_clone(&self) -> std::io::Result<Self> {
         self.inner.try_clone().map(|inner| Self { inner })
+    }
+
+    /// Bounds how long a single read waits for the peer to say anything.
+    ///
+    /// A peer that accepts the connection and then says nothing is a real
+    /// state on both hosts — a Windows `bind` publishes a connectable pipe
+    /// before the server accepts — and without a bound the read never
+    /// returns. `None` restores the blocking wait, which is what a session
+    /// that legitimately waits (a followed job, a device that takes its time)
+    /// needs once the handshake has proved someone is serving.
+    pub fn set_read_timeout(&mut self, timeout: Option<Duration>) -> std::io::Result<()> {
+        self.inner.set_read_timeout(timeout)
     }
 }
 
@@ -157,6 +170,7 @@ mod platform {
     use std::os::unix::fs::PermissionsExt;
     use std::os::unix::net::{UnixListener, UnixStream};
     use std::path::{Path, PathBuf};
+    use std::time::Duration;
 
     #[derive(Debug, Clone, PartialEq, Eq)]
     pub struct Endpoint(PathBuf);
@@ -172,6 +186,10 @@ mod platform {
     impl Stream {
         pub fn try_clone(&self) -> std::io::Result<Self> {
             self.0.try_clone().map(Self)
+        }
+
+        pub fn set_read_timeout(&mut self, timeout: Option<Duration>) -> std::io::Result<()> {
+            self.0.set_read_timeout(timeout)
         }
     }
 

@@ -6,6 +6,7 @@ use std::io::{self, Read, Write};
 use std::os::windows::ffi::OsStrExt;
 use std::path::{Path, PathBuf};
 use std::ptr;
+use std::time::{Duration, Instant};
 
 type Handle = *mut c_void;
 type Bool = i32;
@@ -45,6 +46,8 @@ const PROTECTED_DACL_SECURITY_INFORMATION: Dword = 0x8000_0000;
 const SDDL_REVISION_1: Dword = 1;
 const BCRYPT_USE_SYSTEM_PREFERRED_RNG: Dword = 0x0000_0002;
 const PIPE_BUFFER_BYTES: Dword = 64 * 1024;
+/// How often a bounded read looks again while the peer stays silent.
+const READ_POLL_INTERVAL: Duration = Duration::from_millis(5);
 const WTD_UI_NONE: Dword = 2;
 const WTD_REVOKE_NONE: Dword = 0;
 const WTD_CHOICE_FILE: Dword = 1;
@@ -119,6 +122,14 @@ unsafe extern "system" {
         collect_data_timeout: *mut Dword,
     ) -> Bool;
     fn WaitNamedPipeW(name: *const u16, timeout: Dword) -> Bool;
+    fn PeekNamedPipe(
+        pipe: Handle,
+        buffer: *mut c_void,
+        buffer_size: Dword,
+        bytes_read: *mut Dword,
+        total_bytes_available: *mut Dword,
+        bytes_left_this_message: *mut Dword,
+    ) -> Bool;
     fn CreateFileW(
         name: *const u16,
         desired_access: Dword,
@@ -218,6 +229,7 @@ impl Endpoint {
 pub struct Stream {
     handle: Handle,
     server_end: bool,
+    read_timeout: Option<Duration>,
 }
 
 unsafe impl Send for Stream {}
@@ -244,12 +256,58 @@ impl Stream {
             handle: duplicate,
             // Only one duplicate should disconnect the server instance.
             server_end: false,
+            read_timeout: self.read_timeout,
         })
+    }
+
+    /// Bounds how long one `read` waits for the peer to say anything.
+    ///
+    /// A byte-mode pipe has no `SO_RCVTIMEO`, and `bind` deliberately publishes
+    /// a connectable instance before the server accepts, so a client can hold a
+    /// perfectly good handle to a pipe nobody is serving yet. Without a bound,
+    /// that read never returns. `None` restores the blocking wait.
+    pub fn set_read_timeout(&mut self, timeout: Option<Duration>) -> io::Result<()> {
+        self.read_timeout = timeout;
+        Ok(())
+    }
+
+    /// Spends the deadline peeking rather than blocking inside `ReadFile`.
+    ///
+    /// A failed peek is not judged here: a broken or disconnected pipe is the
+    /// EOF that `read` already classifies, so the call falls through to it.
+    fn wait_until_readable(&self, timeout: Duration) -> io::Result<()> {
+        let deadline = Instant::now() + timeout;
+        loop {
+            let mut available: Dword = 0;
+            let peeked = unsafe {
+                PeekNamedPipe(
+                    self.handle,
+                    ptr::null_mut(),
+                    0,
+                    ptr::null_mut(),
+                    &mut available,
+                    ptr::null_mut(),
+                )
+            };
+            if peeked == 0 || available > 0 {
+                return Ok(());
+            }
+            if Instant::now() >= deadline {
+                return Err(io::Error::new(
+                    io::ErrorKind::TimedOut,
+                    "the peer accepted the connection but sent nothing before the read deadline",
+                ));
+            }
+            std::thread::sleep(READ_POLL_INTERVAL);
+        }
     }
 }
 
 impl Read for Stream {
     fn read(&mut self, buffer: &mut [u8]) -> io::Result<usize> {
+        if let Some(timeout) = self.read_timeout {
+            self.wait_until_readable(timeout)?;
+        }
         let count = Dword::try_from(buffer.len())
             .map_err(|_| io::Error::new(io::ErrorKind::InvalidInput, "read exceeds Win32 DWORD"))?;
         let mut actual = 0;
@@ -373,6 +431,7 @@ impl Listener {
         Ok(Stream {
             handle,
             server_end: true,
+            read_timeout: None,
         })
     }
 }
@@ -453,6 +512,7 @@ pub fn connect(endpoint: &Endpoint) -> io::Result<Stream> {
             return Ok(Stream {
                 handle,
                 server_end: false,
+                read_timeout: None,
             });
         }
         let error = unsafe { GetLastError() };

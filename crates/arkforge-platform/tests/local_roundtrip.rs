@@ -4,6 +4,7 @@ use arkforge_platform::{
 };
 use std::io::{Read, Write};
 use std::path::PathBuf;
+use std::time::{Duration, Instant};
 
 struct TempRoot(PathBuf);
 
@@ -74,4 +75,38 @@ fn random_and_replace_are_real_host_primitives() {
     assert_eq!(std::fs::read(&target).unwrap(), b"new");
     assert!(!replacement.exists());
     assert!(volume_available_bytes(&root.0).unwrap() > 0);
+}
+
+#[test]
+fn an_unserved_endpoint_read_times_out() {
+    let root = TempRoot::new("wait");
+    let endpoint = LocalEndpoint::for_runtime(&root.0, LocalChannel::Supervisor);
+    // Bound and deliberately never accepted. This is the exact window the
+    // supervisor occupies between `bind` and `serve`, and connecting into it
+    // succeeds on both hosts — the endpoint is published, nobody is answering.
+    let _listener = LocalListener::bind(&endpoint).unwrap();
+    let mut client = LocalStream::connect(&endpoint).unwrap();
+    client
+        .set_read_timeout(Some(Duration::from_millis(250)))
+        .unwrap();
+
+    let started = Instant::now();
+    let mut byte = [0u8; 1];
+    let error = client
+        .read(&mut byte)
+        .expect_err("a read with nobody serving must not succeed");
+    // Unix reports the expired socket timeout as `WouldBlock`; Windows reports
+    // the expired deadline as `TimedOut`. Either is the bound doing its job.
+    assert!(
+        matches!(
+            error.kind(),
+            std::io::ErrorKind::WouldBlock | std::io::ErrorKind::TimedOut
+        ),
+        "{error:?}"
+    );
+    assert!(
+        started.elapsed() < Duration::from_secs(5),
+        "the read should return near its deadline, not linger: {:?}",
+        started.elapsed()
+    );
 }

@@ -12,6 +12,15 @@ use arkforge_ipc::messages::{
 use arkforge_ipc::{Api, PROTOCOL_MAJOR, PROTOCOL_MINOR, SessionKind, Status, wire};
 use arkforge_platform::{LocalChannel, LocalEndpoint, LocalStream};
 use std::path::Path;
+use std::time::Duration;
+
+/// How long the public handshake waits for the daemon's first word.
+///
+/// Connecting proves a pipe exists, not that anyone is serving it: a Windows
+/// `bind` publishes a connectable instance before `serve` accepts. This bounds
+/// only the handshake — a session that has been acknowledged goes back to
+/// waiting as long as the work takes.
+const HANDSHAKE_TIMEOUT: Duration = Duration::from_secs(10);
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ClientError {
@@ -122,6 +131,11 @@ impl PublicClient {
                 true,
             )
         })?;
+        stream
+            .set_read_timeout(Some(HANDSHAKE_TIMEOUT))
+            .map_err(|error| {
+                ClientError::transport(format!("Cannot bound the public handshake: {error}"))
+            })?;
         let hello = Hello {
             protocol_major: PROTOCOL_MAJOR,
             protocol_minor: PROTOCOL_MINOR,
@@ -164,6 +178,12 @@ impl PublicClient {
                 false,
             ));
         }
+        // The handshake proved someone is serving. Everything after it may
+        // legitimately take as long as it takes — a followed job, a device
+        // that is slow to answer — so the wait goes back to unbounded.
+        stream.set_read_timeout(None).map_err(|error| {
+            ClientError::transport(format!("Cannot restore the public session wait: {error}"))
+        })?;
         Ok(Self {
             stream,
             next_request: 1,

@@ -36,6 +36,15 @@ use std::process::{Child, Command, Stdio};
 use std::time::{Duration, Instant};
 
 const READY_TIMEOUT: Duration = Duration::from_secs(10);
+/// How long a supervisor request waits for its answer.
+///
+/// `status` and `stop` are answered at once by a supervisor that is serving.
+/// The bound is for the one that is not: `run` publishes a connectable
+/// endpoint at `bind` and only reaches `serve` after pairing and the daemon
+/// handshake, and on Windows that pipe connects perfectly well in the interim.
+/// Without a bound the caller waits there forever, and `READY_TIMEOUT` cannot
+/// help because it is only consulted between calls, never inside one.
+const REQUEST_TIMEOUT: Duration = Duration::from_secs(10);
 
 #[derive(Debug, Clone, Default)]
 pub struct DaemonOptions {
@@ -583,6 +592,9 @@ fn request(runtime_dir: &Path, verb: &str, arguments: &[&str]) -> Result<Vec<u8>
             true,
         )
     })?;
+    stream
+        .set_read_timeout(Some(REQUEST_TIMEOUT))
+        .map_err(|error| internal("bound the supervisor response wait", error))?;
     let mut payload = Vec::new();
     wire::write_string(&mut payload, 1, verb);
     for argument in arguments {
