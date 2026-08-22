@@ -111,8 +111,9 @@ fn apply_keeps_every_gate_the_flash_leaf_had() {
     ));
     assert!(contract.contains("\"effect\":\"destructive\""));
     // A recovery plan is applied through the same verb.
-    let recovery = help(&["job", "recovery", "plan"]);
-    assert!(recovery.contains("apply command"), "{recovery}");
+    let recovery = help(&["job", "recover"]);
+    assert!(recovery.contains("apply_command"), "{recovery}");
+    assert!(recovery.contains("recovery:supersedes-job"), "{recovery}");
 }
 
 #[test]

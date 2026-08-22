@@ -224,7 +224,7 @@ flash       run [FILE] / plan [--assess-only]
 apply       execute a sealed plan (shared by normal and recovery)
 watch       [--job] follows the running job by default
 cancel      --job --expect-sequence
-job         list / show / reconcile / recovery
+job         list / show / reconcile / recover
 rescue      list / inspect / read / plan / apply
 config      show / set / unset / add / remove
 daemon      run / start / stop
@@ -239,6 +239,21 @@ inspect, and `job show` embeds the event tail, every action receipt, and the no-
 recovery block. Every embedded section in a composite document reports its own
 availability — an unobservable one is `items: null` with a typed reason, never an empty
 set wearing a plausible shape.
+
+When a job's outcome is unresolved, `job recover` materializes a superseding plan
+through the **same inference engine** the normal path uses — "which device, which
+profile, which firmware" are the same questions here:
+
+```bash
+target/debug/arkforge --runtime-dir /tmp/arkforge job recover \
+  --job <job-id> --artifact <artifact-id>
+```
+
+It returns the same `arkforge.flash-plan/v2` document, executed by the top-level
+`apply`, and its `apply_command` carries `recovery:supersedes-job=<job-id>` alongside
+the effect tokens. The original job is **never resumed**: its outcome, journal, and
+permits stay exactly as they are, and what was sealed is a different thing under a
+new epoch.
 
 Every command level has stable human-readable help and an `arkforge.command-help/v1` JSON description. `help --all` — and structured `help` without a path — returns the whole tree as one `arkforge.command-help-index/v1`, whose leaves are byte-identical to the per-path queries and each declare `runtime_effect` and `facts_projections`. Structured output never mixes in colors, progress bars, or prompts. Errors include a stable code, remediation, and executable next commands.
 

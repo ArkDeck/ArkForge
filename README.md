@@ -187,7 +187,7 @@ flash       run [FILE] / plan [--assess-only]
 apply       执行 sealed plan（normal 与 recovery 共用的同意动词）
 watch       [--job] 默认跟随在跑的 job
 cancel      --job --expect-sequence
-job         list / show / reconcile / recovery
+job         list / show / reconcile / recover
 rescue      list / inspect / read / plan / apply
 config      show / set / unset / add / remove
 daemon      run / start / stop
@@ -200,6 +200,18 @@ help        [<命令路径>] / --all
 `artifact show` 吸收了离线 inspect，`job show` 内嵌事件尾、全部 action receipt 与
 no-replay 恢复块。复合文档里每个内嵌区段各自报告 availability——无法观测的区段是
 `items: null` 加 typed reason，不会伪装成空集。
+
+任务结果不确定（`outcomeUnknown`）时，`job recover` 用与正常路径**同一个推断引擎**物化
+一份 superseding plan——「哪台设备、哪个 profile、哪包固件」在这里是同样的问题：
+
+```bash
+target/debug/arkforge --runtime-dir /tmp/arkforge job recover \
+  --job <job-id> --artifact <artifact-id>
+```
+
+它输出的同样是 `arkforge.flash-plan/v2`，由顶层 `apply` 执行；`apply_command` 里除 effect
+token 外还带 `recovery:supersedes-job=<job-id>`。原 job **永不 resume**：它的结局、journal
+与 permit 原样保留，新计划是新 epoch 的另一件事。
 
 每一级命令都有稳定的人类帮助和 `arkforge.command-help/v1` JSON 描述；`help --all`
 （以及不带路径的结构化 `help`）一次返回整棵树的 `arkforge.command-help-index/v1`，

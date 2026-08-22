@@ -213,7 +213,7 @@ fn the_one_step_verb_publishes_the_same_gate_the_two_step_path_has() {
     ));
     // A refusal returns the sealed plan rather than sealing another.
     assert!(help.contains("never materialized twice"), "{help}");
-    assert!(help.contains("durable CLI approval record"), "{help}");
+    assert!(help.contains("arkforge.cli-approval/v1"), "{help}");
 
     // Bare `arkforge flash` is the one-step verb, so it is not a help page.
     let index = Command::new(env!("CARGO_BIN_EXE_arkforge"))

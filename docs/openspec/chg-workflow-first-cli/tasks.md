@@ -1,6 +1,6 @@
 # Tasks — CHG-2026-CLI-WF
 
-> Status: draft。全部任务受 unreleased migration 规矩约束：canonical handler、
+> Status: implemented（七项纵向交付全部落地，见各任务 Status）。全部任务受 unreleased migration 规矩约束：canonical handler、
 > human/JSON help、测试、仓内调用方与该命令的 README/architecture 文档
 > 同车交付，被替换的旧 leaf 同提交删除，无新旧命令名并存期。
 > 依赖链按下列纵向顺序，每级只消费上方已交付的面。
@@ -77,7 +77,7 @@
 
 ## TASK-WF-007 — `job recover` 与文档同步
 
-- Status: pending
+- Status: done
 - `job recover` 复用推断引擎物化 superseding plan（输出 flash-plan/v2，
   经顶层 `apply` 执行）；同提交删除 `job recovery plan`。
 - 同提交更新 recovery 的 README/architecture 章节，并做最终全树一致性扫描：

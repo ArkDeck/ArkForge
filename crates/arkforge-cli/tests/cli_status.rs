@@ -187,7 +187,7 @@ fn help_all_is_the_whole_tree_and_agrees_with_every_per_path_leaf() {
     for path in [
         vec!["apply"],
         vec!["status"],
-        vec!["job", "recovery", "plan"],
+        vec!["job", "recover"],
         vec!["rescue", "read"],
     ] {
         let mut arguments = vec!["help"];
@@ -216,6 +216,7 @@ fn removed_leaves_are_absent_from_the_parser_help_and_completion() {
         vec!["device", "probe"],
         vec!["artifact", "inspect"],
         vec!["job", "recovery", "guide"],
+        vec!["job", "recovery", "plan"],
         vec!["flash", "apply"],
         vec!["job", "watch"],
         vec!["job", "cancel"],
@@ -245,6 +246,8 @@ fn removed_leaves_are_absent_from_the_parser_help_and_completion() {
         "device probe",
         "artifact inspect",
         "job recovery guide",
+        "job recovery plan",
+        "job recovery",
         "flash assess",
         "flash apply",
         "job watch",

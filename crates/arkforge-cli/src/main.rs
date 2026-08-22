@@ -358,7 +358,7 @@ impl HelpSpec {
                 if command.starts_with("device ")
                     || command.starts_with("flash ")
                     || matches!(command, "apply" | "watch" | "cancel")
-                    || (command.starts_with("job ") && command != "job recovery") =>
+                    || command.starts_with("job ") =>
             {
                 "may-start-service"
             }
@@ -371,7 +371,7 @@ impl HelpSpec {
     /// facts yet; each composite surface declares its own as it lands.
     fn facts_projections(&self) -> &'static [(&'static str, &'static str, u64)] {
         match self.command {
-            "flash plan" | "flash run" => &[
+            "flash plan" | "flash run" | "job recover" => &[
                 ("flash_plan", "arkforge.flash-plan/v2", 1),
                 ("device_candidates", "arkforge.resolved-device/v1", 32),
             ],
@@ -408,7 +408,7 @@ impl HelpSpec {
             "apply" | "flash run" | "rescue apply" => "destructive",
             "cancel" => "mutating-control",
             "artifact import" | "rescue read" => "host-write",
-            "flash plan" | "job recovery plan" | "rescue plan" => "read-device-and-host-write",
+            "flash plan" | "job recover" | "rescue plan" => "read-device-and-host-write",
             command if command.starts_with("config ") && command != "config show" => "host-write",
             command if command.starts_with("daemon") => "service-lifecycle",
             _ => "read-only",
@@ -444,7 +444,7 @@ impl HelpSpec {
                 | "apply"
                 | "cancel"
                 | "job reconcile"
-                | "job recovery plan"
+                | "job recover"
                 | "daemon stop"
         )
     }
@@ -2557,7 +2557,11 @@ fn accept_from_arguments(
     if !missing.is_empty() {
         // The plan is already sealed. The way forward is to execute that one,
         // not to seal a second by running this command again with tokens.
-        let command = apply_command(plan, partial.sealed_campaign.as_deref());
+        let command = apply_command(
+            plan,
+            partial.sealed_campaign.as_deref(),
+            &partial.extra_acknowledgements,
+        );
         return Err(partial
             .refuse_with(
                 "ACKNOWLEDGEMENT_REQUIRED",
@@ -2758,6 +2762,8 @@ struct PartialResolution {
     intent: Option<String>,
     candidates: Vec<String>,
     sealed_campaign: Option<String>,
+    /// Tokens the plan's origin requires beyond its own effects.
+    extra_acknowledgements: Vec<String>,
 }
 
 impl PartialResolution {
@@ -2777,6 +2783,7 @@ impl PartialResolution {
             )),
             candidates: Vec::new(),
             sealed_campaign: None,
+            extra_acknowledgements: Vec::new(),
         }
     }
 
@@ -3360,7 +3367,7 @@ fn flash_plan_v2_json(
     let plan_json = match plan {
         None => "null".to_string(),
         Some(plan) => {
-            let acknowledgements = plan_acknowledgements(plan);
+            let acknowledgements = plan_tokens(plan, &partial.extra_acknowledgements);
             format!(
                 "{{\"plan_id\":{},\"plan_sha256\":{},\"provider_execution_plan_sha256\":{},\"public_projection_sha256\":{},\"execution_purpose\":{},\"expires_at_epoch_ms\":{},\"ordered_steps\":{},\"persistent_effects\":{},\"required_acknowledgements\":{},\"execution_context\":{{\"mechanics_maturity\":{},\"authority_support\":{},\"hardware_campaign\":{}}}}}",
                 json(&plan.plan_id),
@@ -3387,8 +3394,14 @@ fn flash_plan_v2_json(
         assessment_json,
         plan_json,
         optional_json(
-            plan.map(|plan| apply_command(plan, partial.sealed_campaign.as_deref()))
-                .as_deref()
+            plan.map(|plan| {
+                apply_command(
+                    plan,
+                    partial.sealed_campaign.as_deref(),
+                    &partial.extra_acknowledgements,
+                )
+            })
+            .as_deref()
         ),
         json_strings(&flash_plan_next_commands(partial, assessment, plan)),
     )
@@ -3420,7 +3433,7 @@ fn assessment_blockers(assessment: &Assessment) -> Vec<String> {
 }
 
 /// The exact command that executes this sealed plan, with nothing to look up.
-fn apply_command(plan: &ExecutablePlan, campaign: Option<&str>) -> String {
+fn apply_command(plan: &ExecutablePlan, campaign: Option<&str>, extra: &[String]) -> String {
     format!(
         "arkforge apply --plan {} --expect-plan-sha256 {}{}{}",
         plan.plan_id,
@@ -3428,7 +3441,7 @@ fn apply_command(plan: &ExecutablePlan, campaign: Option<&str>) -> String {
         campaign
             .map(|campaign| format!(" --hardware-campaign {campaign}"))
             .unwrap_or_default(),
-        plan_acknowledgements(plan)
+        plan_tokens(plan, extra)
             .iter()
             .map(|token| format!(" --ack {token}"))
             .collect::<String>(),
@@ -3441,7 +3454,11 @@ fn flash_plan_next_commands(
     plan: Option<&ExecutablePlan>,
 ) -> Vec<String> {
     if let Some(plan) = plan {
-        return vec![apply_command(plan, partial.sealed_campaign.as_deref())];
+        return vec![apply_command(
+            plan,
+            partial.sealed_campaign.as_deref(),
+            &partial.extra_acknowledgements,
+        )];
     }
     match assessment {
         Some(assessment) if assessment_is_executable(assessment) => {
@@ -3510,7 +3527,7 @@ fn print_flash_plan_v2(
                 println!("  plan SHA-256 {}", plan.plan_sha256);
                 println!("  expires      {}", plan.expires_at_epoch_ms);
                 println!("Required acknowledgements:");
-                for token in plan_acknowledgements(plan) {
+                for token in plan_tokens(plan, &partial.extra_acknowledgements) {
                     println!("  {token}");
                 }
             }
@@ -3518,6 +3535,19 @@ fn print_flash_plan_v2(
         }
         Output::Json => println!("{}", flash_plan_v2_json(partial, assessment, plan)),
     }
+}
+
+/// Every token this plan requires, including the ones its origin adds.
+///
+/// A superseding recovery plan requires naming the job it supersedes, so the
+/// document and the apply command it prints must both carry that token, or the
+/// command handed back would be refused as incomplete.
+fn plan_tokens(plan: &ExecutablePlan, extra: &[String]) -> Vec<String> {
+    let mut tokens = plan_acknowledgements(plan);
+    tokens.extend_from_slice(extra);
+    tokens.sort();
+    tokens.dedup();
+    tokens
 }
 
 fn plan_acknowledgements(plan: &ExecutablePlan) -> Vec<String> {
@@ -3534,99 +3564,6 @@ fn plan_acknowledgements(plan: &ExecutablePlan) -> Vec<String> {
         .collect::<BTreeSet<_>>()
         .into_iter()
         .collect()
-}
-
-fn print_flash_plan(output: Output, plan: &ExecutablePlan, extra_acknowledgements: &[String]) {
-    let mut acknowledgements = plan_acknowledgements(plan);
-    acknowledgements.extend_from_slice(extra_acknowledgements);
-    acknowledgements.sort();
-    acknowledgements.dedup();
-    match output {
-        Output::Human => {
-            println!("Normal flash plan {}", plan.plan_id);
-            println!("  plan SHA-256: {}", plan.plan_sha256);
-            println!("  execution purpose: {}", plan.execution_purpose);
-            println!("  expires: {}", plan.expires_at_epoch_ms);
-            println!(
-                "  mechanics: {} ({})",
-                plan.mechanics_maturity_state, plan.mechanics_maturity_key_sha256
-            );
-            println!(
-                "  authority: {} ({})",
-                plan.authority_support_state, plan.authority_support_key_sha256
-            );
-            println!("  ordered steps: {}", plan.public_steps.len());
-            println!("  persistent effects: {}", plan.persistent_effects.len());
-            println!("Required acknowledgements:");
-            for token in &acknowledgements {
-                println!("  {token}");
-            }
-            let ack = acknowledgements
-                .iter()
-                .map(|token| format!(" --ack {token}"))
-                .collect::<String>();
-            println!(
-                "Next: arkforge apply --plan {} --expect-plan-sha256 {}{}",
-                plan.plan_id, plan.plan_sha256, ack
-            );
-        }
-        Output::Json => {
-            let steps = plan
-                .public_steps
-                .iter()
-                .map(|step| {
-                    format!(
-                        "{{\"step_id\":{},\"kind\":{},\"effect\":{},\"cancellation\":{},\"binding\":{},\"semantic_target\":{},\"content_sha256\":{},\"expected_mode_before\":{},\"expected_mode_after\":{},\"private_action_sha256\":{}}}",
-                        json(&step.step_id),
-                        json(&step.kind),
-                        json(&step.effect),
-                        json(&step.cancellation),
-                        json(&step.binding),
-                        json(&step.semantic_target),
-                        json(&step.content_sha256),
-                        json(&step.expected_mode_before),
-                        json(&step.expected_mode_after),
-                        json(&step.private_action_sha256),
-                    )
-                })
-                .collect::<Vec<_>>()
-                .join(",");
-            let effects = effects_json(&plan.persistent_effects);
-            emit_json!(
-                "{{\"schema\":\"arkforge.flash-plan/v1\",\"plan_id\":{},\"plan_sha256\":{},\"provider_execution_plan_sha256\":{},\"public_projection_sha256\":{},\"execution_purpose\":{},\"expires_at_epoch_ms\":{},\"mechanics_maturity\":{{\"key_sha256\":{},\"state\":{},\"campaign\":{}}},\"authority_support\":{{\"key_sha256\":{},\"state\":{},\"campaign\":{}}},\"ordered_steps\":[{}],\"persistent_effects\":{},\"required_acknowledgements\":{},\"device_mutated\":false,\"next_commands\":[{}]}}",
-                json(&plan.plan_id),
-                json(&plan.plan_sha256),
-                json(&plan.provider_execution_plan_sha256),
-                json(&plan.public_projection_sha256),
-                json(&plan.execution_purpose),
-                plan.expires_at_epoch_ms,
-                json(&plan.mechanics_maturity_key_sha256),
-                json(&plan.mechanics_maturity_state),
-                optional_json(
-                    (!plan.mechanics_maturity_campaign.is_empty())
-                        .then_some(plan.mechanics_maturity_campaign.as_str())
-                ),
-                json(&plan.authority_support_key_sha256),
-                json(&plan.authority_support_state),
-                optional_json(
-                    (!plan.authority_support_campaign.is_empty())
-                        .then_some(plan.authority_support_campaign.as_str())
-                ),
-                steps,
-                effects,
-                json_strings(&acknowledgements),
-                json(&format!(
-                    "arkforge apply --plan {} --expect-plan-sha256 {}{}",
-                    plan.plan_id,
-                    plan.plan_sha256,
-                    acknowledgements
-                        .iter()
-                        .map(|token| format!(" --ack {token}"))
-                        .collect::<String>()
-                )),
-            );
-        }
-    }
 }
 
 fn run_job(arguments: &[String], globals: Globals) -> Result<i32, CliError> {
@@ -3668,7 +3605,7 @@ fn run_job(arguments: &[String], globals: Globals) -> Result<i32, CliError> {
                 0
             })
         }
-        "recovery" => run_job_recovery(&arguments[1..], globals),
+        "recover" => run_job_recover(&arguments[1..], globals),
         other => Err(CliError::invalid(format!(
             "Unknown job command {other:?}. Run 'arkforge help job'."
         ))),
@@ -3748,55 +3685,73 @@ fn watch_job(
     }
 }
 
-fn run_job_recovery(arguments: &[String], globals: Globals) -> Result<i32, CliError> {
-    let Some(subcommand) = arguments.first() else {
-        print_help(
-            help_spec(&["job".into(), "recovery".into()])?,
-            globals.output,
-        );
-        return Ok(0);
-    };
-    match subcommand.as_str() {
-        "plan" => {
-            let options = Options::parse(&arguments[1..])?;
-            let job_id = options.one("job")?;
-            let artifact = options.one("artifact")?;
-            let profile = options.one("profile")?;
-            let device = options.one("device")?;
-            let runtime_dir = command_runtime_dir(&globals)?;
-            match supervisor::materialize_recovery_plan(
-                &runtime_dir,
-                job_id,
-                artifact,
-                profile,
-                device,
-            )? {
-                MaterializePlanResponse::Plan(plan) => {
-                    print_flash_plan(
-                        globals.output,
-                        &plan,
-                        &[format!("recovery:supersedes-job={job_id}")],
-                    );
-                    Ok(0)
-                }
-                MaterializePlanResponse::Assessment(assessment) => Err(CliError::new(
-                    "RECOVERY_PLAN_UNAVAILABLE",
-                    format!(
-                        "No executable superseding plan was created: {}",
-                        if assessment.unavailable_reason.is_empty() {
-                            assessment.availability
-                        } else {
-                            assessment.unavailable_reason
-                        }
-                    ),
-                    3,
-                    false,
-                )),
-            }
+/// Materializes a distinct plan that supersedes an unresolved job.
+///
+/// It reuses the same inference engine the normal path uses, because "which
+/// device, which profile, which firmware" are the same questions here. What it
+/// never does is resume: the original job keeps its outcome, its journal, and
+/// its permits, and the plan produced is a new one with a new epoch that the
+/// top-level apply executes.
+fn run_job_recover(arguments: &[String], globals: Globals) -> Result<i32, CliError> {
+    let options = Options::parse(arguments)?;
+    let job_id = options.one("job")?.to_string();
+    let registry = profile_registry()?;
+    let runtime_dir = command_runtime_dir(&globals)?;
+    ensure_runtime(&globals, options.optional_one("hardware-campaign")?)?;
+
+    let resolved = resolve_plan_inputs(&globals, &registry, &options, true, None)?;
+    let mut partial = PartialResolution::from_resolved(&resolved);
+    // Accepting a superseding plan means naming the job it supersedes, so that
+    // token travels with every command this document hands back.
+    partial.extra_acknowledgements = vec![format!("recovery:supersedes-job={job_id}")];
+
+    let assessment = supervisor::assess_plan(
+        &runtime_dir,
+        &resolved.artifact.artifact_id,
+        &resolved.profile.reference,
+        &resolved.device.observation.observation_id,
+    )
+    .map_err(|error| {
+        partial.refuse(&error.code, error.message, error.exit_code, error.retryable)
+    })?;
+
+    let materialized = supervisor::materialize_recovery_plan(
+        &runtime_dir,
+        &job_id,
+        &resolved.artifact.artifact_id,
+        &resolved.profile.reference,
+        &resolved.device.observation.observation_id,
+    )
+    .map_err(|error| {
+        partial.refuse(&error.code, error.message, error.exit_code, error.retryable)
+    })?;
+    match materialized {
+        MaterializePlanResponse::Plan(plan) => {
+            partial.sealed_campaign = sealed_campaign(&plan);
+            print_flash_plan_v2(
+                globals.output,
+                &resolved,
+                &partial,
+                Some(&assessment),
+                Some(&plan),
+            );
+            Ok(0)
         }
-        other => Err(CliError::invalid(format!(
-            "Unknown recovery command {other:?}. Run 'arkforge help job recovery'."
-        ))),
+        MaterializePlanResponse::Assessment(assessment) => Err(partial.refuse_with(
+            "RECOVERY_PLAN_UNAVAILABLE",
+            format!(
+                "No superseding plan was created for {job_id}: {}",
+                if assessment.unavailable_reason.is_empty() {
+                    assessment.availability.clone()
+                } else {
+                    assessment.unavailable_reason.clone()
+                }
+            ),
+            3,
+            false,
+            Some(&assessment),
+            None,
+        )),
     }
 }
 
@@ -6352,7 +6307,7 @@ static HELP: &[HelpSpec] = &[
             "A running paired CLI authority supervisor, started for this call if none is listening.",
             "Firmware content, named or selected.",
             "Consent: a confirmation screen on a terminal, or exactly the sealed tokens as --ack.",
-            "A durable CLI approval record; if it cannot be written, nothing is dispatched.",
+            "A durable arkforge.cli-approval/v1 record; if it cannot be written, nothing is dispatched.",
         ],
         produces: &[
             "arkforge.job-event/v1 and arkforge.command-result/v1 with a durable job id and terminal classification; --detach returns arkforge.flash-run/v1. A missing acknowledgement returns the sealed plan and the exact apply command under error.facts, so the plan is never materialized twice.",
@@ -6639,8 +6594,8 @@ static HELP: &[HelpSpec] = &[
     HelpSpec {
         command: "job",
         summary: "Observe, reconcile, and recover durable jobs.",
-        usage: "arkforge job <list|show|reconcile|recovery> [options]",
-        effect: "Observation and reconciliation are read-only; recovery creates a distinct superseding plan and never replays the original job. Following and stopping a job are the top-level watch and cancel commands.",
+        usage: "arkforge job <list|show|reconcile|recover> [options]",
+        effect: "Observation and reconciliation are read-only; recover creates a distinct superseding plan and never replays the original job. Following and stopping a job are the top-level watch and cancel commands.",
         requires: &["A running ArkForge runtime."],
         produces: &["Durable point-in-time job status or typed recovery guidance."],
         options: &[],
@@ -6715,64 +6670,69 @@ static HELP: &[HelpSpec] = &[
         ],
     },
     HelpSpec {
-        command: "job recovery",
-        summary: "Seal a distinct complete-overwrite superseding plan.",
-        usage: "arkforge job recovery plan [options]",
-        effect: "Plan may store a new sealed host object. It never edits, resumes, or replays the original job; recovery guidance itself is embedded in job show.",
-        requires: &["One exact durable job id."],
-        produces: &[
-            "A distinct sealed superseding plan, when the recovery contract covers every possible effect.",
-        ],
-        options: &[],
-        examples: &["arkforge help job recovery plan --format json"],
-        next: &["arkforge job show --job <job-id>"],
-        exits: &[
-            (0, "Recovery plan produced."),
-            (2, "Command or option is invalid."),
-            (3, "No executable superseding plan was created."),
-            (5, "The runtime or job was not found."),
-            (10, "Recovery query or IPC failed."),
-        ],
-    },
-    HelpSpec {
-        command: "job recovery plan",
-        summary: "Seal a distinct superseding plan when the recovery contract covers every possible effect.",
-        usage: "arkforge job recovery plan --job <job-id> --artifact <artifact-id> --profile <id@version> --device <observation-id>",
-        effect: "Reads recovery eligibility and exact target facts, then stores a new sealed plan. It does not mutate the device or original job.",
+        command: "job recover",
+        summary: "Seal a distinct plan that supersedes one unresolved job.",
+        usage: "arkforge job recover --job <job-id> (--file <firmware-file> | --artifact <artifact-id>) [--device <observation-id> | --target <selector>] [--profile <id@version>] [--intent <full-restore>] [--hardware-campaign <campaign-id>] [--wait-device <u64>]",
+        effect: "Reads the exact device through the paired runtime and stores a sealed host object. It never resumes, edits, replays, or reclassifies the original job, whose outcome and journal stay exactly as they are.",
         requires: &[
-            "An outcome-unknown original job with bounded effects and a complete-overwrite recovery contract.",
-            "Fresh explicit artifact, profile, and device binding.",
+            "One exact durable job whose recovery contract covers every possible effect.",
+            "Firmware content, and enough evidence to name exactly one device and profile.",
         ],
         produces: &[
-            "arkforge.flash-plan/v1 for a new normal-flash plan requiring recovery:supersedes-job=<job-id> in addition to its effect acknowledgements.",
+            "arkforge.flash-plan/v2 whose plan supersedes the named job under a new epoch and intent, and whose apply_command carries the recovery:supersedes-job token as well as the effect tokens. The assessment section projects the same target's effects and gate state.",
         ],
         options: &[
-            ("--job <job-id>", "Immutable original outcome; required."),
+            ("--job <job-id>", "Exact unresolved durable job; required."),
+            (
+                "--file <firmware-file>",
+                "Firmware container imported into the content store before the plan binds it.",
+            ),
             (
                 "--artifact <artifact-id>",
-                "Exact imported artifact; required.",
+                "Exact already-imported content id; conflicts with --file.",
             ),
-            ("--profile <id@version>", "Exact loaded profile; required."),
             (
                 "--device <observation-id>",
-                "Fresh exact target observation; required.",
+                "Exact current observation; conflicts with --target.",
+            ),
+            (
+                "--target <selector>",
+                "Serial digest, unique identifier prefix of at least four characters, or proven product model; conflicts with --device.",
+            ),
+            (
+                "--profile <id@version>",
+                "Exact loaded profile identity; inferred when the compatible set has exactly one member.",
+            ),
+            (
+                "--intent <full-restore>",
+                "Semantic intent; defaulted when the profile and format admit exactly one.",
+            ),
+            (
+                "--hardware-campaign <campaign-id>",
+                "Named acceptance campaign the running runtime must serve; never inherited.",
+            ),
+            (
+                "--wait-device <u64>",
+                "Bounded wait in milliseconds for a matching device to appear.",
             ),
         ],
         examples: &[
-            "arkforge --output json job recovery plan --job JOB-EXAMPLE --artifact <artifact-id> --profile org.openharmony.dayu200@1.0.0 --device OBS-PREFLIGHT",
+            "arkforge --output json job recover --job <job-id> --artifact <artifact-id> --profile org.openharmony.dayu200@1.0.0 --device OBS-PREFLIGHT",
         ],
-        next: &[
-            "Use the returned apply command only after reviewing the new plan and superseding token.",
-        ],
+        next: &["Use the returned apply_command verbatim after reviewing the superseding effects."],
         exits: &[
-            (0, "Distinct superseding plan sealed."),
-            (2, "Inputs are invalid."),
+            (0, "Superseding plan sealed; the original job is unchanged."),
+            (2, "Inputs are invalid, or no firmware was named."),
             (
                 3,
-                "Recovery eligibility or execution support is unavailable.",
+                "No superseding plan was created, or a support precondition refused.",
             ),
-            (5, "Runtime or named resource was not found."),
-            (10, "Controller, supervisor, or journal failed."),
+            (5, "The runtime, job, or a named resource was not found."),
+            (
+                6,
+                "The device or profile could not be narrowed to exactly one, or the runtime serves another campaign.",
+            ),
+            (10, "Controller, store, or supervisor failed."),
         ],
     },
     HelpSpec {
@@ -7429,7 +7389,7 @@ mod tests {
             "job list",
             "job show",
             "job reconcile",
-            "job recovery plan",
+            "job recover",
             "rescue list",
             "rescue inspect",
             "rescue read",
@@ -7483,15 +7443,9 @@ mod tests {
                 .iter()
                 .map(|spec| spec.command)
                 .collect::<Vec<_>>(),
-            vec!["job list", "job show", "job reconcile", "job recovery"]
+            vec!["job list", "job show", "job reconcile", "job recover"]
         );
-        assert_eq!(
-            child_specs("job recovery")
-                .iter()
-                .map(|spec| spec.command)
-                .collect::<Vec<_>>(),
-            vec!["job recovery plan"]
-        );
+
         assert_eq!(child_specs("signing")[0].command, "signing verify");
         assert_eq!(HELP_SCHEMA, "arkforge.command-help/v1");
     }
