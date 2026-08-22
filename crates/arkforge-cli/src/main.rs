@@ -28,9 +28,22 @@ use arkforged::rescue::{
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs::File;
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicBool, Ordering};
 
 use arkforge_standalone::StandaloneError;
+use arkforge_standalone::config::{RuntimeConfig, pin};
 use arkforge_standalone::supervisor;
+
+/// Emits one structured document through [`emit`].
+///
+/// Same shape as `println!`, so a renderer reads the same; routing every
+/// structured document through one place is what lets the autostart disclosure
+/// be appended without every renderer remembering to.
+macro_rules! emit_json {
+    ($($argument:tt)*) => {
+        emit(format!($($argument)*))
+    };
+}
 
 const HELP_SCHEMA: &str = "arkforge.command-help/v1";
 const HELP_INDEX_SCHEMA: &str = "arkforge.command-help-index/v1";
@@ -62,6 +75,7 @@ struct Globals {
     no_color: bool,
     quiet: bool,
     verbose: bool,
+    no_auto_start: bool,
 }
 
 #[derive(Debug)]
@@ -304,6 +318,16 @@ impl HelpSpec {
     fn runtime_effect(&self) -> &'static str {
         match self.command {
             "daemon run" | "daemon start" => "may-start-service",
+            // Every command that needs a paired runtime will bring one up
+            // rather than refuse, unless --no-auto-start says otherwise.
+            command
+                if command.starts_with("device ")
+                    || command == "flash plan"
+                    || matches!(command, "apply" | "watch" | "cancel")
+                    || (command.starts_with("job ") && command != "job recovery") =>
+            {
+                "may-start-service"
+            }
             _ => "none",
         }
     }
@@ -321,12 +345,37 @@ impl HelpSpec {
         }
     }
 
+    /// Named operands this command accepts beside its options, as
+    /// `(key, value-type)`. An empty value type means the operand is a bare key.
+    ///
+    /// A config assignment carries its own name, so accepting `hdc.path=/x` is
+    /// not the parser guessing what an unnamed token means — the rule that
+    /// nothing positional is inferred still holds, and an undeclared key is
+    /// refused with the whole declared set named.
+    fn operands(&self) -> &'static [(&'static str, &'static str)] {
+        match self.command {
+            "config set" => &[
+                ("hdc.path", "absolute-path"),
+                ("hdc.sha256", "sha256"),
+                ("daemon.require-release-signing", "boolean"),
+            ],
+            "config unset" => &[("hdc", ""), ("daemon.require-release-signing", "")],
+            "config add" => &[
+                ("profile-file.path", "absolute-path"),
+                ("profile-file.sha256", "sha256"),
+            ],
+            "config remove" => &[("profile-file.sha256", "sha256")],
+            _ => &[],
+        }
+    }
+
     fn effect_class(&self) -> &'static str {
         match self.command {
             "apply" | "rescue apply" => "destructive",
             "cancel" => "mutating-control",
             "artifact import" | "rescue read" => "host-write",
             "flash plan" | "job recovery plan" | "rescue plan" => "read-device-and-host-write",
+            command if command.starts_with("config ") && command != "config show" => "host-write",
             command if command.starts_with("daemon") => "service-lifecycle",
             _ => "read-only",
         }
@@ -374,10 +423,22 @@ impl HelpSpec {
 }
 
 fn validate_against_command_tree(arguments: &[String]) -> Result<(), CliError> {
-    let path_len = arguments
-        .iter()
-        .position(|argument| argument.starts_with('-'))
-        .unwrap_or(arguments.len());
+    // The command path is the longest prefix the typed tree still recognizes.
+    // Stopping at the first option would swallow a `key=value` operand into the
+    // path; stopping at the first unrecognized word keeps both readable.
+    let mut path_len = 0;
+    while path_len < arguments.len() && !arguments[path_len].starts_with('-') {
+        let candidate = arguments[..path_len + 1].join(" ");
+        let prefix = format!("{candidate} ");
+        if HELP
+            .iter()
+            .any(|spec| spec.command == candidate || spec.command.starts_with(&prefix))
+        {
+            path_len += 1;
+        } else {
+            break;
+        }
+    }
     let path = &arguments[..path_len];
     let spec = help_spec(path)?;
     let metadata = spec.typed_options();
@@ -386,14 +447,34 @@ fn validate_against_command_tree(arguments: &[String]) -> Result<(), CliError> {
         .map(|option| (option.name.as_str(), option))
         .collect::<BTreeMap<_, _>>();
     let mut supplied: BTreeMap<&str, Vec<&str>> = BTreeMap::new();
+    let operands = spec.operands();
     let mut index = path_len;
     while index < arguments.len() {
         let token = &arguments[index];
-        let name = token.strip_prefix("--").ok_or_else(|| {
-            CliError::invalid(format!(
+        if !token.starts_with("--") {
+            if !operands.is_empty() {
+                validate_operand(operands, token)?;
+                index += 1;
+                continue;
+            }
+            let children = child_specs(spec.command);
+            if !children.is_empty() {
+                return Err(CliError::invalid(format!(
+                    "Unknown subcommand {token:?}; it accepts {}.",
+                    children
+                        .iter()
+                        .map(|child| child.command.rsplit(' ').next().unwrap_or(child.command))
+                        .collect::<Vec<_>>()
+                        .join(", ")
+                )));
+            }
+            return Err(CliError::invalid(format!(
                 "Unexpected positional argument {token:?}; command inputs are named options."
-            ))
-        })?;
+            )));
+        }
+        let name = token
+            .strip_prefix("--")
+            .expect("the token was checked to start with the option prefix");
         let option = known
             .get(name)
             .ok_or_else(|| CliError::invalid(format!("Unknown option --{name}.")))?;
@@ -484,6 +565,19 @@ fn validate_against_command_tree(arguments: &[String]) -> Result<(), CliError> {
             }
         }
     }
+    if spec.command == "flash plan"
+        && !supplied.contains_key("file")
+        && !supplied.contains_key("artifact")
+    {
+        // Caught here, before any runtime or store is touched: naming no
+        // firmware at all is a shape error, not a discovery about the host.
+        return Err(CliError::new(
+            "CONTENT_REQUIRED",
+            "Supply the firmware exactly once as --file <path> or --artifact <artifact-id>.",
+            2,
+            false,
+        ));
+    }
     if spec.command == "rescue plan" {
         let operation = supplied
             .get("operation")
@@ -517,6 +611,72 @@ fn validate_against_command_tree(arguments: &[String]) -> Result<(), CliError> {
         ));
     }
     Ok(())
+}
+
+/// Checks one `key=value` (or bare `key`) operand against the declared set.
+fn validate_operand(
+    operands: &[(&'static str, &'static str)],
+    token: &str,
+) -> Result<(), CliError> {
+    let (key, value) = match token.split_once('=') {
+        Some((key, value)) => (key, Some(value)),
+        None => (token, None),
+    };
+    // A campaign is refused by name rather than by absence, so an operator who
+    // tries to make one durable learns why instead of learning "unknown key".
+    if key == "campaign" || key.starts_with("campaign.") {
+        return Err(CliError::new(
+            "CAMPAIGN_NOT_PERSISTABLE",
+            "A hardware campaign is named for one call with --hardware-campaign and is never stored; a campaign left switched on would stop meaning that the run was reviewed.",
+            2,
+            false,
+        ));
+    }
+    let Some((_, value_type)) = operands.iter().find(|(name, _)| *name == key) else {
+        return Err(CliError::invalid(format!(
+            "Unknown setting {key:?}; this command accepts {}.",
+            operands
+                .iter()
+                .map(|(name, _)| *name)
+                .collect::<Vec<_>>()
+                .join(", ")
+        )));
+    };
+    match (*value_type, value) {
+        ("", Some(_)) => Err(CliError::invalid(format!(
+            "{key} names a setting to clear and takes no value."
+        ))),
+        ("", None) => Ok(()),
+        (_, None) => Err(CliError::invalid(format!(
+            "{key} requires a {value_type} value, written {key}=<{value_type}>."
+        ))),
+        ("sha256", Some(value)) => {
+            let digest = Sha256Digest::parse_hex(value).map_err(|error| {
+                CliError::invalid(format!("{key} requires one SHA-256: {error}"))
+            })?;
+            if digest.to_hex() != value {
+                return Err(CliError::invalid(format!(
+                    "{key} requires canonical 64-character lowercase SHA-256 hex."
+                )));
+            }
+            Ok(())
+        }
+        ("absolute-path", Some(value)) => {
+            if !Path::new(value).is_absolute() {
+                return Err(CliError::invalid(format!(
+                    "{key} requires an absolute path; the working directory is not part of a binding."
+                )));
+            }
+            Ok(())
+        }
+        ("boolean", Some(value)) => match value {
+            "true" | "false" => Ok(()),
+            _ => Err(CliError::invalid(format!(
+                "{key} accepts exactly 'true' or 'false', not {value:?}."
+            ))),
+        },
+        (_, Some(_)) => Ok(()),
+    }
 }
 
 fn validate_opaque_id(option: &str, value: &str) -> Result<(), CliError> {
@@ -580,7 +740,7 @@ fn run(arguments: &[String]) -> Result<i32, CliError> {
     if command == ["--version"] || command == ["-V"] {
         match globals.output {
             Output::Human => println!("arkforge {}", env!("CARGO_PKG_VERSION")),
-            Output::Json => println!(
+            Output::Json => emit_json!(
                 "{{\"schema\":\"arkforge.version/v1\",\"name\":\"arkforge\",\"version\":{}}}",
                 json(env!("CARGO_PKG_VERSION"))
             ),
@@ -623,6 +783,7 @@ fn run(arguments: &[String]) -> Result<i32, CliError> {
         "job" => run_job(&command[1..], globals),
         "rescue" => run_rescue(&command[1..], globals),
         "daemon" => run_daemon(&command[1..], globals),
+        "config" => run_config(&command[1..], globals),
         "signing" => run_signing(&command[1..], globals.output),
         "completion" => run_completion(&command[1..], globals.output),
         other => Err(CliError::invalid(format!(
@@ -639,7 +800,7 @@ fn run_daemon(arguments: &[String], globals: Globals) -> Result<i32, CliError> {
     let runtime_dir = command_runtime_dir(&globals)?;
     match subcommand.as_str() {
         "run" => {
-            let options = supervisor::DaemonOptions::parse(&arguments[1..])?;
+            let options = daemon_options(&runtime_dir, &arguments[1..])?;
             supervisor::run(
                 runtime_dir,
                 options,
@@ -648,7 +809,7 @@ fn run_daemon(arguments: &[String], globals: Globals) -> Result<i32, CliError> {
             Ok(0)
         }
         "start" => {
-            let options = supervisor::DaemonOptions::parse(&arguments[1..])?;
+            let options = daemon_options(&runtime_dir, &arguments[1..])?;
             let status = supervisor::start(runtime_dir, options)?;
             print_daemon_status(&status, globals.output);
             Ok(0)
@@ -661,7 +822,7 @@ fn run_daemon(arguments: &[String], globals: Globals) -> Result<i32, CliError> {
                     println!("ArkForge runtime stopped (epoch {}).", status.epoch);
                     println!("Next: arkforge daemon start");
                 }
-                Output::Json => println!(
+                Output::Json => emit_json!(
                     "{{\"schema\":\"arkforge.daemon-stop/v1\",\"stopped\":true,\"pairing_epoch\":{},\"next_commands\":[\"arkforge daemon start\"]}}",
                     status.epoch
                 ),
@@ -672,6 +833,18 @@ fn run_daemon(arguments: &[String], globals: Globals) -> Result<i32, CliError> {
             "Unknown daemon command {other:?}. Run 'arkforge help daemon'."
         ))),
     }
+}
+
+/// The lifecycle options for this run: stored configuration, with explicit
+/// arguments overriding it wherever they give a complete binding.
+fn daemon_options(
+    runtime_dir: &Path,
+    arguments: &[String],
+) -> Result<supervisor::DaemonOptions, CliError> {
+    let config = RuntimeConfig::load(runtime_dir)?;
+    config.verify_pins()?;
+    Ok(supervisor::DaemonOptions::from_config(&config, None)
+        .overridden_by(supervisor::DaemonOptions::parse(arguments)?))
 }
 
 fn print_daemon_status(status: &supervisor::DaemonStatus, output: Output) {
@@ -705,7 +878,7 @@ fn print_daemon_status(status: &supervisor::DaemonStatus, output: Output) {
             }
             println!("Next: {}", next[0]);
         }
-        Output::Json => println!(
+        Output::Json => emit_json!(
             "{{\"schema\":\"arkforge.daemon-status/v1\",\"running\":true,\"supervisor_pid\":{},\"daemon_pid\":{},\"protocol\":{{\"major\":{},\"minor\":{}}},\"daemon_version\":{},\"authority\":{{\"namespace\":\"arkforge.cli\",\"pairing_epoch\":{},\"support_records_available\":{},\"hardware_campaign\":{},\"hdc\":{{\"bound\":{},\"sha256\":{}}}}},\"mechanics_ready\":{},\"active_jobs\":{},\"blockers\":{},\"next_commands\":{}}}",
             status.supervisor_pid,
             status.daemon_pid,
@@ -752,6 +925,7 @@ fn parse_globals(arguments: &[String]) -> Result<(Globals, Vec<String>), CliErro
     let mut no_color = false;
     let mut quiet = false;
     let mut verbose = false;
+    let mut no_auto_start = false;
     let mut command = Vec::new();
     let mut index = 0;
     while index < arguments.len() {
@@ -782,6 +956,7 @@ fn parse_globals(arguments: &[String]) -> Result<(Globals, Vec<String>), CliErro
             "--no-color" => no_color = true,
             "--quiet" => quiet = true,
             "--verbose" => verbose = true,
+            "--no-auto-start" => no_auto_start = true,
             argument => command.push(argument.to_string()),
         }
         index += 1;
@@ -802,6 +977,7 @@ fn parse_globals(arguments: &[String]) -> Result<(Globals, Vec<String>), CliErro
             no_color,
             quiet,
             verbose,
+            no_auto_start,
         },
         command,
     ))
@@ -1061,7 +1237,7 @@ fn run_status(globals: Globals) -> Result<i32, CliError> {
                 })
                 .collect::<Vec<_>>()
                 .join(",");
-            println!(
+            emit_json!(
                 "{{\"schema\":{},\"captured_at_epoch_ms\":{captured_at_epoch_ms},\"complete\":{complete},\"host\":{{\"platform_supported\":{platform_supported},\"inspect_ready\":{inspect_ready}}},\"runtime\":{runtime_json},\"devices\":{},\"artifacts\":{},\"jobs\":{},\"blockers\":[{blocker_values}],\"next_commands\":{}}}",
                 json(STATUS_SCHEMA),
                 devices.json(),
@@ -1181,7 +1357,7 @@ fn run_completion(arguments: &[String], output: Output) -> Result<i32, CliError>
     let script = completion_script(shell)?;
     match output {
         Output::Human => print!("{script}"),
-        Output::Json => println!(
+        Output::Json => emit_json!(
             "{{\"schema\":\"arkforge.completion/v1\",\"ok\":true,\"shell\":{},\"script\":{}}}",
             json(shell),
             json(&script)
@@ -1269,6 +1445,7 @@ fn run_device(arguments: &[String], globals: Globals) -> Result<i32, CliError> {
         "list" => {
             let selected = options.optional_one("device")?.map(str::to_string);
             let deep = options.flag("deep");
+            ensure_runtime(&globals, None)?;
             let registry = profile_registry()?;
             let mut client = public_client(&globals)?;
             let mut observations = client.device_list()?;
@@ -1301,6 +1478,7 @@ fn run_device(arguments: &[String], globals: Globals) -> Result<i32, CliError> {
                 .map(|value| parse_u64("--timeout-ms", value))
                 .transpose()?
                 .unwrap_or(30_000);
+            ensure_runtime(&globals, None)?;
             let probe = wait_for_device(&globals, profile, mode, timeout_ms)?;
             print_device_wait(globals.output, profile, mode, timeout_ms, &probe);
             Ok(0)
@@ -1639,6 +1817,240 @@ fn run_flash(arguments: &[String], globals: Globals) -> Result<i32, CliError> {
     }
 }
 
+/// Reusable local bindings: what this host may drive, not what it may do.
+fn run_config(arguments: &[String], globals: Globals) -> Result<i32, CliError> {
+    let Some(subcommand) = arguments.first() else {
+        print_help(help_spec(&["config".into()])?, globals.output);
+        return Ok(0);
+    };
+    let runtime_dir = command_runtime_dir(&globals)?;
+    let settings = Settings::parse(&arguments[1..])?;
+    let mut config = RuntimeConfig::load(&runtime_dir)?;
+    match subcommand.as_str() {
+        "show" => {
+            settings.reject_any("config show")?;
+            print_config(globals.output, &config, &runtime_dir);
+            return Ok(0);
+        }
+        "set" => {
+            // A path and the digest of its bytes are one decision, so they are
+            // one transaction: a config can never name a tool it has not pinned.
+            match (settings.value("hdc.path"), settings.value("hdc.sha256")) {
+                (Some(path), Some(expected)) => {
+                    let pinned = pin(Path::new(path))?;
+                    if pinned.sha256 != expected {
+                        return Err(CliError::new(
+                            "CONFIG_DIGEST_MISMATCH",
+                            "The file at the configured path does not have the expected digest; nothing was stored."
+                                .to_string(),
+                            3,
+                            false,
+                        ));
+                    }
+                    config.hdc = Some(pinned);
+                }
+                (None, None) => {}
+                _ => {
+                    return Err(CliError::invalid(
+                        "hdc.path and hdc.sha256 bind one tool together; supply both or neither.",
+                    ));
+                }
+            }
+            if let Some(value) = settings.value("daemon.require-release-signing") {
+                config.require_release_signing = value == "true";
+            }
+            settings.require_any()?;
+        }
+        "unset" => {
+            for key in settings.keys() {
+                match key.as_str() {
+                    "hdc" => config.hdc = None,
+                    "daemon.require-release-signing" => config.require_release_signing = false,
+                    other => {
+                        return Err(CliError::invalid(format!(
+                            "Unknown setting {other:?} to clear."
+                        )));
+                    }
+                }
+            }
+            settings.require_any()?;
+        }
+        "add" => {
+            let (Some(path), Some(expected)) = (
+                settings.value("profile-file.path"),
+                settings.value("profile-file.sha256"),
+            ) else {
+                return Err(CliError::invalid(
+                    "profile-file.path and profile-file.sha256 bind one profile together; supply both.",
+                ));
+            };
+            let pinned = pin(Path::new(path))?;
+            if pinned.sha256 != expected {
+                return Err(CliError::new(
+                    "CONFIG_DIGEST_MISMATCH",
+                    "The file at the configured path does not have the expected digest; nothing was stored.".to_string(),
+                    3,
+                    false,
+                ));
+            }
+            if config
+                .profile_files
+                .iter()
+                .any(|existing| existing.sha256 == pinned.sha256)
+            {
+                return Err(CliError::new(
+                    "CONFIG_ALREADY_BOUND",
+                    format!(
+                        "A profile with digest {} is already configured.",
+                        pinned.sha256
+                    ),
+                    6,
+                    false,
+                ));
+            }
+            config.profile_files.push(pinned);
+            config
+                .profile_files
+                .sort_by(|left, right| left.sha256.cmp(&right.sha256));
+        }
+        "remove" => {
+            let Some(expected) = settings.value("profile-file.sha256") else {
+                return Err(CliError::invalid(
+                    "Name the profile to remove by digest: profile-file.sha256=<sha256>.",
+                ));
+            };
+            let before = config.profile_files.len();
+            config
+                .profile_files
+                .retain(|profile| profile.sha256 != expected);
+            if config.profile_files.len() == before {
+                return Err(CliError::new(
+                    "CONFIG_NOT_BOUND",
+                    format!("No configured profile has digest {expected}."),
+                    5,
+                    false,
+                ));
+            }
+        }
+        other => {
+            return Err(CliError::invalid(format!(
+                "Unknown config command {other:?}. Run 'arkforge help config'."
+            )));
+        }
+    }
+    config.store(&runtime_dir)?;
+    print_config(globals.output, &config, &runtime_dir);
+    Ok(0)
+}
+
+/// The `key=value` operands one config command was given.
+struct Settings {
+    values: Vec<(String, Option<String>)>,
+}
+
+impl Settings {
+    fn parse(arguments: &[String]) -> Result<Self, CliError> {
+        let mut values = Vec::new();
+        for argument in arguments {
+            let (key, value) = match argument.split_once('=') {
+                Some((key, value)) => (key.to_string(), Some(value.to_string())),
+                None => (argument.clone(), None),
+            };
+            if values.iter().any(|(existing, _)| *existing == key) {
+                return Err(CliError::invalid(format!(
+                    "{key} may be supplied only once."
+                )));
+            }
+            values.push((key, value));
+        }
+        Ok(Self { values })
+    }
+
+    fn value(&self, key: &str) -> Option<&str> {
+        self.values
+            .iter()
+            .find(|(name, _)| name == key)
+            .and_then(|(_, value)| value.as_deref())
+    }
+
+    fn keys(&self) -> Vec<String> {
+        self.values.iter().map(|(key, _)| key.clone()).collect()
+    }
+
+    fn require_any(&self) -> Result<(), CliError> {
+        if self.values.is_empty() {
+            return Err(CliError::invalid(
+                "Name at least one setting; run 'arkforge help config --format json' for the exact keys.",
+            ));
+        }
+        Ok(())
+    }
+
+    fn reject_any(&self, command: &str) -> Result<(), CliError> {
+        if self.values.is_empty() {
+            return Ok(());
+        }
+        Err(CliError::invalid(format!(
+            "{command} accepts no settings; unexpected {:?}.",
+            self.values[0].0
+        )))
+    }
+}
+
+/// Reports what is bound without reporting where it lives.
+///
+/// Structured output carries binding state, digests and counts only. A host
+/// path is not a secret to the owner reading their own terminal, but it is not
+/// something an Agent transcript or a CI log should carry, and CLI-AC-04 draws
+/// that line at the structured surface.
+fn print_config(output: Output, config: &RuntimeConfig, runtime_dir: &Path) {
+    let next = if config.hdc.is_some() {
+        "arkforge status".to_string()
+    } else {
+        "arkforge config set hdc.path=<absolute-path> hdc.sha256=<sha256>".to_string()
+    };
+    match output {
+        Output::Human => {
+            println!("ArkForge configuration ({})", runtime_dir.display());
+            match &config.hdc {
+                Some(hdc) => {
+                    println!("hdc");
+                    println!("  path    {}", hdc.path.display());
+                    println!("  sha256  {}", hdc.sha256);
+                }
+                None => println!("hdc      not bound"),
+            }
+            println!("profile files ({})", config.profile_files.len());
+            for profile in &config.profile_files {
+                println!("  {}  {}", profile.sha256, profile.path.display());
+            }
+            println!(
+                "daemon.require-release-signing  {}",
+                config.require_release_signing
+            );
+            println!("Campaigns are never stored; name one per call with --hardware-campaign.");
+            println!("Next: {next}");
+        }
+        Output::Json => emit_json!(
+            "{{\"schema\":\"arkforge.config/v1\",\"hdc\":{},\"profile_files\":[{}],\"profile_file_count\":{},\"daemon\":{{\"require_release_signing\":{}}},\"campaign_persistable\":false,\"next_commands\":[{}]}}",
+            config
+                .hdc
+                .as_ref()
+                .map(|hdc| format!("{{\"bound\":true,\"sha256\":{}}}", json(&hdc.sha256)))
+                .unwrap_or_else(|| "{\"bound\":false,\"sha256\":null}".to_string()),
+            config
+                .profile_files
+                .iter()
+                .map(|profile| format!("{{\"sha256\":{}}}", json(&profile.sha256)))
+                .collect::<Vec<_>>()
+                .join(","),
+            config.profile_files.len(),
+            config.require_release_signing,
+            json(&next)
+        ),
+    }
+}
+
 /// The general consent verb.
 ///
 /// One command for every plan an authority sealed — a normal flash plan and a
@@ -1668,7 +2080,7 @@ fn run_apply(arguments: &[String], globals: Globals) -> Result<i32, CliError> {
     let detach = options.flag("detach");
     let runtime_dir = command_runtime_dir(&globals)?;
     // Before dispatch, never after: a campaign mismatch must cost nothing.
-    require_campaign_acknowledgement(&runtime_dir, options.optional_one("hardware-campaign")?)?;
+    ensure_runtime(&globals, options.optional_one("hardware-campaign")?)?;
     let job_id =
         supervisor::apply_plan(&runtime_dir, plan_id, expected, &acknowledgements, detach)?;
     if detach {
@@ -1678,7 +2090,7 @@ fn run_apply(arguments: &[String], globals: Globals) -> Result<i32, CliError> {
                 println!("The authority supervisor continues to drive it.");
                 println!("Next: arkforge watch --job {job_id}");
             }
-            Output::Json => println!(
+            Output::Json => emit_json!(
                 "{{\"schema\":\"arkforge.apply/v1\",\"job_id\":{},\"detached\":true,\"authority_continues\":true,\"next_commands\":[{}]}}",
                 json(&job_id),
                 json(&format!("arkforge watch --job {job_id}")),
@@ -1713,6 +2125,7 @@ fn run_watch(arguments: &[String], globals: Globals) -> Result<i32, CliError> {
         .map(|value| parse_u64("--timeout-ms", value))
         .transpose()?
         .unwrap_or(30_000);
+    ensure_runtime(&globals, None)?;
     let job_id = match options.optional_one("job")? {
         Some(job) => job.to_string(),
         None => default_watch_job(&globals)?,
@@ -1798,6 +2211,7 @@ fn run_cancel(arguments: &[String], globals: Globals) -> Result<i32, CliError> {
     let options = Options::parse(arguments)?;
     let job_id = options.one("job")?;
     let expected_sequence = parse_u64("--expect-sequence", options.one("expect-sequence")?)?;
+    ensure_runtime(&globals, None)?;
     let runtime_dir = command_runtime_dir(&globals)?;
     let state = supervisor::cancel_job(&runtime_dir, job_id, expected_sequence)?;
     match globals.output {
@@ -1805,7 +2219,7 @@ fn run_cancel(arguments: &[String], globals: Globals) -> Result<i32, CliError> {
             println!("Cancellation result for {job_id}: {state}");
             println!("The original journal remains durable; no action was replayed.");
         }
-        Output::Json => println!(
+        Output::Json => emit_json!(
             "{{\"schema\":\"arkforge.job-cancellation/v1\",\"job_id\":{},\"expect_sequence\":{},\"disposition\":{},\"automatic_replay\":false,\"next_commands\":[{}]}}",
             json(job_id),
             expected_sequence,
@@ -1829,7 +2243,7 @@ fn run_flash_plan(options: &Options, globals: Globals) -> Result<i32, CliError> 
     let assess_only = options.flag("assess-only");
     let registry = profile_registry()?;
     let runtime_dir = command_runtime_dir(&globals)?;
-    require_campaign_acknowledgement(&runtime_dir, options.optional_one("hardware-campaign")?)?;
+    ensure_runtime(&globals, options.optional_one("hardware-campaign")?)?;
     let resolved = resolve_plan_inputs(&globals, &registry, options, !assess_only)?;
     let mut partial = PartialResolution::from_resolved(&resolved);
 
@@ -2690,7 +3104,7 @@ fn print_flash_plan(output: Output, plan: &ExecutablePlan, extra_acknowledgement
                 .collect::<Vec<_>>()
                 .join(",");
             let effects = effects_json(&plan.persistent_effects);
-            println!(
+            emit_json!(
                 "{{\"schema\":\"arkforge.flash-plan/v1\",\"plan_id\":{},\"plan_sha256\":{},\"provider_execution_plan_sha256\":{},\"public_projection_sha256\":{},\"execution_purpose\":{},\"expires_at_epoch_ms\":{},\"mechanics_maturity\":{{\"key_sha256\":{},\"state\":{},\"campaign\":{}}},\"authority_support\":{{\"key_sha256\":{},\"state\":{},\"campaign\":{}}},\"ordered_steps\":[{}],\"persistent_effects\":{},\"required_acknowledgements\":{},\"device_mutated\":false,\"next_commands\":[{}]}}",
                 json(&plan.plan_id),
                 json(&plan.plan_sha256),
@@ -2732,6 +3146,7 @@ fn run_job(arguments: &[String], globals: Globals) -> Result<i32, CliError> {
         print_help(help_spec(&["job".into()])?, globals.output);
         return Ok(0);
     };
+    ensure_runtime(&globals, None)?;
     match subcommand.as_str() {
         "list" => {
             let mut client = public_client(&globals)?;
@@ -2786,7 +3201,7 @@ fn print_reconciliation(output: Output, status: &supervisor::ReconcileStatus) {
                 println!("Next: arkforge job show --job {}", status.job_id);
             }
         }
-        Output::Json => println!(
+        Output::Json => emit_json!(
             "{{\"schema\":\"arkforge.job-reconciliation/v1\",\"job_id\":{},\"verdict\":{},\"detail\":{},\"possible_effect_completeness\":{},\"possible_effects\":{},\"original_state\":{},\"original_outcome_immutable\":true,\"automatic_replay_forbidden\":true,\"next_commands\":{}}}",
             json(&status.job_id),
             json(&status.verdict),
@@ -2898,11 +3313,62 @@ fn run_job_recovery(arguments: &[String], globals: Globals) -> Result<i32, CliEr
 }
 
 fn public_client(globals: &Globals) -> Result<PublicClient, CliError> {
-    let runtime_dir = match &globals.runtime_dir {
-        Some(path) => path.clone(),
-        None => default_runtime_dir()?,
-    };
+    let runtime_dir = command_runtime_dir(globals)?;
     PublicClient::connect(&runtime_dir).map_err(Into::into)
+}
+
+/// Whether this process had to bring the runtime up to answer.
+///
+/// Recorded once here rather than threaded through every renderer, so no
+/// command can answer without disclosing that it started a service.
+static RUNTIME_AUTOSTARTED: AtomicBool = AtomicBool::new(false);
+
+/// Makes a runtime exist, or explains why this call will not make one.
+///
+/// Starting a service to answer a question is a real effect, so it is opt-out
+/// (`--no-auto-start`) and disclosed in the result. Serializing concurrent
+/// starters and refusing to take over a paired supervisor belong to the
+/// lifecycle layer, which owns both.
+fn ensure_runtime(globals: &Globals, hardware_campaign: Option<&str>) -> Result<(), CliError> {
+    let runtime_dir = command_runtime_dir(globals)?;
+    if supervisor::status(&runtime_dir).is_ok() {
+        return require_campaign_acknowledgement(&runtime_dir, hardware_campaign);
+    }
+    if globals.no_auto_start {
+        return Err(CliError::new(
+            "DAEMON_UNAVAILABLE",
+            "No CLI authority supervisor is listening and --no-auto-start forbids starting one.",
+            5,
+            true,
+        ));
+    }
+    let config = RuntimeConfig::load(&runtime_dir)?;
+    config.verify_pins()?;
+    let options = supervisor::DaemonOptions::from_config(&config, hardware_campaign);
+    if supervisor::ensure_started(&runtime_dir, options)? {
+        RUNTIME_AUTOSTARTED.store(true, Ordering::Relaxed);
+        if globals.output == Output::Human && !globals.quiet {
+            println!("Started the ArkForge runtime for this command.");
+        }
+        return Ok(());
+    }
+    // Another command created it first; it still has to be the campaign runtime
+    // this call named.
+    require_campaign_acknowledgement(&runtime_dir, hardware_campaign)
+}
+
+/// Emits one structured document on stdout.
+///
+/// The autostart disclosure is appended here, at the single outermost boundary,
+/// to a JSON object this process just built.
+fn emit(document: String) {
+    if RUNTIME_AUTOSTARTED.load(Ordering::Relaxed)
+        && let Some(body) = document.strip_suffix('}')
+    {
+        println!("{body},\"runtime_autostarted\":true}}");
+        return;
+    }
+    println!("{document}");
 }
 
 fn artifact_store_root(globals: &Globals) -> Result<PathBuf, CliError> {
@@ -3119,7 +3585,7 @@ fn print_signing(
             } else {
                 vec!["arkforge help signing verify --format json".to_string()]
             };
-            println!(
+            emit_json!(
                 "{{\"schema\":\"arkforge.signing-verification/v1\",\"input_sha256\":{},\"mode\":{},\"compliant\":{},\"facts\":{},\"violations\":[{}],\"contract\":{},\"next_commands\":{}}}",
                 json(&input_digest.to_string()),
                 json(mode),
@@ -3217,7 +3683,7 @@ fn print_device_list(output: Output, deep: bool, selected: Option<&str>, entries
                 .map(device_entry_json)
                 .collect::<Vec<_>>()
                 .join(",");
-            println!(
+            emit_json!(
                 "{{\"schema\":\"arkforge.device-list/v1\",\"deep\":{deep},\"filtered_to\":{},\"observations\":[{values}],\"next_commands\":[{}]}}",
                 optional_json(selected),
                 json(&next)
@@ -3275,7 +3741,7 @@ fn print_device_wait(
             println!("facts_sha256      {}", probe.facts_sha256);
             println!("Next: {next}");
         }
-        Output::Json => println!(
+        Output::Json => emit_json!(
             "{{\"schema\":\"arkforge.device-wait/v1\",\"requested_profile\":{},\"requested_mode\":{},\"timeout_ms\":{},\"match\":{{\"observation\":{},\"profile_id\":{},\"facts_sha256\":{},\"protocol_facts\":{}}},\"next_commands\":[{}]}}",
             json(requested_profile),
             json(requested_mode),
@@ -3332,7 +3798,7 @@ fn print_artifact_import(
             println!("No device was accessed or mutated.");
             println!("Next: {next}");
         }
-        Output::Json => println!(
+        Output::Json => emit_json!(
             "{{\"schema\":\"arkforge.artifact-import/v1\",\"artifact_id\":{},\"sha256\":{},\"size_bytes\":{},\"deduplicated\":{},\"host_store_mutated\":{},\"device_accessed\":false,\"manifest_summary\":{},\"compatible_profiles\":{},\"present_devices\":{},\"next_commands\":[{}]}}",
             json(&artifact_id),
             json(&artifact_id),
@@ -3417,7 +3883,7 @@ fn print_artifact_list(output: Output, items: &[StoredArtifact]) {
                 })
                 .collect::<Vec<_>>()
                 .join(",");
-            println!(
+            emit_json!(
                 "{{\"schema\":\"arkforge.artifact-list/v1\",\"artifacts\":[{artifacts}],\"next_commands\":[{}]}}",
                 json(&next)
             );
@@ -3457,7 +3923,7 @@ fn print_artifact_inspection(
             println!("No device was accessed or mutated.");
             println!("Next: {next}");
         }
-        Output::Json => println!(
+        Output::Json => emit_json!(
             "{{\"schema\":\"arkforge.artifact-inspection/v1\",{},\"compatible_profiles\":{},\"profile_coverage\":{},\"device_accessed\":false,\"next_commands\":[{}]}}",
             artifact_fields_json(artifact_id, manifest),
             json_strings(compatible),
@@ -3630,7 +4096,7 @@ fn print_jobs(output: Output, jobs: &[JobSummary]) {
         }
         Output::Json => {
             let values = jobs.iter().map(job_json).collect::<Vec<_>>().join(",");
-            println!(
+            emit_json!(
                 "{{\"schema\":\"arkforge.job-list/v1\",\"jobs\":[{values}],\"next_commands\":{}}}",
                 json_array(&next)
             );
@@ -3729,7 +4195,7 @@ fn print_job(
                 println!("Next: {command}");
             }
         }
-        Output::Json => println!(
+        Output::Json => emit_json!(
             "{{\"schema\":\"arkforge.job/v1\",\"job\":{},\"events\":{},\"receipts\":{},\"recovery\":{},\"next_commands\":{}}}",
             job_json(job),
             match events {
@@ -3814,15 +4280,24 @@ fn print_job_watch(
         )]
     };
     if globals.jsonl {
-        for record in render_job_jsonl(
+        // The disclosure belongs on the metadata record: it describes this
+        // invocation, not each event in the stream.
+        for (index, record) in render_job_jsonl(
             command,
             after_sequence,
             timeout_ms,
             events,
             summary,
             timed_out,
-        ) {
-            println!("{record}");
+        )
+        .into_iter()
+        .enumerate()
+        {
+            if index == 0 {
+                emit(record);
+            } else {
+                println!("{record}");
+            }
         }
         return;
     }
@@ -3869,7 +4344,7 @@ fn print_job_watch(
                 .map(job_event_json)
                 .collect::<Vec<_>>()
                 .join(",");
-            println!(
+            emit_json!(
                 "{{\"schema\":\"arkforge.job-watch/v1\",\"after_sequence\":{},\"timeout_ms\":{},\"timed_out\":{},\"events\":[{}],\"job\":{},\"next_commands\":{}}}",
                 after_sequence,
                 timeout_ms,
@@ -4355,7 +4830,7 @@ fn print_devices(output: Output, devices: &[RescueDevice]) {
                 .map(device_json)
                 .collect::<Vec<_>>()
                 .join(",");
-            println!(
+            emit_json!(
                 "{{\"schema\":\"arkforge.rescue-device-list/v1\",\"devices\":[{values}],\"next_commands\":[\"arkforge rescue inspect --device <device-id>\"]}}"
             );
         }
@@ -4403,7 +4878,7 @@ fn print_inspection(output: Output, result: &RescueInspection) {
                 })
                 .collect::<Vec<_>>()
                 .join(",");
-            println!(
+            emit_json!(
                 "{{\"schema\":\"arkforge.rescue-inspection/v1\",\"device\":{},\"capacity_sectors\":{},\"capacity_evidence_sha256\":{},\"layout_sha256\":{},\"layout_evidence_sha256\":{},\"profile_compatible\":{},\"profile_blocker\":{},\"partitions\":[{}],\"next_commands\":[\"arkforge help rescue plan --format json\"]}}",
                 device_json(&result.device),
                 result.capacity_sectors,
@@ -4429,7 +4904,7 @@ fn print_read(output: Output, result: &RescueReadReceipt) {
             println!("sha256  {}", result.sha256);
             println!("The device was not mutated.");
         }
-        Output::Json => println!(
+        Output::Json => emit_json!(
             "{{\"schema\":\"arkforge.rescue-read-receipt/v1\",\"device_id\":{},\"start_sector\":{},\"sector_count\":{},\"bytes\":{},\"sha256\":{},\"output_written\":true,\"device_mutated\":false,\"next_commands\":[{}]}}",
             json(&result.device.device_id),
             result.begin_sector,
@@ -4477,7 +4952,7 @@ fn print_plan(output: Output, result: &RescuePlanSummary) {
                     .map(|value| format!(" --ack {value}"))
                     .collect::<String>()
             );
-            println!(
+            emit_json!(
                 "{{\"schema\":\"arkforge.rescue-plan-summary/v1\",\"plan_id\":{},\"plan_sha256\":{},\"device_id\":{},\"operation\":{},\"expires_at_epoch_ms\":{},\"required_acknowledgements\":{},\"device_mutated\":false,\"next_commands\":[{}]}}",
                 json(&result.plan_id),
                 json(&result.plan_sha256.to_string()),
@@ -4510,7 +4985,7 @@ fn print_apply(output: Output, result: &RescueApplyResult) -> Result<(), CliErro
                 );
             }
         }
-        Output::Json => println!(
+        Output::Json => emit_json!(
             "{{\"schema\":\"arkforge.rescue-receipt/v1\",\"receipt_id\":{},\"receipt_sha256\":{},\"plan_id\":{},\"plan_sha256\":{},\"device_id\":{},\"operation\":{},\"disposition\":{},\"evidence_sha256\":{},\"completed_at_epoch_ms\":{},\"detail\":{},\"payload_bytes\":{},\"payload_sha256\":{},\"replay_allowed\":false,\"next_commands\":{}}}",
             json(&receipt_id),
             json(&receipt_digest.to_string()),
@@ -4587,7 +5062,7 @@ fn print_error(output: Output, command: &[String], arguments: &[String], error: 
                 eprintln!("Next: {next}");
             }
         }
-        Output::Json => println!(
+        Output::Json => emit_json!(
             "{{\"schema\":\"arkforge.command-result/v1\",\"ok\":false,\"command\":{},\"error\":{{\"code\":{},\"message\":{},\"remediation\":{},\"retryable\":{},\"required_acknowledgements\":{},\"next_commands\":{},\"facts\":{}}}}}",
             json_strings(command),
             json(&error.code),
@@ -4641,7 +5116,7 @@ fn requested_command_path(arguments: &[String]) -> Vec<String> {
     while index < arguments.len() {
         match arguments[index].as_str() {
             "--runtime-dir" | "--output" => index += 2,
-            "--no-color" | "--quiet" | "--verbose" => index += 1,
+            "--no-color" | "--quiet" | "--verbose" | "--no-auto-start" => index += 1,
             value if value.starts_with('-') => break,
             value => {
                 command.push(value.to_string());
@@ -4667,7 +5142,7 @@ fn acknowledgement_retry_command(arguments: &[String], error: &CliError) -> Opti
     while index < arguments.len() {
         match arguments[index].as_str() {
             "--runtime-dir" | "--output" => index += 2,
-            "--no-color" | "--quiet" | "--verbose" => index += 1,
+            "--no-color" | "--quiet" | "--verbose" | "--no-auto-start" => index += 1,
             _ => {
                 command.push(arguments[index].clone());
                 index += 1;
@@ -4803,6 +5278,12 @@ fn help_constraints(spec: &HelpSpec) -> Vec<String> {
     if spec.command == "rescue plan" {
         constraints.push(
             "{\"kind\":\"oneOf\",\"branches\":[{\"when\":{\"--operation\":\"write-partition\"},\"required\":[\"--partition\",\"--image\",\"--expect-image-sha256\"]},{\"when\":{\"--operation\":\"reset-device\"},\"forbidden\":[\"--partition\",\"--image\",\"--expect-image-sha256\"]}]}"
+                .into(),
+        );
+    }
+    if spec.command == "flash plan" {
+        constraints.push(
+            "{\"kind\":\"exactlyOneOf\",\"options\":[\"--file\",\"--artifact\"],\"required\":true}"
                 .into(),
         );
     }
@@ -4965,7 +5446,7 @@ fn print_help_index(output: Output) {
                 .map(|spec| help_leaf_json(spec))
                 .collect::<Vec<_>>()
                 .join(",");
-            println!(
+            emit_json!(
                 "{{\"schema\":{},\"command_count\":{},\"commands\":[{}]}}",
                 json(HELP_INDEX_SCHEMA),
                 specs.len(),
@@ -5078,6 +5559,10 @@ static HELP: &[HelpSpec] = &[
                 "Disable color; accepted for deterministic scripts.",
             ),
             ("--quiet", "Print only the final human result."),
+            (
+                "--no-auto-start",
+                "Refuse instead of starting a runtime that is not already listening.",
+            ),
             (
                 "--verbose",
                 "Include diagnostic evidence; never include secrets.",
@@ -5889,7 +6374,10 @@ static HELP: &[HelpSpec] = &[
         summary: "Run and manage one paired local ArkForge runtime.",
         usage: "arkforge daemon <run|start|stop> [options]",
         effect: "Service lifecycle. The supervisor owns pairing authority; lifecycle commands do not flash a device.",
-        requires: &["arkforged installed beside the canonical arkforge executable."],
+        requires: &[
+            "arkforged installed beside the canonical arkforge executable.",
+            "The bindings stored by config, which lifecycle commands read and explicit arguments override.",
+        ],
         produces: &[
             "Typed two-process runtime status with protocol, authority epoch, readiness, active jobs, and blockers.",
         ],
@@ -6003,6 +6491,132 @@ static HELP: &[HelpSpec] = &[
             (5, "No runtime is listening."),
             (6, "Active jobs prevent stopping."),
             (10, "Stop IPC failed."),
+        ],
+    },
+    HelpSpec {
+        command: "config",
+        summary: "Bind reusable local tools and profiles for this runtime directory.",
+        usage: "arkforge config <show|set|unset|add|remove> [<key>=<value>...]",
+        effect: "Owner-only host state. Configuration names what this host may drive; it never grants consent, never opens a hardware campaign, and never touches a device.",
+        requires: &["An explicit runtime directory or the per-user default."],
+        produces: &[
+            "arkforge.config/v1 with binding state, digests, and counts; structured output never carries a host path.",
+        ],
+        options: &[],
+        examples: &[
+            "arkforge config show",
+            "arkforge help config set --format json",
+        ],
+        next: &["arkforge config show"],
+        exits: &[
+            (0, "Configuration produced or committed."),
+            (2, "Command, setting, or value is invalid."),
+            (3, "A digest did not match, so nothing was stored."),
+            (5, "A named file or binding was not found."),
+            (6, "The binding already exists."),
+            (10, "The durable configuration boundary failed."),
+        ],
+    },
+    HelpSpec {
+        command: "config show",
+        summary: "Show which tools and profiles this runtime directory has bound.",
+        usage: "arkforge config show",
+        effect: "Read-only. It does not create a runtime directory it did not find.",
+        requires: &[],
+        produces: &[
+            "arkforge.config/v1 with HDC binding state and digest, profile digests and count, and the release signing requirement. Host and HDC paths are shown only to the owner in human output.",
+        ],
+        options: &[],
+        examples: &["arkforge --output json config show"],
+        next: &["arkforge status"],
+        exits: &[
+            (0, "Configuration produced, including an empty one."),
+            (3, "The stored configuration could not be read."),
+            (10, "The configuration store failed."),
+        ],
+    },
+    HelpSpec {
+        command: "config set",
+        summary: "Bind the exact managed-control executable or the signing requirement.",
+        usage: "arkforge config set hdc.path=<absolute-path> hdc.sha256=<sha256> | daemon.require-release-signing=<true|false>",
+        effect: "Owner-only host write, committed atomically. A failed write leaves the previous configuration exactly as it was.",
+        requires: &[
+            "An absolute path whose current bytes have the supplied digest.",
+            "hdc.path and hdc.sha256 supplied together; one alone is refused.",
+        ],
+        produces: &["arkforge.config/v1 after the transaction commits."],
+        options: &[],
+        examples: &[
+            "arkforge config set daemon.require-release-signing=true",
+            "arkforge config set hdc.path=/usr/local/bin/hdc hdc.sha256=<64-lowercase-hex>",
+        ],
+        next: &["arkforge config show"],
+        exits: &[
+            (0, "Binding committed."),
+            (
+                2,
+                "A setting is unknown, malformed, relative, or a campaign key.",
+            ),
+            (3, "The file does not have the expected digest."),
+            (5, "The named file was not found."),
+            (10, "The durable configuration boundary failed."),
+        ],
+    },
+    HelpSpec {
+        command: "config unset",
+        summary: "Clear one binding, leaving every other setting untouched.",
+        usage: "arkforge config unset <hdc|daemon.require-release-signing>",
+        effect: "Owner-only host write, committed atomically. Clearing the HDC binding clears its path and digest together.",
+        requires: &["One setting name to clear."],
+        produces: &["arkforge.config/v1 after the transaction commits."],
+        options: &[],
+        examples: &["arkforge config unset hdc"],
+        next: &["arkforge config show"],
+        exits: &[
+            (0, "Binding cleared."),
+            (2, "The setting name is unknown or carries a value."),
+            (10, "The durable configuration boundary failed."),
+        ],
+    },
+    HelpSpec {
+        command: "config add",
+        summary: "Add one additional development profile by absolute path and digest.",
+        usage: "arkforge config add profile-file.path=<absolute-path> profile-file.sha256=<sha256>",
+        effect: "Owner-only host write, committed atomically. The profile is re-hashed before every runtime start, and byte drift is a typed refusal.",
+        requires: &[
+            "An absolute path whose current bytes have the supplied digest.",
+            "A digest not already configured.",
+        ],
+        produces: &["arkforge.config/v1 after the transaction commits."],
+        examples: &[
+            "arkforge config add profile-file.path=<absolute-path> profile-file.sha256=<64-lowercase-hex>",
+        ],
+        options: &[],
+        next: &["arkforge config show"],
+        exits: &[
+            (0, "Profile added."),
+            (2, "A setting is unknown, malformed, or relative."),
+            (3, "The file does not have the expected digest."),
+            (5, "The named file was not found."),
+            (6, "That digest is already configured."),
+            (10, "The durable configuration boundary failed."),
+        ],
+    },
+    HelpSpec {
+        command: "config remove",
+        summary: "Remove one configured profile by its exact digest.",
+        usage: "arkforge config remove profile-file.sha256=<sha256>",
+        effect: "Owner-only host write, committed atomically. Removal is by digest, so a moved or renamed file cannot be unbound by accident.",
+        requires: &["A digest that is currently configured."],
+        produces: &["arkforge.config/v1 after the transaction commits."],
+        options: &[],
+        examples: &["arkforge config remove profile-file.sha256=<64-lowercase-hex>"],
+        next: &["arkforge config show"],
+        exits: &[
+            (0, "Profile removed."),
+            (2, "The setting is unknown or malformed."),
+            (5, "No configured profile has that digest."),
+            (10, "The durable configuration boundary failed."),
         ],
     },
     HelpSpec {
@@ -6221,6 +6835,11 @@ mod tests {
             "daemon run",
             "daemon start",
             "daemon stop",
+            "config show",
+            "config set",
+            "config unset",
+            "config add",
+            "config remove",
             "signing verify",
             "completion",
             "help",
@@ -6250,6 +6869,7 @@ mod tests {
                 "job",
                 "rescue",
                 "daemon",
+                "config",
                 "signing",
                 "completion",
                 "help"
@@ -6543,6 +7163,11 @@ mod tests {
     fn example_fixture(word: &str) -> String {
         if !word.contains('<') {
             return word.to_string();
+        }
+        // A `key=<placeholder>` operand keeps its key; only the placeholder is
+        // a stand-in for a real value.
+        if let Some((key, placeholder)) = word.split_once('=') {
+            return format!("{key}={}", example_fixture(placeholder));
         }
         if word.contains("sha256") || word.contains("64-lowercase-hex") {
             return "0".repeat(64);

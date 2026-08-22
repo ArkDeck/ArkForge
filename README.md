@@ -52,12 +52,31 @@ target/debug/arkforge --runtime-dir /tmp/arkforge status
 blocker 聚合成一份 `arkforge.status/v1`：无法观测的区段报告 `items: null` 与 typed
 `reason`，只有完成枚举且结果为零才是 `items: []`。它永远不会顺手把 runtime 拉起来。
 
-启动本地 runtime 并查看设备：
+需要 runtime 的命令会**自动把它拉起来**，不用先手动 start：
 
 ```bash
-target/debug/arkforge --runtime-dir /tmp/arkforge daemon start
 target/debug/arkforge --runtime-dir /tmp/arkforge device list --deep
 ```
+
+自动拉起会读 `config` 里的绑定，在 owner-only 启动锁下并发幂等（并发命令只会有一个
+真正创建 runtime，其余校验一致后附着），并且**如实披露**：human 模式打印一行提示，
+JSON 文档带 `runtime_autostarted: true`。`--no-auto-start` 恢复原来的 typed refusal。
+已被 ArkDeck 配对的 runtime 永远不会被接管。`status`（和不带子命令的 `arkforge`）
+刻意不自动拉起——它必须能回答「什么都没在跑」而不改变这个答案。
+
+可复用的本机绑定用 `config` 一次配好（owner-only 存储，原子提交）：
+
+```bash
+target/debug/arkforge --runtime-dir /tmp/arkforge config set \
+  hdc.path=/usr/local/bin/hdc hdc.sha256=<64hex>
+target/debug/arkforge --runtime-dir /tmp/arkforge config show
+```
+
+path 与 digest 是**一个事务**：配置里不会出现没被钉住字节的可执行文件；相对路径直接拒绝；
+每次启动前重新 hash，字节漂移是 typed refusal；写入失败保留旧配置。
+`config show --output json` 只给绑定状态、digest 与计数，不输出任何 host/HDC 路径。
+`campaign` 不是合法配置键——返回 `CAMPAIGN_NOT_PERSISTABLE`，因为能被留在配置里的
+campaign 就不再意味着「这次运行经过评审」。
 
 `device list` 逐台给出 identification 块：**兼容 profile** 与**物理型号**分开报告，
 各带证据链与强度。USB VID/PID 只能证明协议人格，永远不单独证明板子；Loader 弱身份下
@@ -142,6 +161,7 @@ watch       [--job] 默认跟随在跑的 job
 cancel      --job --expect-sequence
 job         list / show / reconcile / recovery
 rescue      list / inspect / read / plan / apply
+config      show / set / unset / add / remove
 daemon      run / start / stop
 signing     verify
 completion

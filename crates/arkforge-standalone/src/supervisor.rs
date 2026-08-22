@@ -47,6 +47,50 @@ pub struct DaemonOptions {
 }
 
 impl DaemonOptions {
+    /// The lifecycle options a stored configuration implies.
+    ///
+    /// The campaign is not among them. It comes from the call that needed the
+    /// runtime, because a named acceptance run is opened deliberately or not at
+    /// all (design.md 1.2).
+    pub fn from_config(
+        config: &crate::config::RuntimeConfig,
+        hardware_campaign: Option<&str>,
+    ) -> Self {
+        Self {
+            profile_files: config
+                .profile_files
+                .iter()
+                .map(|profile| profile.path.clone())
+                .collect(),
+            hdc: config.hdc.as_ref().map(|hdc| hdc.path.clone()),
+            expect_hdc_sha256: config.hdc.as_ref().map(|hdc| hdc.sha256.clone()),
+            hardware_campaign: hardware_campaign.map(str::to_string),
+            require_release_signing: config.require_release_signing,
+        }
+    }
+
+    /// Applies explicit call-site arguments over stored configuration.
+    ///
+    /// A binding is overridden only where the call gives a complete one: half a
+    /// pair would silently mix a configured digest with a call-site path, which
+    /// is exactly the pairing the config format exists to prevent.
+    pub fn overridden_by(mut self, explicit: Self) -> Self {
+        if explicit.hdc.is_some() && explicit.expect_hdc_sha256.is_some() {
+            self.hdc = explicit.hdc;
+            self.expect_hdc_sha256 = explicit.expect_hdc_sha256;
+        }
+        if !explicit.profile_files.is_empty() {
+            self.profile_files = explicit.profile_files;
+        }
+        if explicit.hardware_campaign.is_some() {
+            self.hardware_campaign = explicit.hardware_campaign;
+        }
+        if explicit.require_release_signing {
+            self.require_release_signing = true;
+        }
+        self
+    }
+
     pub fn parse(arguments: &[String]) -> Result<Self, StandaloneError> {
         let mut options = Self::default();
         let mut index = 0;
@@ -211,6 +255,82 @@ struct ActiveTargetLineage {
     current_stable_identity_sha256: Vec<u8>,
     topology_sha256: String,
     revision: u64,
+}
+
+/// How long to wait for a competing process to finish starting the runtime.
+const STARTUP_LOCK_TIMEOUT: Duration = Duration::from_secs(20);
+
+/// Makes a runtime exist, reporting whether this call is the one that made it.
+///
+/// Concurrent callers serialize on an owner-only lock so exactly one of them
+/// creates the runtime and the rest attach to what it created. It is never a
+/// takeover: an already-paired supervisor is found by [`status`] and returned
+/// as-is, and a mechanics daemon paired with another authority still refuses
+/// through [`start`].
+pub fn ensure_started(runtime_dir: &Path, options: DaemonOptions) -> Result<bool, StandaloneError> {
+    if status(runtime_dir).is_ok() {
+        return Ok(false);
+    }
+    let _lock = StartupLock::acquire(runtime_dir)?;
+    // The competitor may have finished while this call waited for the lock.
+    if status(runtime_dir).is_ok() {
+        return Ok(false);
+    }
+    start(runtime_dir.to_path_buf(), options)?;
+    Ok(true)
+}
+
+/// An owner-only exclusive lock held while one process starts the runtime.
+struct StartupLock {
+    path: PathBuf,
+}
+
+impl StartupLock {
+    fn acquire(runtime_dir: &Path) -> Result<Self, StandaloneError> {
+        std::fs::create_dir_all(runtime_dir)
+            .map_err(|error| internal("create the runtime directory", error))?;
+        let path = runtime_dir.join("startup.lock");
+        let deadline = Instant::now() + STARTUP_LOCK_TIMEOUT;
+        loop {
+            match std::fs::OpenOptions::new()
+                .write(true)
+                .create_new(true)
+                .open(&path)
+            {
+                Ok(_) => {
+                    let _ = protect_path(&path, false);
+                    return Ok(Self { path });
+                }
+                Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {
+                    if status(runtime_dir).is_ok() {
+                        // The holder succeeded; there is nothing left to lock.
+                        return Ok(Self {
+                            path: PathBuf::new(),
+                        });
+                    }
+                    if Instant::now() >= deadline {
+                        // The holder died without releasing. Taking the lock
+                        // over is safe because the caller re-checks whether a
+                        // runtime exists before creating one.
+                        let _ = std::fs::remove_file(&path);
+                        continue;
+                    }
+                    std::thread::sleep(Duration::from_millis(100));
+                }
+                Err(error) => {
+                    return Err(internal("take the runtime startup lock", error));
+                }
+            }
+        }
+    }
+}
+
+impl Drop for StartupLock {
+    fn drop(&mut self) {
+        if !self.path.as_os_str().is_empty() {
+            let _ = std::fs::remove_file(&self.path);
+        }
+    }
 }
 
 pub fn start(

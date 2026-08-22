@@ -24,6 +24,9 @@ impl TempRuntime {
             .arg(&self.root)
             .arg("--output")
             .arg("json")
+            // These tests assert what happens with no runtime, so they must say
+            // they do not want one started for them.
+            .arg("--no-auto-start")
             .args(arguments)
             .output()
             .expect("canonical arkforge CLI should start")
@@ -33,6 +36,7 @@ impl TempRuntime {
         Command::new(env!("CARGO_BIN_EXE_arkforge"))
             .arg("--runtime-dir")
             .arg(&self.root)
+            .arg("--no-auto-start")
             .args(arguments)
             .output()
             .expect("canonical arkforge CLI should start")

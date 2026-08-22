@@ -53,7 +53,7 @@
 
 ## TASK-WF-005 — `config` 与 runtime 自动确保
 
-- Status: pending
+- Status: done
 - `config show/set/unset/add/remove`（HDC 绑定、profile-file、release-signing；
   owner-only 存储、绝对路径 + digest、原子更新）；`campaign` 键显式拒绝。
 - 需要 runtime 的命令在 owner-only 启动锁下并发幂等自动拉起，读取 config；

@@ -26,6 +26,10 @@ impl TempRuntime {
             .arg(&self.root)
             .arg("--output")
             .arg("json")
+            // Import reports which connected devices could take the firmware;
+            // with no runtime that section is unknown, and these tests assert
+            // exactly that rather than starting one.
+            .arg("--no-auto-start")
             .args(arguments)
             .output()
             .expect("canonical arkforge CLI should start")

@@ -8,6 +8,7 @@
 
 pub mod application;
 mod authority_support;
+pub mod config;
 mod hdc_control;
 pub mod supervisor;
 

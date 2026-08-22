@@ -53,12 +53,37 @@ section that could not be observed reports `items: null` with a typed `reason`;
 only a completed enumeration of zero is `items: []`. It never starts a runtime on
 the way to answering.
 
-Start a local runtime and list observed devices:
+A command that needs the runtime **brings one up** rather than refusing:
 
 ```bash
-target/debug/arkforge --runtime-dir /tmp/arkforge daemon start
 target/debug/arkforge --runtime-dir /tmp/arkforge device list --deep
 ```
+
+Auto-start reads the bindings from `config`, is concurrency-idempotent under an
+owner-only startup lock (competing commands produce one runtime, and the rest
+attach after checking it matches), and is **disclosed**: human output prints a
+line, and structured documents carry `runtime_autostarted: true`.
+`--no-auto-start` restores the previous typed refusal. A runtime already paired
+with ArkDeck is attached to, never taken over. `status` — and a bare `arkforge` —
+deliberately never starts one: it has to be able to answer "nothing is running"
+without changing that answer.
+
+Reusable local bindings are configured once, owner-only and committed atomically:
+
+```bash
+target/debug/arkforge --runtime-dir /tmp/arkforge config set \
+  hdc.path=/usr/local/bin/hdc hdc.sha256=<64hex>
+target/debug/arkforge --runtime-dir /tmp/arkforge config show
+```
+
+A path and the digest of its bytes are **one transaction**, so a configuration
+can never name an executable it has not pinned; a relative path is refused; every
+pin is re-hashed before the runtime starts and byte drift is a typed refusal; and
+a failed write leaves the previous configuration exactly as it was.
+`config show --output json` reports binding state, digests, and counts — never a
+host or HDC path. `campaign` is not a configuration key: it returns
+`CAMPAIGN_NOT_PERSISTABLE`, because a campaign that could be left switched on in
+a file would stop meaning that the run was reviewed.
 
 `device list` reports an identification block per device that keeps **compatible
 profile** and **physical model** apart, each with its evidence and strength. A USB
@@ -162,6 +187,7 @@ watch       [--job] follows the running job by default
 cancel      --job --expect-sequence
 job         list / show / reconcile / recovery
 rescue      list / inspect / read / plan / apply
+config      show / set / unset / add / remove
 daemon      run / start / stop
 signing     verify
 completion

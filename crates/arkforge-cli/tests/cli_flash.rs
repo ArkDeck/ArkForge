@@ -33,6 +33,9 @@ impl TempRuntime {
             .arg(&self.root)
             .arg("--output")
             .arg("json")
+            // These tests assert what happens with no runtime, so they must say
+            // they do not want one started for them.
+            .arg("--no-auto-start")
             .args(arguments)
             .output()
             .expect("canonical arkforge CLI should start")
@@ -64,33 +67,18 @@ fn firmware_must_be_named_and_is_never_taken_positionally() {
 }
 
 #[test]
-fn a_plan_refusal_carries_every_fact_the_call_already_established() {
+fn a_plan_refuses_before_importing_anything_when_it_cannot_reach_a_runtime() {
     let runtime = TempRuntime::new("facts");
     let firmware = runtime.firmware();
 
-    // No runtime is paired, so resolution stops at the device stage — after the
-    // bytes are already in the content store.
+    // Runtime first, content second (design.md 3.2): a call that cannot reach a
+    // device must not spend a 200 MiB import discovering that.
     let refused = runtime.json(&["flash", "plan", "--file", &firmware]);
     assert_eq!(refused.status.code(), Some(5), "{refused:?}");
     let document = stdout(&refused);
     assert!(document.contains("\"code\":\"DAEMON_UNAVAILABLE\""));
-    assert!(
-        document.contains("\"facts\":{\"flash_plan\":"),
-        "{document}"
-    );
-    assert!(document.contains("\"schema\":\"arkforge.flash-plan/v2\""));
-    // The import that already happened is reported, not repeated.
-    assert!(document.contains("\"format\":\"rockchip-images-targz\""));
-    assert!(document.contains("\"imported\":true"));
-    assert!(document.contains("\"compatible_profiles\":[\"org.openharmony.dayu200@1.0.0\"]"));
-    assert!(document.contains("\"device\":null"));
-    assert!(document.contains("\"plan\":null"));
-
-    // Importing the same bytes again deduplicates rather than storing twice.
-    let repeated = runtime.json(&["flash", "plan", "--file", &firmware]);
-    assert!(stdout(&repeated).contains("\"imported\":false"));
     let listed = stdout(&runtime.json(&["artifact", "list"]));
-    assert_eq!(listed.matches("\"artifact_id\"").count(), 1, "{listed}");
+    assert!(listed.contains("\"artifacts\":[]"), "{listed}");
 }
 
 #[test]
@@ -148,6 +136,9 @@ fn the_help_contract_publishes_the_composite_shape_and_its_refusal_facts() {
     assert!(help.contains("{\"kind\":\"conflicts\",\"left\":\"--target\",\"right\":\"--device\"}"));
     // Neither content option is required on its own; one of them is.
     assert!(help.contains("\"name\":\"--file\",\"type\":\"path\",\"required\":false"));
+    assert!(help.contains(
+        "{\"kind\":\"exactlyOneOf\",\"options\":[\"--file\",\"--artifact\"],\"required\":true}"
+    ));
     assert!(help.contains("\"name\":\"--assess-only\",\"type\":\"boolean\""));
 
     let index = Command::new(env!("CARGO_BIN_EXE_arkforge"))
