@@ -12,6 +12,7 @@ pub mod artifact_ops;
 pub mod dispatch;
 pub mod jobs;
 pub mod packaging;
+pub mod profiles;
 pub mod rescue;
 pub mod service;
 

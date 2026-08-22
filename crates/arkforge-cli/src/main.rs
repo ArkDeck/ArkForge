@@ -4,6 +4,8 @@
 //! normal-flash authority surface. No canonical command is a compatibility
 //! wrapper around an older binary.
 
+mod inference;
+
 use arkforge_artifact::cas::{CasError, CasQuota, ContentAddressedStore, ImportedObject};
 use arkforge_client::{
     DeviceObservationView, DeviceProbeView, PublicClient, PublicClientError, RecoveryGuideView,
@@ -11,8 +13,8 @@ use arkforge_client::{
 use arkforge_core::profile;
 use arkforge_core::{OpaqueId, Sha256Digest, Version};
 use arkforge_ipc::messages::{
-    Assessment, Effect, ExecutablePlan, InspectArtifactResponse, JobEvent, JobSummary, KeyValue,
-    MaterializePlanResponse,
+    ActionReceiptSummary, Assessment, Effect, ExecutablePlan, InspectArtifactResponse, JobEvent,
+    JobSummary, KeyValue, MaterializePlanResponse,
 };
 use arkforged::artifact_ops::{
     ProfileCoverage, inspect_container, manifest_response, profile_coverage,
@@ -350,7 +352,6 @@ impl HelpSpec {
 
     fn requires_daemon(&self) -> bool {
         self.command.starts_with("device ")
-            || self.command == "artifact show"
             || self.command.starts_with("flash ")
             || self.command.starts_with("job ")
             || self.command == "daemon stop"
@@ -1248,35 +1249,27 @@ fn run_device(arguments: &[String], globals: Globals) -> Result<i32, CliError> {
     let options = Options::parse(&arguments[1..])?;
     match subcommand.as_str() {
         "list" => {
+            let selected = options.optional_one("device")?.map(str::to_string);
+            let deep = options.flag("deep");
+            let registry = profile_registry()?;
             let mut client = public_client(&globals)?;
-            let observations = client.device_list()?;
-            print_device_observations(globals.output, &observations);
-            Ok(0)
-        }
-        "show" => {
-            let device = options.one("device")?;
-            let mut client = public_client(&globals)?;
-            let observations = client.device_list()?;
-            let observation = observations
-                .iter()
-                .find(|observation| observation.observation_id == device)
-                .ok_or_else(|| {
-                    CliError::new(
+            let mut observations = client.device_list()?;
+            if let Some(selected) = &selected {
+                observations.retain(|observation| observation.observation_id == *selected);
+                if observations.is_empty() {
+                    return Err(CliError::new(
                         "OBSERVATION_NOT_FOUND",
-                        format!("No current observation has id {device}."),
+                        format!("No current observation has id {selected}."),
                         5,
                         false,
-                    )
-                })?;
-            print_device_observation(globals.output, observation);
-            Ok(0)
-        }
-        "probe" => {
-            let device = options.one("device")?;
-            let profile = options.one("profile")?;
-            let mut client = public_client(&globals)?;
-            let probe = client.device_probe(device, profile)?;
-            print_device_probe(globals.output, &probe);
+                    ));
+                }
+            }
+            let mut entries = Vec::with_capacity(observations.len());
+            for observation in &observations {
+                entries.push(describe_device(&mut client, &registry, observation, deep)?);
+            }
+            print_device_list(globals.output, deep, selected.as_deref(), &entries);
             Ok(0)
         }
         "wait" => {
@@ -1298,6 +1291,88 @@ fn run_device(arguments: &[String], globals: Globals) -> Result<i32, CliError> {
             "Unknown device command {other:?}. Run 'arkforge help device'."
         ))),
     }
+}
+
+/// The profiles this build can reason about.
+fn profile_registry() -> Result<inference::ProfileRegistry, CliError> {
+    inference::ProfileRegistry::load()
+        .map_err(|message| CliError::new("PROFILE_REJECTED", message, 10, false))
+}
+
+/// One observation with everything this build can say about it.
+struct DeviceEntry {
+    observation: DeviceObservationView,
+    identification: inference::Identification,
+    /// Facts an active probe returned, or `None` when no probe ran. An empty
+    /// vector would claim a probe answered with nothing, which is a different
+    /// fact from not having asked.
+    probe_facts: Option<Vec<(String, String)>>,
+    probe_refusals: Vec<(String, String)>,
+}
+
+/// Identifies one observation, optionally confirming it on the wire.
+///
+/// A deep pass probes every profile the passive evidence says the device could
+/// be — not one guessed profile — so an ambiguous device produces evidence for
+/// each candidate instead of a conclusion for one.
+fn describe_device(
+    client: &mut PublicClient,
+    registry: &inference::ProfileRegistry,
+    observation: &DeviceObservationView,
+    deep: bool,
+) -> Result<DeviceEntry, CliError> {
+    let passive = inference::identify(registry, observation, None);
+    if !deep {
+        return Ok(DeviceEntry {
+            observation: observation.clone(),
+            identification: passive,
+            probe_facts: None,
+            probe_refusals: Vec::new(),
+        });
+    }
+
+    let mut facts: Vec<(String, String)> = Vec::new();
+    let mut refusals = Vec::new();
+    let mut answered = false;
+    for profile in &passive.compatible_profiles {
+        match client.device_probe(&observation.observation_id, profile) {
+            Ok(probe) => {
+                answered = true;
+                facts.extend(
+                    probe
+                        .protocol_facts
+                        .iter()
+                        .map(|fact| (fact.key.clone(), fact.value.clone())),
+                );
+            }
+            Err(error)
+                if matches!(
+                    error.code.as_str(),
+                    "PROBE_REFUSED" | "OBSERVATION_NOT_FOUND" | "NO_PROVIDER_FOR_PROFILE"
+                ) =>
+            {
+                refusals.push((profile.clone(), error.code.clone()));
+            }
+            Err(error) => return Err(error.into()),
+        }
+    }
+    facts.sort();
+    facts.dedup();
+    let identification = if answered {
+        let borrowed = facts
+            .iter()
+            .map(|(key, value)| (key.as_str(), value.as_str()))
+            .collect::<Vec<_>>();
+        inference::identify(registry, observation, Some(&borrowed))
+    } else {
+        passive
+    };
+    Ok(DeviceEntry {
+        observation: observation.clone(),
+        identification,
+        probe_facts: answered.then_some(facts),
+        probe_refusals: refusals,
+    })
 }
 
 fn wait_for_device(
@@ -1392,40 +1467,144 @@ fn run_artifact(arguments: &[String], globals: Globals) -> Result<i32, CliError>
             let imported = store
                 .import(input, metadata.len(), expected)
                 .map_err(artifact_store_error)?;
-            print_artifact_import(globals.output, &imported);
+            // Importing is the moment the caller learns what they have. Making
+            // them run three more queries to find out whether it matches the
+            // board on their desk is the pipework this change exists to remove.
+            let registry = profile_registry()?;
+            let manifest = stored_manifest(&store, &imported.digest)?;
+            let response = manifest_response(&manifest);
+            let compatible = registry.compatible_with_format(&response.format_id);
+            let present = present_matching_devices(&globals, &registry, &compatible)?;
+            print_artifact_import(globals.output, &imported, &response, &compatible, &present);
             Ok(0)
         }
-        "inspect" => {
+        "list" => {
+            let registry = profile_registry()?;
+            let store_root_exists = artifact_store_root(&globals)?.exists();
+            let objects = list_artifacts(&globals)?;
+            let mut items = Vec::with_capacity(objects.len());
+            if store_root_exists && !objects.is_empty() {
+                let store = open_existing_artifact_store(&globals)?;
+                for (digest, size_bytes) in &objects {
+                    items.push(match stored_manifest(&store, digest) {
+                        Ok(manifest) => {
+                            let response = manifest_response(&manifest);
+                            StoredArtifact {
+                                digest: *digest,
+                                size_bytes: *size_bytes,
+                                compatible_profiles: registry
+                                    .compatible_with_format(&response.format_id),
+                                format: Some(response.format_id),
+                                unreadable_reason: None,
+                            }
+                        }
+                        Err(error) => StoredArtifact {
+                            digest: *digest,
+                            size_bytes: *size_bytes,
+                            format: None,
+                            compatible_profiles: Vec::new(),
+                            unreadable_reason: Some(error.code),
+                        },
+                    });
+                }
+            }
+            print_artifact_list(globals.output, &items);
+            Ok(0)
+        }
+        "show" => {
             let artifact_id = options.one("artifact")?;
             let digest = parse_digest("--artifact", artifact_id)?;
+            let registry = profile_registry()?;
             let store = open_existing_artifact_store(&globals)?;
-            let object = store.open_object(&digest).map_err(artifact_store_error)?;
-            let manifest = inspect_container(object)
-                .map_err(|message| CliError::new("ARTIFACT_REJECTED", message, 3, false))?;
+            let manifest = stored_manifest(&store, &digest)?;
             let response = manifest_response(&manifest);
             let coverage = options
                 .optional_one("profile-file")?
                 .map(|path| load_profile_coverage(Path::new(path), &manifest))
                 .transpose()?;
-            print_artifact_inspection(globals.output, artifact_id, &response, coverage.as_ref());
-            Ok(0)
-        }
-        "list" => {
-            let objects = list_artifacts(&globals)?;
-            print_artifact_list(globals.output, &objects);
-            Ok(0)
-        }
-        "show" => {
-            let artifact = options.one("artifact")?;
-            let mut client = public_client(&globals)?;
-            let manifest = client.artifact_show(artifact)?;
-            print_artifact(globals.output, artifact, &manifest);
+            let compatible = registry.compatible_with_format(&response.format_id);
+            print_artifact_inspection(
+                globals.output,
+                artifact_id,
+                &response,
+                coverage.as_ref(),
+                &compatible,
+            );
             Ok(0)
         }
         other => Err(CliError::invalid(format!(
             "Unknown artifact command {other:?}. Run 'arkforge help artifact'."
         ))),
     }
+}
+
+/// One stored object as the artifact list reports it. An object whose bytes do
+/// not parse keeps its place with a null format and a typed reason rather than
+/// disappearing from the listing.
+struct StoredArtifact {
+    digest: Sha256Digest,
+    size_bytes: u64,
+    format: Option<String>,
+    compatible_profiles: Vec<String>,
+    unreadable_reason: Option<String>,
+}
+
+/// Parses one stored object with the parser its framing selects.
+fn stored_manifest(
+    store: &ContentAddressedStore,
+    digest: &Sha256Digest,
+) -> Result<arkforge_artifact::manifest::ArtifactManifest, CliError> {
+    let object = store.open_object(digest).map_err(artifact_store_error)?;
+    inspect_container(object)
+        .map_err(|message| CliError::new("ARTIFACT_REJECTED", message, 3, false))
+}
+
+/// Devices currently on this host that the given profiles could flash.
+///
+/// A runtime that is not running makes this unknown, not empty: reporting "no
+/// matching device" when nothing was enumerated would be a lie with a plausible
+/// shape.
+fn present_matching_devices(
+    globals: &Globals,
+    registry: &inference::ProfileRegistry,
+    artifact_profiles: &[String],
+) -> Result<StatusSection, CliError> {
+    if artifact_profiles.is_empty() {
+        return Ok(StatusSection::enumerated(Vec::new(), Vec::new()));
+    }
+    let mut client = match public_client(globals) {
+        Ok(client) => client,
+        Err(error) => return Ok(StatusSection::unobservable(error.code)),
+    };
+    let observations = match client.device_list() {
+        Ok(observations) => observations,
+        Err(error) => return Ok(StatusSection::unobservable(error.code)),
+    };
+    let mut items = Vec::new();
+    let mut lines = Vec::new();
+    for observation in &observations {
+        let identification = inference::identify(registry, observation, None);
+        if !identification
+            .compatible_profiles
+            .iter()
+            .any(|profile| artifact_profiles.contains(profile))
+        {
+            continue;
+        }
+        items.push(format!(
+            "{{\"observation_id\":{},\"mode\":{},\"identification\":{}}}",
+            json(&observation.observation_id),
+            json(&observation.mode),
+            identification.to_json(json)
+        ));
+        lines.push(format!(
+            "{}  mode={}  profiles={}",
+            observation.observation_id,
+            observation.mode,
+            identification.compatible_profiles.join(", ")
+        ));
+    }
+    Ok(StatusSection::enumerated(items, lines))
 }
 
 fn run_flash(arguments: &[String], globals: Globals) -> Result<i32, CliError> {
@@ -1662,7 +1841,13 @@ fn run_job(arguments: &[String], globals: Globals) -> Result<i32, CliError> {
             let job_id = options.one("job")?;
             let mut client = public_client(&globals)?;
             let job = client.job_show(job_id)?;
-            print_job(globals.output, &job);
+            // The three questions an operator has about a job — what happened,
+            // what was proved, and what may be done next — are answered here
+            // together. Splitting them across commands made the last one easy
+            // to skip, and it is the one that keeps a replay from happening.
+            let events = client.job_events(job_id, 0);
+            let recovery = client.recovery_guide(job_id);
+            print_job(globals.output, &job, events.as_deref(), recovery.as_ref());
             Ok(0)
         }
         "watch" => {
@@ -1747,7 +1932,7 @@ fn print_reconciliation(output: Output, status: &supervisor::ReconcileStatus) {
                 println!("  possible effect: {effect}");
             }
             if status.verdict == "stillUnknown" {
-                println!("Next: arkforge job recovery guide --job {}", status.job_id);
+                println!("Next: arkforge job show --job {}", status.job_id);
             }
         }
         Output::Json => println!(
@@ -1761,10 +1946,7 @@ fn print_reconciliation(output: Output, status: &supervisor::ReconcileStatus) {
             if status.verdict == "stillUnknown" {
                 format!(
                     "[{}]",
-                    json(&format!(
-                        "arkforge job recovery guide --job {}",
-                        status.job_id
-                    ))
+                    json(&format!("arkforge job show --job {}", status.job_id))
                 )
             } else {
                 "[]".into()
@@ -1821,14 +2003,6 @@ fn run_job_recovery(arguments: &[String], globals: Globals) -> Result<i32, CliEr
         return Ok(0);
     };
     match subcommand.as_str() {
-        "guide" => {
-            let options = Options::parse(&arguments[1..])?;
-            let job = options.one("job")?;
-            let mut client = public_client(&globals)?;
-            let guide = client.recovery_guide(job)?;
-            print_recovery_guide(globals.output, &guide);
-            Ok(0)
-        }
         "plan" => {
             let options = Options::parse(&arguments[1..])?;
             let job_id = options.one("job")?;
@@ -2108,15 +2282,29 @@ fn print_signing(
     }
 }
 
-fn print_device_observations(output: Output, observations: &[DeviceObservationView]) {
-    let next = if observations.is_empty() {
-        vec!["arkforge device list".to_string()]
-    } else {
-        vec!["arkforge device probe --device <observation-id> --profile <profile-id>".to_string()]
-    };
+/// The one device query surface: enumeration, single-device filtering, and
+/// active confirmation are the same answer at three depths, not three commands
+/// whose outputs a caller has to reconcile.
+fn print_device_list(output: Output, deep: bool, selected: Option<&str>, entries: &[DeviceEntry]) {
+    let next = entries
+        .iter()
+        .find(|entry| entry.identification.profile.is_some())
+        .map(|entry| {
+            format!(
+                "arkforge flash plan --artifact <artifact-id> --device {} --intent full-restore",
+                entry.observation.observation_id
+            )
+        })
+        .unwrap_or_else(|| {
+            if deep {
+                "arkforge status".to_string()
+            } else {
+                "arkforge device list --deep".to_string()
+            }
+        });
     match output {
         Output::Human => {
-            if observations.is_empty() {
+            if entries.is_empty() {
                 println!("No device observations are available.");
                 println!(
                     "Connect a supported device and make sure the ArkForge runtime is running."
@@ -2124,84 +2312,95 @@ fn print_device_observations(output: Output, observations: &[DeviceObservationVi
                 println!("Next: arkforge device list");
                 return;
             }
-            println!("Device observations ({})", observations.len());
-            for observation in observations {
+            println!("Device observations ({})", entries.len());
+            for entry in entries {
+                let identification = &entry.identification;
                 println!(
-                    "{}  mode={}  identity={}  observed_at_epoch_ms={}",
-                    observation.observation_id,
-                    observation.mode,
-                    observation.identity_strength,
-                    observation.observed_at_epoch_ms
+                    "{}  mode={}  identity={}",
+                    entry.observation.observation_id,
+                    entry.observation.mode,
+                    entry.observation.identity_strength
                 );
-                if observation.malformed_descriptor {
-                    println!("  descriptor: malformed");
+                println!(
+                    "  model                {}",
+                    identification.model.as_deref().unwrap_or("unproven")
+                );
+                println!(
+                    "  compatible profiles  {}",
+                    if identification.compatible_profiles.is_empty() {
+                        "none".to_string()
+                    } else {
+                        identification.compatible_profiles.join(", ")
+                    }
+                );
+                println!(
+                    "  resolution           {}",
+                    identification.profile_resolution
+                );
+                println!(
+                    "  strength             {}",
+                    identification.strength.as_str()
+                );
+                println!(
+                    "  evidence             {}",
+                    identification.evidence.join(", ")
+                );
+                if entry.observation.malformed_descriptor {
+                    println!("  descriptor           malformed");
+                }
+                if let Some(facts) = &entry.probe_facts {
+                    println!("  probe facts ({})", facts.len());
+                    for (key, value) in facts {
+                        println!("    {key} = {value}");
+                    }
+                }
+                for (profile, code) in &entry.probe_refusals {
+                    println!("  probe refused        {profile}: {code}");
                 }
             }
-            println!("Next: {}", next[0]);
+            println!("Next: {next}");
         }
         Output::Json => {
-            let values = observations
+            let values = entries
                 .iter()
-                .map(observation_json)
+                .map(device_entry_json)
                 .collect::<Vec<_>>()
                 .join(",");
             println!(
-                "{{\"schema\":\"arkforge.device-list/v1\",\"observations\":[{values}],\"next_commands\":{}}}",
-                json_array(&next)
+                "{{\"schema\":\"arkforge.device-list/v1\",\"deep\":{deep},\"filtered_to\":{},\"observations\":[{values}],\"next_commands\":[{}]}}",
+                optional_json(selected),
+                json(&next)
             );
         }
     }
 }
 
-fn print_device_observation(output: Output, observation: &DeviceObservationView) {
-    let next = format!(
-        "arkforge device probe --device {} --profile <profile-id>",
-        observation.observation_id
-    );
-    match output {
-        Output::Human => {
-            println!("device              {}", observation.observation_id);
-            println!("observed_at_epoch_ms {}", observation.observed_at_epoch_ms);
-            println!("mode                {}", observation.mode);
-            println!("identity_strength   {}", observation.identity_strength);
-            println!("topology_sha256     {}", observation.topology_sha256);
-            println!("descriptor_sha256   {}", observation.descriptor_sha256);
-            println!("malformed_descriptor {}", observation.malformed_descriptor);
-            print_key_values_human("protocol identity", &observation.protocol_identity);
-            println!("Next: {next}");
+fn device_entry_json(entry: &DeviceEntry) -> String {
+    let probe = match &entry.probe_facts {
+        None => "null".to_string(),
+        Some(facts) => {
+            let facts = facts
+                .iter()
+                .map(|(key, value)| format!("{{\"key\":{},\"value\":{}}}", json(key), json(value)))
+                .collect::<Vec<_>>()
+                .join(",");
+            let refusals = entry
+                .probe_refusals
+                .iter()
+                .map(|(profile, code)| {
+                    format!("{{\"profile\":{},\"code\":{}}}", json(profile), json(code))
+                })
+                .collect::<Vec<_>>()
+                .join(",");
+            format!("{{\"facts\":[{facts}],\"refusals\":[{refusals}]}}")
         }
-        Output::Json => println!(
-            "{{\"schema\":\"arkforge.device-observation/v1\",\"observation\":{},\"next_commands\":[{}]}}",
-            observation_json(observation),
-            json(&next)
-        ),
-    }
-}
-
-fn print_device_probe(output: Output, probe: &DeviceProbeView) {
-    let next = format!(
-        "arkforge flash assess --artifact <artifact-id> --profile {} --device {} --intent full-restore",
-        probe.profile_id, probe.observation.observation_id
-    );
-    match output {
-        Output::Human => {
-            println!("device             {}", probe.observation.observation_id);
-            println!("profile            {}", probe.profile_id);
-            println!("mode               {}", probe.observation.mode);
-            println!("identity_strength  {}", probe.observation.identity_strength);
-            println!("facts_sha256       {}", probe.facts_sha256);
-            print_key_values_human("protocol facts", &probe.protocol_facts);
-            println!("Next: {next}");
-        }
-        Output::Json => println!(
-            "{{\"schema\":\"arkforge.device-probe/v1\",\"observation\":{},\"profile_id\":{},\"facts_sha256\":{},\"protocol_facts\":{},\"next_commands\":[{}]}}",
-            observation_json(&probe.observation),
-            json(&probe.profile_id),
-            json(&probe.facts_sha256),
-            key_values_json(&probe.protocol_facts),
-            json(&next)
-        ),
-    }
+    };
+    format!(
+        "{{{},\"identification\":{},\"probe\":{}}}",
+        observation_fields_json(&entry.observation),
+        entry.identification.to_json(json),
+        probe
+    )
 }
 
 fn print_device_wait(
@@ -2239,65 +2438,137 @@ fn print_device_wait(
     }
 }
 
-fn print_artifact_import(output: Output, imported: &ImportedObject) {
+/// One import answers the whole staging question: what landed in the store,
+/// what it parses as, which profiles declare that format, and which of the
+/// devices on this host could take it.
+fn print_artifact_import(
+    output: Output,
+    imported: &ImportedObject,
+    manifest: &InspectArtifactResponse,
+    compatible: &[String],
+    present: &StatusSection,
+) {
     let artifact_id = imported.digest.to_hex();
-    let next = format!("arkforge artifact inspect --artifact {artifact_id}");
+    let next = match (compatible.first(), present.items.as_ref()) {
+        (Some(profile), Some(items)) if !items.is_empty() => format!(
+            "arkforge flash plan --artifact {artifact_id} --profile {profile} --device <observation-id> --intent full-restore"
+        ),
+        _ => format!("arkforge artifact show --artifact {artifact_id}"),
+    };
     match output {
         Output::Human => {
             println!("Artifact imported into the content-addressed store.");
             println!("artifact_id   {artifact_id}");
-            println!("sha256       {artifact_id}");
-            println!("size_bytes   {}", imported.size_bytes);
-            println!("deduplicated {}", imported.deduplicated);
+            println!("sha256        {artifact_id}");
+            println!("size_bytes    {}", imported.size_bytes);
+            println!("deduplicated  {}", imported.deduplicated);
+            println!("format        {}", manifest.format_id);
+            println!("confidence    {}", manifest.confidence);
+            println!("members       {}", manifest.members.len());
+            println!("partitions    {}", manifest.partitions.len());
+            println!(
+                "compatible profiles  {}",
+                if compatible.is_empty() {
+                    "none".to_string()
+                } else {
+                    compatible.join(", ")
+                }
+            );
+            present.print_human(
+                "matching devices present",
+                "None of the connected devices declare a compatible profile.",
+            );
             println!("No device was accessed or mutated.");
             println!("Next: {next}");
         }
         Output::Json => println!(
-            "{{\"schema\":\"arkforge.artifact-import/v1\",\"artifact_id\":{},\"sha256\":{},\"size_bytes\":{},\"deduplicated\":{},\"host_store_mutated\":{},\"device_accessed\":false,\"next_commands\":[{}]}}",
+            "{{\"schema\":\"arkforge.artifact-import/v1\",\"artifact_id\":{},\"sha256\":{},\"size_bytes\":{},\"deduplicated\":{},\"host_store_mutated\":{},\"device_accessed\":false,\"manifest_summary\":{},\"compatible_profiles\":{},\"present_devices\":{},\"next_commands\":[{}]}}",
             json(&artifact_id),
             json(&artifact_id),
             imported.size_bytes,
             imported.deduplicated,
             !imported.deduplicated,
+            manifest_summary_json(manifest),
+            json_strings(compatible),
+            present.json(),
             json(&next)
         ),
     }
 }
 
-fn print_artifact_list(output: Output, objects: &[(Sha256Digest, u64)]) {
-    let next = if objects.is_empty() {
-        vec!["arkforge artifact import --file <firmware-file>".to_string()]
+/// A bounded manifest projection. The full member and partition tables belong
+/// to `artifact show`; repeating them in every composite document would make
+/// the composites grow without bound.
+fn manifest_summary_json(manifest: &InspectArtifactResponse) -> String {
+    format!(
+        "{{\"format_id\":{},\"content_sha256\":{},\"manifest_sha256\":{},\"size_bytes\":{},\"confidence\":{},\"member_count\":{},\"partition_count\":{},\"unclassified_member_count\":{},\"execution_relevant_unknown_count\":{}}}",
+        json(&manifest.format_id),
+        json(&manifest.content_sha256),
+        json(&manifest.manifest_sha256),
+        manifest.size_bytes,
+        json(&manifest.confidence),
+        manifest.members.len(),
+        manifest.partitions.len(),
+        manifest.unclassified_members.len(),
+        manifest.execution_relevant_unknowns.len(),
+    )
+}
+
+fn print_artifact_list(output: Output, items: &[StoredArtifact]) {
+    let next = if items.is_empty() {
+        "arkforge artifact import --file <firmware-file>".to_string()
     } else {
-        vec!["arkforge artifact inspect --artifact <artifact-id>".to_string()]
+        "arkforge artifact show --artifact <artifact-id>".to_string()
     };
     match output {
         Output::Human => {
-            if objects.is_empty() {
+            if items.is_empty() {
                 println!("No artifacts are stored in this runtime.");
-                println!("Next: {}", next[0]);
+                println!("Next: {next}");
                 return;
             }
-            println!("Stored artifacts ({})", objects.len());
-            for (digest, size) in objects {
-                println!("{}  size_bytes={size}", digest.to_hex());
+            println!("Stored artifacts ({})", items.len());
+            for item in items {
+                println!("{}  size_bytes={}", item.digest.to_hex(), item.size_bytes);
+                match (&item.format, &item.unreadable_reason) {
+                    (Some(format), _) => {
+                        println!("  format               {format}");
+                        println!(
+                            "  compatible profiles  {}",
+                            if item.compatible_profiles.is_empty() {
+                                "none".to_string()
+                            } else {
+                                item.compatible_profiles.join(", ")
+                            }
+                        );
+                    }
+                    (None, Some(reason)) => {
+                        println!("  format               unreadable ({reason})")
+                    }
+                    (None, None) => println!("  format               unreadable"),
+                }
             }
-            println!("Next: {}", next[0]);
+            println!("Next: {next}");
         }
         Output::Json => {
-            let artifacts = objects
+            let artifacts = items
                 .iter()
-                .map(|(digest, size)| {
+                .map(|item| {
                     format!(
-                        "{{\"artifact_id\":{},\"sha256\":{},\"size_bytes\":{size}}}",
-                        json(&digest.to_hex()),
-                        json(&digest.to_hex())
+                        "{{\"artifact_id\":{},\"sha256\":{},\"size_bytes\":{},\"format\":{},\"compatible_profiles\":{},\"unreadable_reason\":{}}}",
+                        json(&item.digest.to_hex()),
+                        json(&item.digest.to_hex()),
+                        item.size_bytes,
+                        optional_json(item.format.as_deref()),
+                        json_strings(&item.compatible_profiles),
+                        optional_json(item.unreadable_reason.as_deref())
                     )
                 })
                 .collect::<Vec<_>>()
                 .join(",");
             println!(
-                "{{\"schema\":\"arkforge.artifact-list/v1\",\"artifacts\":[{artifacts}],\"next_commands\":{}}}",
-                json_array(&next)
+                "{{\"schema\":\"arkforge.artifact-list/v1\",\"artifacts\":[{artifacts}],\"next_commands\":[{}]}}",
+                json(&next)
             );
         }
     }
@@ -2308,13 +2579,27 @@ fn print_artifact_inspection(
     artifact_id: &str,
     manifest: &InspectArtifactResponse,
     coverage: Option<&ProfileCoverage>,
+    compatible: &[String],
 ) {
-    let next = format!(
-        "arkforge flash assess --artifact {artifact_id} --profile <profile-id> --device <observation-id> --intent full-restore"
-    );
+    let next = match compatible.first() {
+        Some(profile) => format!(
+            "arkforge flash plan --artifact {artifact_id} --profile {profile} --device <observation-id> --intent full-restore"
+        ),
+        None => format!(
+            "arkforge flash plan --artifact {artifact_id} --profile <profile-id> --device <observation-id> --intent full-restore"
+        ),
+    };
     match output {
         Output::Human => {
             print_artifact_human(artifact_id, manifest);
+            println!(
+                "compatible profiles  {}",
+                if compatible.is_empty() {
+                    "none".to_string()
+                } else {
+                    compatible.join(", ")
+                }
+            );
             if let Some(coverage) = coverage {
                 print_profile_coverage_human(coverage);
             }
@@ -2322,28 +2607,12 @@ fn print_artifact_inspection(
             println!("Next: {next}");
         }
         Output::Json => println!(
-            "{{\"schema\":\"arkforge.artifact-inspection/v1\",{},\"profile_coverage\":{},\"device_accessed\":false,\"next_commands\":[{}]}}",
+            "{{\"schema\":\"arkforge.artifact-inspection/v1\",{},\"compatible_profiles\":{},\"profile_coverage\":{},\"device_accessed\":false,\"next_commands\":[{}]}}",
             artifact_fields_json(artifact_id, manifest),
+            json_strings(compatible),
             coverage
                 .map(profile_coverage_json)
                 .unwrap_or_else(|| "null".into()),
-            json(&next)
-        ),
-    }
-}
-
-fn print_artifact(output: Output, artifact_id: &str, manifest: &InspectArtifactResponse) {
-    let next = format!(
-        "arkforge flash assess --artifact {artifact_id} --profile <profile-id> --device <observation-id> --intent full-restore"
-    );
-    match output {
-        Output::Human => {
-            print_artifact_human(artifact_id, manifest);
-            println!("Next: {next}");
-        }
-        Output::Json => println!(
-            "{{\"schema\":\"arkforge.artifact/v1\",{},\"next_commands\":[{}]}}",
-            artifact_fields_json(artifact_id, manifest),
             json(&next)
         ),
     }
@@ -2627,25 +2896,156 @@ fn print_jobs(output: Output, jobs: &[JobSummary]) {
     }
 }
 
-fn print_job(output: Output, job: &JobSummary) {
+/// The most recent events a job document carries.
+///
+/// A tail rather than the whole journal: the journal is the durable record and
+/// stays queryable, while a composite document that grew with job length would
+/// stop being one an Agent can budget for.
+const JOB_EVENT_TAIL: usize = 20;
+
+fn print_job(
+    output: Output,
+    job: &JobSummary,
+    events: Result<&[JobEvent], &PublicClientError>,
+    recovery: Result<&RecoveryGuideView, &PublicClientError>,
+) {
+    // Recovery guidance is not advice about a broken job only: an unknown
+    // outcome is exactly the state where the wrong next move is a replay.
+    let recovery_eligible =
+        job.state == "outcomeUnknown" || (job.terminal && job.state != "succeeded");
     let next = if job.state == "outcomeUnknown" {
-        vec![format!("arkforge job recovery guide --job {}", job.job_id)]
+        vec![format!("arkforge job reconcile --job {}", job.job_id)]
     } else if job.terminal {
         Vec::new()
     } else {
-        vec![format!("arkforge job show --job {}", job.job_id)]
+        vec![format!("arkforge watch --job {}", job.job_id)]
     };
+    let receipts = events
+        .map(|events| {
+            events
+                .iter()
+                .filter_map(|event| event.receipt.as_ref())
+                .collect::<Vec<_>>()
+        })
+        .unwrap_or_default();
+    let tail = events
+        .map(|events| &events[events.len().saturating_sub(JOB_EVENT_TAIL)..])
+        .unwrap_or(&[]);
+
     match output {
         Output::Human => {
             print_job_human(job);
+            match events {
+                Ok(all) => {
+                    println!("events ({} total, showing last {})", all.len(), tail.len());
+                    for event in tail {
+                        println!(
+                            "  {}  {}  state={}",
+                            event.sequence,
+                            event.kind.as_str(),
+                            event.job_state
+                        );
+                    }
+                    println!("receipts ({})", receipts.len());
+                    for receipt in &receipts {
+                        println!(
+                            "  {}  disposition={}  verification={}",
+                            receipt.step_id, receipt.disposition, receipt.verification_outcome
+                        );
+                    }
+                }
+                Err(error) => println!("events  not observable ({})", error.code),
+            }
+            println!("recovery");
+            println!("  eligible                     {recovery_eligible}");
+            match recovery {
+                Ok(guide) => {
+                    println!(
+                        "  original_outcome_immutable   {}",
+                        guide.original_outcome_immutable
+                    );
+                    println!(
+                        "  automatic_replay_forbidden   {}",
+                        guide.automatic_replay_forbidden
+                    );
+                    println!(
+                        "  complete_overwrite_supported {}",
+                        guide.complete_overwrite_supported
+                    );
+                    if !guide.contract_id.is_empty() {
+                        println!("  contract                     {}", guide.contract_id);
+                        println!("  contract_version             {}", guide.contract_version);
+                        println!("  contract_sha256              {}", guide.contract_sha256);
+                    }
+                    for action in &guide.actions {
+                        println!("  action: {action}");
+                    }
+                }
+                Err(error) => println!("  not observable ({})", error.code),
+            }
             if let Some(command) = next.first() {
                 println!("Next: {command}");
             }
         }
         Output::Json => println!(
-            "{{\"schema\":\"arkforge.job/v1\",\"job\":{},\"next_commands\":{}}}",
+            "{{\"schema\":\"arkforge.job/v1\",\"job\":{},\"events\":{},\"receipts\":{},\"recovery\":{},\"next_commands\":{}}}",
             job_json(job),
+            match events {
+                Ok(all) => format!(
+                    "{{\"available\":true,\"complete\":true,\"reason\":null,\"total\":{},\"tail_limit\":{JOB_EVENT_TAIL},\"items\":[{}]}}",
+                    all.len(),
+                    tail.iter()
+                        .map(job_event_json)
+                        .collect::<Vec<_>>()
+                        .join(",")
+                ),
+                Err(error) => format!(
+                    "{{\"available\":false,\"complete\":false,\"reason\":{},\"total\":null,\"tail_limit\":{JOB_EVENT_TAIL},\"items\":null}}",
+                    json(&error.code)
+                ),
+            },
+            match events {
+                Ok(_) => format!(
+                    "[{}]",
+                    receipts
+                        .iter()
+                        .map(|receipt| receipt_json(receipt))
+                        .collect::<Vec<_>>()
+                        .join(",")
+                ),
+                Err(_) => "null".to_string(),
+            },
+            recovery_json(recovery_eligible, recovery),
             json_array(&next)
+        ),
+    }
+}
+
+fn recovery_json(
+    eligible: bool,
+    recovery: Result<&RecoveryGuideView, &PublicClientError>,
+) -> String {
+    match recovery {
+        Ok(guide) => format!(
+            "{{\"eligible\":{eligible},\"available\":true,\"reason\":null,\"original_outcome_immutable\":{},\"automatic_replay_forbidden\":{},\"complete_overwrite_supported\":{},\"contract\":{},\"actions\":{}}}",
+            guide.original_outcome_immutable,
+            guide.automatic_replay_forbidden,
+            guide.complete_overwrite_supported,
+            if guide.contract_id.is_empty() {
+                "null".to_string()
+            } else {
+                format!(
+                    "{{\"id\":{},\"version\":{},\"sha256\":{}}}",
+                    json(&guide.contract_id),
+                    json(&guide.contract_version),
+                    json(&guide.contract_sha256)
+                )
+            },
+            json_array(&guide.actions)
+        ),
+        Err(error) => format!(
+            "{{\"eligible\":{eligible},\"available\":false,\"reason\":{},\"original_outcome_immutable\":null,\"automatic_replay_forbidden\":null,\"complete_overwrite_supported\":null,\"contract\":null,\"actions\":null}}",
+            json(&error.code)
         ),
     }
 }
@@ -2786,56 +3186,6 @@ fn render_job_jsonl(
     records
 }
 
-fn print_recovery_guide(output: Output, guide: &RecoveryGuideView) {
-    match output {
-        Output::Human => {
-            println!("job                           {}", guide.job_id);
-            println!("original_state                {}", guide.original_state);
-            println!(
-                "original_outcome_immutable     {}",
-                guide.original_outcome_immutable
-            );
-            println!(
-                "automatic_replay_forbidden     {}",
-                guide.automatic_replay_forbidden
-            );
-            println!(
-                "complete_overwrite_supported   {}",
-                guide.complete_overwrite_supported
-            );
-            if !guide.contract_id.is_empty() {
-                println!("recovery_contract             {}", guide.contract_id);
-                println!("recovery_contract_version     {}", guide.contract_version);
-                println!("recovery_contract_sha256      {}", guide.contract_sha256);
-            }
-            println!("actions");
-            for action in &guide.actions {
-                println!("  {action}");
-            }
-            println!("Next: Follow the actions in order. Never replay the original intent.");
-        }
-        Output::Json => println!(
-            "{{\"schema\":\"arkforge.recovery-guide/v1\",\"job_id\":{},\"original_state\":{},\"original_outcome_immutable\":{},\"automatic_replay_forbidden\":{},\"complete_overwrite_supported\":{},\"contract\":{},\"actions\":{},\"next_commands\":[]}}",
-            json(&guide.job_id),
-            json(&guide.original_state),
-            guide.original_outcome_immutable,
-            guide.automatic_replay_forbidden,
-            guide.complete_overwrite_supported,
-            if guide.contract_id.is_empty() {
-                "null".to_string()
-            } else {
-                format!(
-                    "{{\"id\":{},\"version\":{},\"sha256\":{}}}",
-                    json(&guide.contract_id),
-                    json(&guide.contract_version),
-                    json(&guide.contract_sha256)
-                )
-            },
-            json_array(&guide.actions)
-        ),
-    }
-}
-
 fn print_job_human(job: &JobSummary) {
     println!(
         "{}  state={}  terminal={}  steps={}/{}  sequence={}",
@@ -2887,8 +3237,15 @@ fn print_effects_human(title: &str, effects: &[Effect]) {
 }
 
 fn observation_json(observation: &DeviceObservationView) -> String {
+    format!("{{{}}}", observation_fields_json(observation))
+}
+
+/// The observation members without their enclosing braces, so a composite
+/// document can inline them beside its own members instead of restating the
+/// field list and letting the two drift.
+fn observation_fields_json(observation: &DeviceObservationView) -> String {
     format!(
-        "{{\"observation_id\":{},\"observed_at_epoch_ms\":{},\"mode\":{},\"topology_sha256\":{},\"descriptor_sha256\":{},\"serial_sha256\":{},\"serial_evidence_kind\":{},\"identity_strength\":{},\"malformed_descriptor\":{},\"protocol_identity\":{}}}",
+        "\"observation_id\":{},\"observed_at_epoch_ms\":{},\"mode\":{},\"topology_sha256\":{},\"descriptor_sha256\":{},\"serial_sha256\":{},\"serial_evidence_kind\":{},\"identity_strength\":{},\"malformed_descriptor\":{},\"protocol_identity\":{}",
         json(&observation.observation_id),
         observation.observed_at_epoch_ms,
         json(&observation.mode),
@@ -2976,6 +3333,32 @@ fn job_json(job: &JobSummary) -> String {
     )
 }
 
+fn receipt_json(receipt: &ActionReceiptSummary) -> String {
+    format!(
+        "{{\"job_id\":{},\"plan_id\":{},\"step_id\":{},\"action_id\":{},\"attempt_id\":{},\"permit_id\":{},\"disposition\":{},\"evidence_sha256\":{},\"verification_outcome\":{},\"verification_strength\":{},\"verified_range_start\":{},\"verified_range_length\":{},\"typed_skip_reason\":{},\"failure_classification\":{},\"facts\":{}}}",
+        json(&receipt.job_id),
+        json(&receipt.plan_id),
+        json(&receipt.step_id),
+        json(&receipt.action_id),
+        json(&receipt.attempt_id),
+        json(&receipt.permit_id),
+        json(&receipt.disposition),
+        json(&hex_bytes(&receipt.evidence_sha256)),
+        json(&receipt.verification_outcome),
+        json(&receipt.verification_strength),
+        receipt.verified_range_start,
+        receipt.verified_range_length,
+        optional_json(
+            (!receipt.typed_skip_reason.is_empty()).then_some(receipt.typed_skip_reason.as_str())
+        ),
+        optional_json(
+            (!receipt.failure_classification.is_empty())
+                .then_some(receipt.failure_classification.as_str())
+        ),
+        key_values_json(&receipt.facts)
+    )
+}
+
 fn job_event_json(event: &JobEvent) -> String {
     let admission = event
         .admission
@@ -3026,26 +3409,7 @@ fn job_event_json(event: &JobEvent) -> String {
     let receipt = event
         .receipt
         .as_ref()
-        .map(|receipt| {
-            format!(
-                "{{\"job_id\":{},\"plan_id\":{},\"step_id\":{},\"action_id\":{},\"attempt_id\":{},\"permit_id\":{},\"disposition\":{},\"evidence_sha256\":{},\"verification_outcome\":{},\"verification_strength\":{},\"verified_range_start\":{},\"verified_range_length\":{},\"typed_skip_reason\":{},\"failure_classification\":{},\"facts\":{}}}",
-                json(&receipt.job_id),
-                json(&receipt.plan_id),
-                json(&receipt.step_id),
-                json(&receipt.action_id),
-                json(&receipt.attempt_id),
-                json(&receipt.permit_id),
-                json(&receipt.disposition),
-                json(&hex_bytes(&receipt.evidence_sha256)),
-                json(&receipt.verification_outcome),
-                json(&receipt.verification_strength),
-                receipt.verified_range_start,
-                receipt.verified_range_length,
-                optional_json((!receipt.typed_skip_reason.is_empty()).then_some(receipt.typed_skip_reason.as_str())),
-                optional_json((!receipt.failure_classification.is_empty()).then_some(receipt.failure_classification.as_str())),
-                key_values_json(&receipt.facts)
-            )
-        })
+        .map(receipt_json)
         .unwrap_or_else(|| "null".into());
     format!(
         "{{\"job_id\":{},\"sequence\":{},\"kind\":{},\"at_epoch_ms\":{},\"journal_record_sha256\":{},\"job_state\":{},\"admission\":{},\"control_request\":{},\"receipt\":{},\"facts\":{}}}",
@@ -3089,7 +3453,7 @@ impl Options {
             if option.is_empty() {
                 return Err(CliError::invalid("'--' is not a command option."));
             }
-            if option == "detach" {
+            if is_boolean_option(option) {
                 values
                     .entry(option.to_string())
                     .or_default()
@@ -3132,6 +3496,11 @@ impl Options {
         }
     }
 
+    /// Whether a value-less flag was supplied.
+    fn flag(&self, name: &str) -> bool {
+        self.values.contains_key(name)
+    }
+
     fn optional_one(&self, name: &str) -> Result<Option<&str>, CliError> {
         match self.values.get(name).map(Vec::as_slice) {
             Some([value]) => Ok(Some(value)),
@@ -3149,6 +3518,15 @@ impl Options {
             .map(Vec::as_slice)
             .ok_or_else(|| CliError::invalid(format!("Supply at least one --{name}.")))
     }
+}
+
+/// Whether this option takes no value, decided by the same typed tree that
+/// generates help and completion. Asking the tree rather than keeping a second
+/// list is what keeps the parser and the published contract from drifting.
+fn is_boolean_option(name: &str) -> bool {
+    HELP.iter()
+        .flat_map(HelpSpec::typed_options)
+        .any(|option| option.name == name && option.value_type == "boolean")
 }
 
 fn parse_u64(option: &str, value: &str) -> Result<u64, CliError> {
@@ -3600,20 +3978,16 @@ fn remediation(code: &str) -> Option<&'static str> {
         "PROTOCOL_REFUSED" | "IPC_RESPONSE_INVALID" | "IPC_RESPONSE_MISMATCH" => {
             Some("arkforge --version")
         }
-        "ARTIFACT_NOT_FOUND" | "ARTIFACT_NOT_INSPECTED" => {
-            Some("arkforge help artifact --format json")
-        }
+        "ARTIFACT_NOT_FOUND" | "ARTIFACT_NOT_INSPECTED" => Some("arkforge artifact list"),
         "ARTIFACT_FILE_NOT_FOUND" => Some("arkforge help artifact import --format json"),
         "ARTIFACT_IMPORT_REFUSED" | "ARTIFACT_STORE_FAILED" => Some("arkforge artifact list"),
-        "ARTIFACT_REJECTED" => Some("arkforge help artifact inspect --format json"),
+        "ARTIFACT_REJECTED" => Some("arkforge help artifact show --format json"),
         "PROFILE_FILE_NOT_FOUND" | "PROFILE_REJECTED" => {
-            Some("arkforge help artifact inspect --format json")
+            Some("arkforge help artifact show --format json")
         }
         "OBSERVATION_NOT_FOUND" => Some("arkforge device list"),
         "DEVICE_WAIT_TIMEOUT" | "AMBIGUOUS_DEVICE" => Some("arkforge device list"),
-        "PROFILE_NOT_FOUND" | "NO_PROVIDER_FOR_PROFILE" => {
-            Some("arkforge help device probe --format json")
-        }
+        "PROFILE_NOT_FOUND" | "NO_PROVIDER_FOR_PROFILE" => Some("arkforge device list --deep"),
         "PLAN_UNAVAILABLE"
         | "RECOVERY_PLAN_UNAVAILABLE"
         | "AUTHORITY_SUPPORT_UNAVAILABLE"
@@ -3995,15 +4369,15 @@ static HELP: &[HelpSpec] = &[
     },
     HelpSpec {
         command: "device",
-        summary: "Discover, show, probe, and wait for exact device observations.",
-        usage: "arkforge device <list|show|probe|wait> [options]",
+        summary: "Discover, identify, and wait for exact device observations.",
+        usage: "arkforge device <list|wait> [options]",
         effect: "Read-only. Device commands cannot select a target, materialize authority, or mutate a device.",
         requires: &["A running ArkForge runtime for the selected --runtime-dir."],
-        produces: &["Current observations or provider-specific probe evidence."],
+        produces: &["Current observations with their identification evidence."],
         options: &[],
         examples: &[
             "arkforge device list",
-            "arkforge help device probe --format json",
+            "arkforge help device list --format json",
         ],
         next: &["arkforge device list"],
         exits: &[
@@ -4016,80 +4390,36 @@ static HELP: &[HelpSpec] = &[
     },
     HelpSpec {
         command: "device list",
-        summary: "List every current device observation without choosing a default.",
-        usage: "arkforge device list",
-        effect: "Read-only discovery through runtime-dir/public.sock. The device is not mutated and no observation is selected.",
+        summary: "List current observations with what this build can prove about each.",
+        usage: "arkforge device list [--device <observation-id>] [--deep]",
+        effect: "Read-only discovery through runtime-dir/public.sock. --deep additionally probes every candidate profile. No observation is selected and no device is mutated.",
         requires: &["A running ArkForge runtime."],
         produces: &[
-            "arkforge.device-list/v1 observations with identity evidence and current mode.",
+            "arkforge.device-list/v1 observations, each with an identification block reporting compatible profiles and physical model separately, with evidence and strength.",
         ],
-        options: &[],
-        examples: &["arkforge --output json device list"],
-        next: &["arkforge device probe --device <observation-id> --profile <profile-id>"],
-        exits: &[
-            (0, "Observation list produced, including an empty list."),
-            (3, "Discovery was refused."),
-            (5, "The runtime is not available."),
-            (10, "Discovery or IPC failed."),
-        ],
-    },
-    HelpSpec {
-        command: "device show",
-        summary: "Show complete identity evidence for one exact current observation.",
-        usage: "arkforge device show --device <observation-id>",
-        effect: "Read-only discovery followed by exact-id selection. It does not persist a target binding or mutate a device.",
-        requires: &["One exact observation id returned by the current runtime."],
-        produces: &[
-            "arkforge.device-observation/v1 with mode, time, topology/descriptor digests, identity strength, and protocol identity.",
-        ],
-        options: &[(
-            "--device <observation-id>",
-            "Exact current observation; required.",
-        )],
-        examples: &["arkforge --output json device show --device OBS-PREFLIGHT"],
-        next: &["arkforge device probe --device <observation-id> --profile <profile-id>"],
-        exits: &[
-            (0, "Exact observation produced."),
-            (2, "The observation id is missing."),
-            (5, "The runtime or observation was not found."),
-            (10, "Discovery or IPC failed."),
-        ],
-    },
-    HelpSpec {
-        command: "device probe",
-        summary: "Probe one exact observation against one explicit device profile.",
-        usage: "arkforge device probe --device <observation-id> --profile <profile-id>",
-        effect: "Read-only provider probe. It neither selects the device for later commands nor mutates it.",
-        requires: &[
-            "An exact observation_id from the current device list.",
-            "An explicit loaded profile id.",
-        ],
-        produces: &["arkforge.device-probe/v1 with provider facts and a facts digest."],
         options: &[
             (
                 "--device <observation-id>",
-                "Exact current observation; required.",
+                "Report only this exact current observation; optional.",
             ),
             (
-                "--profile <profile-id>",
-                "Explicit loaded profile; required.",
+                "--deep",
+                "Also probe every candidate profile and report the facts it returned.",
             ),
         ],
         examples: &[
-            "arkforge --output json device probe --device OBS-PREFLIGHT --profile org.openharmony.dayu200@1.0.0",
+            "arkforge --output json device list",
+            "arkforge --output json device list --deep",
         ],
         next: &[
-            "arkforge flash assess --artifact <artifact-id> --profile <profile-id> --device <observation-id> --intent full-restore",
+            "arkforge flash plan --artifact <artifact-id> --profile <profile-id> --device <observation-id> --intent full-restore",
         ],
         exits: &[
-            (0, "Probe evidence produced."),
-            (2, "Required inputs are missing or invalid."),
-            (3, "The provider refused the probe."),
-            (
-                5,
-                "The runtime, observation, profile, or provider was not found.",
-            ),
-            (10, "Probe or IPC failed."),
+            (0, "Observation list produced, including an empty list."),
+            (2, "Command or option is invalid."),
+            (3, "Discovery or a candidate probe was refused."),
+            (5, "The runtime or requested observation was not found."),
+            (10, "Discovery or IPC failed."),
         ],
     },
     HelpSpec {
@@ -4133,15 +4463,15 @@ static HELP: &[HelpSpec] = &[
     },
     HelpSpec {
         command: "artifact",
-        summary: "Import, inspect, list, and show content-addressed firmware artifacts.",
-        usage: "arkforge artifact <import|inspect|list|show> [options]",
-        effect: "Import writes only the local content-addressed store. Inspect/list are offline; show queries the public runtime. No artifact command mutates a device.",
+        summary: "Import, list, and show content-addressed firmware artifacts.",
+        usage: "arkforge artifact <import|list|show> [options]",
+        effect: "Import writes only the local content-addressed store; list and show are offline reads of it. No artifact command mutates a device.",
         requires: &["An explicit runtime directory or the per-user default."],
         produces: &["Artifact IDs, stored-object lists, or complete inspected manifests."],
         options: &[],
         examples: &[
             "arkforge artifact import --file <firmware-file>",
-            "arkforge help artifact inspect --format json",
+            "arkforge help artifact show --format json",
         ],
         next: &["arkforge artifact import --file <firmware-file>"],
         exits: &[
@@ -4154,15 +4484,15 @@ static HELP: &[HelpSpec] = &[
     },
     HelpSpec {
         command: "artifact import",
-        summary: "Hash and atomically import one firmware file into the runtime store.",
+        summary: "Import one firmware file and report what it is and what it fits.",
         usage: "arkforge artifact import --file <firmware-file> [--expect-sha256 <sha256>]",
-        effect: "Host write only. It creates or deduplicates one content-addressed object after quota, size, and optional digest checks; no daemon or device is accessed.",
+        effect: "Host write only. It creates or deduplicates one content-addressed object after quota, size, and optional digest checks, then reads the stored bytes and the current observations; no device is mutated.",
         requires: &[
             "One regular input file.",
             "Enough store quota and volume reserve for the complete input.",
         ],
         produces: &[
-            "arkforge.artifact-import/v1 with artifact_id, SHA-256, size, deduplication status, and the exact inspect command.",
+            "arkforge.artifact-import/v1 with CAS facts, a bounded manifest summary, the profiles that declare the parsed format, and the connected devices those profiles could flash. The present-device section reports availability, so a runtime that is not running is unknown rather than empty.",
         ],
         options: &[
             (
@@ -4175,7 +4505,7 @@ static HELP: &[HelpSpec] = &[
             ),
         ],
         examples: &["arkforge --output json artifact import --file ./firmware.tar.gz"],
-        next: &["arkforge artifact inspect --artifact <returned-artifact-id>"],
+        next: &["arkforge artifact show --artifact <returned-artifact-id>"],
         exits: &[
             (0, "Artifact imported or deduplicated and synced."),
             (2, "Input options or digest syntax are invalid."),
@@ -4188,13 +4518,30 @@ static HELP: &[HelpSpec] = &[
         ],
     },
     HelpSpec {
-        command: "artifact inspect",
-        summary: "Inspect one stored artifact offline and optionally compare profile target coverage.",
-        usage: "arkforge artifact inspect --artifact <artifact-id> [--profile-file <file>]",
-        effect: "Read-only artifact parsing after opening bytes by content digest. It never reparses a caller path and never accesses a device.",
+        command: "artifact list",
+        summary: "List every stored object with the format and profiles it parses as.",
+        usage: "arkforge artifact list",
+        effect: "Read-only when a store exists. An absent store is reported as an empty list and is not created. Each stored object is parsed to report its format, so listing costs one container read per object.",
+        requires: &[],
+        produces: &[
+            "arkforge.artifact-list/v1 with artifact ids, byte sizes, the parsed format, and the profiles declaring it; an object that cannot be parsed carries a null format and a typed reason.",
+        ],
+        options: &[],
+        examples: &["arkforge --output json artifact list"],
+        next: &["arkforge artifact show --artifact <artifact-id>"],
+        exits: &[
+            (0, "Artifact list produced, including an empty list."),
+            (10, "The content store could not be read."),
+        ],
+    },
+    HelpSpec {
+        command: "artifact show",
+        summary: "Parse one stored artifact offline and optionally compare profile coverage.",
+        usage: "arkforge artifact show --artifact <artifact-id> [--profile-file <file>]",
+        effect: "Read-only artifact parsing after opening bytes by content digest. It never reparses a caller path, never contacts the runtime, and never accesses a device.",
         requires: &["One exact artifact id already present in this runtime store."],
         produces: &[
-            "arkforge.artifact-inspection/v1 with the complete manifest and optional ordered profile target coverage.",
+            "arkforge.artifact-inspection/v1 with the complete manifest, the profiles declaring its format, and optional ordered profile target coverage.",
         ],
         options: &[
             (
@@ -4207,10 +4554,10 @@ static HELP: &[HelpSpec] = &[
             ),
         ],
         examples: &[
-            "arkforge --output json artifact inspect --artifact <64-lowercase-hex> --profile-file profiles/dayu200.yaml",
+            "arkforge --output json artifact show --artifact <64-lowercase-hex> --profile-file profiles/dayu200.yaml",
         ],
         next: &[
-            "arkforge flash assess --artifact <artifact-id> --profile <profile-id> --device <observation-id> --intent full-restore",
+            "arkforge flash plan --artifact <artifact-id> --profile <profile-id> --device <observation-id> --intent full-restore",
         ],
         exits: &[
             (0, "Manifest and optional coverage produced."),
@@ -4221,46 +4568,6 @@ static HELP: &[HelpSpec] = &[
                 "The artifact store, object, or profile file was not found.",
             ),
             (10, "The content store failed."),
-        ],
-    },
-    HelpSpec {
-        command: "artifact list",
-        summary: "List every content-addressed object stored in this runtime.",
-        usage: "arkforge artifact list",
-        effect: "Read-only when a store exists. An absent store is reported as an empty list and is not created.",
-        requires: &[],
-        produces: &["arkforge.artifact-list/v1 with artifact ids and byte sizes."],
-        options: &[],
-        examples: &["arkforge --output json artifact list"],
-        next: &["arkforge artifact inspect --artifact <artifact-id>"],
-        exits: &[
-            (0, "Artifact list produced, including an empty list."),
-            (10, "The content store could not be read."),
-        ],
-    },
-    HelpSpec {
-        command: "artifact show",
-        summary: "Show the complete manifest for one content-addressed artifact.",
-        usage: "arkforge artifact show --artifact <artifact-id>",
-        effect: "Read-only public-socket inspection. It does not import bytes, alter the store, or mutate a device.",
-        requires: &["One exact artifact SHA-256 id already present in the runtime store."],
-        produces: &[
-            "arkforge.artifact/v1 with members, partitions, facts, unknowns, confidence, and manifest digest.",
-        ],
-        options: &[(
-            "--artifact <artifact-id>",
-            "Exact content SHA-256 id; required.",
-        )],
-        examples: &["arkforge --output json artifact show --artifact <64-lowercase-hex>"],
-        next: &[
-            "arkforge flash assess --artifact <artifact-id> --profile <profile-id> --device <observation-id> --intent full-restore",
-        ],
-        exits: &[
-            (0, "Artifact manifest produced."),
-            (2, "The artifact id is missing or malformed."),
-            (3, "Artifact bytes were rejected by inspection."),
-            (5, "The runtime or artifact was not found."),
-            (10, "Inspection or IPC failed."),
         ],
     },
     HelpSpec {
@@ -4441,10 +4748,7 @@ static HELP: &[HelpSpec] = &[
         requires: &["A running ArkForge runtime."],
         produces: &["Durable point-in-time job status or typed recovery guidance."],
         options: &[],
-        examples: &[
-            "arkforge job list",
-            "arkforge help job recovery --format json",
-        ],
+        examples: &["arkforge job list", "arkforge help job show --format json"],
         next: &["arkforge job list"],
         exits: &[
             (0, "Job query completed, including an empty list."),
@@ -4472,18 +4776,21 @@ static HELP: &[HelpSpec] = &[
     },
     HelpSpec {
         command: "job show",
-        summary: "Show one exact durable job summary.",
+        summary: "Show one durable job with its event tail, receipts, and recovery block.",
         usage: "arkforge job show --job <job-id>",
         effect: "Read-only point-in-time status. It neither waits for events nor changes the job.",
         requires: &["One exact job id from job list or a prior command result."],
         produces: &[
-            "arkforge.job/v1 with plan binding, state, progress, sequence, and stopped reason.",
+            "arkforge.job/v1 with plan binding, state, progress, the last 20 durable events, every action receipt, and the no-replay recovery block. Each embedded section reports its own availability, so an unreadable one is never rendered as an absent one.",
         ],
         options: &[("--job <job-id>", "Exact durable job id; required.")],
         examples: &["arkforge --output json job show --job <job-id>"],
-        next: &["If state is outcomeUnknown, run 'arkforge job recovery guide --job <job-id>'."],
+        next: &["If state is outcomeUnknown, run 'arkforge job reconcile --job <job-id>'."],
         exits: &[
-            (0, "Job summary produced."),
+            (
+                0,
+                "Job document produced, including a partially observable one.",
+            ),
             (2, "The job id is missing."),
             (5, "The runtime or job was not found."),
             (10, "Job query or IPC failed."),
@@ -4566,7 +4873,7 @@ static HELP: &[HelpSpec] = &[
         ],
         options: &[("--job <job-id>", "Exact durable job; required.")],
         examples: &["arkforge --output json job reconcile --job JOB-EXAMPLE"],
-        next: &["arkforge job recovery guide --job <job-id>"],
+        next: &["arkforge job show --job <job-id>"],
         exits: &[
             (0, "No unresolved outcome remains."),
             (5, "Runtime or job was not found."),
@@ -4579,40 +4886,20 @@ static HELP: &[HelpSpec] = &[
     },
     HelpSpec {
         command: "job recovery",
-        summary: "Guide recovery or seal a distinct complete-overwrite superseding plan.",
-        usage: "arkforge job recovery <guide|plan> [options]",
-        effect: "Guide is read-only; plan may store a new sealed host object. Neither edits, resumes, or replays the original job.",
+        summary: "Seal a distinct complete-overwrite superseding plan.",
+        usage: "arkforge job recovery plan [options]",
+        effect: "Plan may store a new sealed host object. It never edits, resumes, or replays the original job; recovery guidance itself is embedded in job show.",
         requires: &["One exact durable job id."],
         produces: &[
-            "Typed operator actions and complete-overwrite recovery contract facts, when available.",
+            "A distinct sealed superseding plan, when the recovery contract covers every possible effect.",
         ],
         options: &[],
-        examples: &["arkforge help job recovery guide --format json"],
-        next: &["arkforge job recovery guide --job <job-id>"],
+        examples: &["arkforge help job recovery plan --format json"],
+        next: &["arkforge job show --job <job-id>"],
         exits: &[
-            (0, "Recovery guide produced."),
+            (0, "Recovery plan produced."),
             (2, "Command or option is invalid."),
-            (5, "The runtime or job was not found."),
-            (10, "Recovery query or IPC failed."),
-        ],
-    },
-    HelpSpec {
-        command: "job recovery guide",
-        summary: "Show the no-replay recovery guide for one durable job.",
-        usage: "arkforge job recovery guide --job <job-id>",
-        effect: "Read-only. It never replays the original intent, reuses a permit, or creates a superseding plan.",
-        requires: &["One exact durable job id."],
-        produces: &[
-            "arkforge.recovery-guide/v1 with immutable/no-replay guards, ordered actions, and recovery contract identity.",
-        ],
-        options: &[("--job <job-id>", "Exact durable job id; required.")],
-        examples: &["arkforge --output json job recovery guide --job <job-id>"],
-        next: &[
-            "Follow actions[] in order through the paired authority; never replay the original intent.",
-        ],
-        exits: &[
-            (0, "Recovery guide produced."),
-            (2, "The job id is missing."),
+            (3, "No executable superseding plan was created."),
             (5, "The runtime or job was not found."),
             (10, "Recovery query or IPC failed."),
         ],
@@ -5166,11 +5453,8 @@ mod tests {
         for topic in [
             "status",
             "device list",
-            "device show",
-            "device probe",
             "device wait",
             "artifact import",
-            "artifact inspect",
             "artifact list",
             "artifact show",
             "flash assess",
@@ -5181,7 +5465,6 @@ mod tests {
             "job watch",
             "job cancel",
             "job reconcile",
-            "job recovery guide",
             "job recovery plan",
             "rescue list",
             "rescue inspect",
@@ -5241,7 +5524,7 @@ mod tests {
                 .iter()
                 .map(|spec| spec.command)
                 .collect::<Vec<_>>(),
-            vec!["job recovery guide", "job recovery plan"]
+            vec!["job recovery plan"]
         );
         assert_eq!(child_specs("signing")[0].command, "signing verify");
         assert_eq!(HELP_SCHEMA, "arkforge.command-help/v1");
@@ -5295,7 +5578,7 @@ mod tests {
         assert!(
             validate_against_command_tree(&strings(&[
                 "device",
-                "show",
+                "list",
                 "--device",
                 "<observation-id>"
             ]))

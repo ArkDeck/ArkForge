@@ -56,14 +56,19 @@ blocker 聚合成一份 `arkforge.status/v1`：无法观测的区段报告 `item
 
 ```bash
 target/debug/arkforge --runtime-dir /tmp/arkforge daemon start
-target/debug/arkforge --runtime-dir /tmp/arkforge device list
+target/debug/arkforge --runtime-dir /tmp/arkforge device list --deep
 ```
 
-固件会先进入内容寻址存储，再按返回的 artifact ID 离线检查：
+`device list` 逐台给出 identification 块：**兼容 profile** 与**物理型号**分开报告，
+各带证据链与强度。USB VID/PID 只能证明协议人格，永远不单独证明板子；Loader 弱身份下
+`model` 为 `null`。`--deep` 会对每个候选 profile 主动探测并附上返回的事实。
+
+固件先进入内容寻址存储；导入一次就返回全部 staging 事实（CAS + manifest 摘要 +
+声明该格式的 profile + 在场可刷设备）：
 
 ```bash
 target/debug/arkforge --runtime-dir /tmp/arkforge artifact import --file ./firmware.tar.gz
-target/debug/arkforge --runtime-dir /tmp/arkforge artifact inspect \
+target/debug/arkforge --runtime-dir /tmp/arkforge artifact show \
   --artifact <artifact-id> \
   --profile-file profiles/dayu200.yaml
 ```
@@ -101,8 +106,8 @@ target/debug/arkforge completion --shell zsh
 
 ```text
 status      主机 / runtime / 设备 / artifact / 任务 / blocker 聚合快照
-device      list / show / probe / wait
-artifact    import / inspect / list / show
+device      list [--device] [--deep] / wait
+artifact    import / list / show
 flash       assess / plan / apply
 job         list / show / watch / cancel / reconcile / recovery
 rescue      list / inspect / read / plan / apply
@@ -111,6 +116,11 @@ signing     verify
 completion
 help        [<命令路径>] / --all
 ```
+
+查询面按**决策点**而不是按内部资源切分：`device list` 一条覆盖原 show/probe，
+`artifact show` 吸收了离线 inspect，`job show` 内嵌事件尾、全部 action receipt 与
+no-replay 恢复块。复合文档里每个内嵌区段各自报告 availability——无法观测的区段是
+`items: null` 加 typed reason，不会伪装成空集。
 
 每一级命令都有稳定的人类帮助和 `arkforge.command-help/v1` JSON 描述；`help --all`
 （以及不带路径的结构化 `help`）一次返回整棵树的 `arkforge.command-help-index/v1`，

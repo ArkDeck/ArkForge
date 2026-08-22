@@ -39,7 +39,7 @@ impl Drop for TempRuntime {
 }
 
 #[test]
-fn import_list_and_inspect_are_one_explicit_offline_resource_flow() {
+fn import_answers_the_whole_staging_question_in_one_call() {
     let runtime = TempRuntime::new();
     let input = runtime.root.join("firmware.tar.gz");
     std::fs::write(&input, fixture::dayu200_archive()).unwrap();
@@ -52,6 +52,20 @@ fn import_list_and_inspect_are_one_explicit_offline_resource_flow() {
     assert!(imported.contains("\"schema\":\"arkforge.artifact-import/v1\""));
     assert!(imported.contains("\"device_accessed\":false"));
     assert!(imported.contains("\"deduplicated\":false"));
+    // CAS facts, what the bytes parse as, and which profiles declare that
+    // format, without a second command.
+    assert!(
+        imported.contains("\"manifest_summary\":{\"format_id\":\"rockchip-images-targz\""),
+        "{imported}"
+    );
+    assert!(imported.contains("\"compatible_profiles\":[\"org.openharmony.dayu200@1.0.0\"]"));
+    // With no runtime paired, which devices are present is unknown — not none.
+    assert!(
+        imported.contains(
+            "\"present_devices\":{\"available\":false,\"complete\":false,\"reason\":\"DAEMON_UNAVAILABLE\",\"items\":null}"
+        ),
+        "{imported}"
+    );
     let artifact_id = json_string(&imported, "artifact_id");
     assert_eq!(artifact_id.len(), 64);
 
@@ -68,6 +82,8 @@ fn import_list_and_inspect_are_one_explicit_offline_resource_flow() {
     let listed = String::from_utf8(listed.stdout).unwrap();
     assert!(listed.contains("\"schema\":\"arkforge.artifact-list/v1\""));
     assert!(listed.contains(&artifact_id));
+    assert!(listed.contains("\"format\":\"rockchip-images-targz\""));
+    assert!(listed.contains("\"compatible_profiles\":[\"org.openharmony.dayu200@1.0.0\"]"));
 
     let repo = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
         .parent()
@@ -76,21 +92,26 @@ fn import_list_and_inspect_are_one_explicit_offline_resource_flow() {
         .unwrap()
         .to_path_buf();
     let profile = repo.join("profiles/dayu200.yaml");
-    let inspected = runtime.command(&[
+    let shown = runtime.command(&[
         "artifact",
-        "inspect",
+        "show",
         "--artifact",
         &artifact_id,
         "--profile-file",
         profile.to_str().unwrap(),
     ]);
-    assert!(inspected.status.success(), "{inspected:?}");
-    let inspected = String::from_utf8(inspected.stdout).unwrap();
-    assert!(inspected.contains("\"schema\":\"arkforge.artifact-inspection/v1\""));
-    assert!(inspected.contains("\"format_id\":\"rockchip-images-targz\""));
-    assert!(inspected.contains("\"complete\":true"));
-    assert!(inspected.contains("\"targets\":["));
-    assert!(inspected.contains("\"device_accessed\":false"));
+    assert!(shown.status.success(), "{shown:?}");
+    let shown = String::from_utf8(shown.stdout).unwrap();
+    assert!(shown.contains("\"schema\":\"arkforge.artifact-inspection/v1\""));
+    assert!(shown.contains("\"format_id\":\"rockchip-images-targz\""));
+    assert!(shown.contains("\"complete\":true"));
+    assert!(shown.contains("\"targets\":["));
+    assert!(shown.contains("\"device_accessed\":false"));
+    assert!(shown.contains("\"compatible_profiles\":[\"org.openharmony.dayu200@1.0.0\"]"));
+
+    // The absorbed leaf is gone, with no alias period.
+    let removed = runtime.command(&["artifact", "inspect", "--artifact", &artifact_id]);
+    assert_eq!(removed.status.code(), Some(2), "{removed:?}");
 }
 
 #[test]

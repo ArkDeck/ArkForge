@@ -205,7 +205,14 @@ fn help_all_is_the_whole_tree_and_agrees_with_every_per_path_leaf() {
 
 #[test]
 fn removed_leaves_are_absent_from_the_parser_help_and_completion() {
-    for removed in [vec!["doctor"], vec!["daemon", "status"]] {
+    for removed in [
+        vec!["doctor"],
+        vec!["daemon", "status"],
+        vec!["device", "show"],
+        vec!["device", "probe"],
+        vec!["artifact", "inspect"],
+        vec!["job", "recovery", "guide"],
+    ] {
         let invoked = offline(&removed);
         assert_eq!(
             invoked.status.code(),
@@ -224,19 +231,54 @@ fn removed_leaves_are_absent_from_the_parser_help_and_completion() {
     }
 
     let index = stdout(&offline(&["help", "--all", "--format", "json"]));
-    assert!(!index.contains("\"command\":\"doctor\""));
-    assert!(!index.contains("\"command\":\"daemon status\""));
+    for command in [
+        "doctor",
+        "daemon status",
+        "device show",
+        "device probe",
+        "artifact inspect",
+        "job recovery guide",
+    ] {
+        assert!(
+            !index.contains(&format!("\"command\":\"{command}\"")),
+            "{command} is still in the help index"
+        );
+    }
     assert!(!index.contains("arkforge.doctor/v1"));
+    assert!(!index.contains("arkforge.device-probe/v1"));
+    assert!(!index.contains("arkforge.device-observation/v1"));
+    assert!(!index.contains("arkforge.recovery-guide/v1"));
 
     for shell in ["bash", "zsh", "fish"] {
         let script = stdout(&offline(&["completion", "--shell", shell]));
-        assert!(
-            !script.contains("doctor"),
-            "{shell} completion still offers doctor"
-        );
+        for word in ["doctor", "probe", "guide"] {
+            assert!(
+                !script.contains(word),
+                "{shell} completion still offers {word}"
+            );
+        }
         assert!(
             script.contains("status"),
             "{shell} completion must offer status"
         );
+        assert!(
+            script.contains("--deep"),
+            "{shell} completion must offer --deep"
+        );
     }
+}
+
+#[test]
+fn device_list_absorbs_show_and_probe_behind_one_surface() {
+    // Without a runtime every device query is a typed refusal, but the option
+    // shape that replaced two commands must already be the published one.
+    let index = stdout(&offline(&["help", "device", "list", "--format", "json"]));
+    assert!(index.contains("\"name\":\"--device\""));
+    assert!(index.contains("\"name\":\"--deep\",\"type\":\"boolean\""));
+    assert!(index.contains("identification block"));
+
+    let runtime = TempRuntime::new("device");
+    let refused = runtime.json(&["device", "list", "--deep"]);
+    assert_eq!(refused.status.code(), Some(5), "{refused:?}");
+    assert!(stdout(&refused).contains("\"code\":\"DAEMON_UNAVAILABLE\""));
 }

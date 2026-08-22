@@ -18,7 +18,7 @@
 
 ## TASK-WF-002 — 富化查询面
 
-- Status: pending
+- Status: done
 - `device list [--deep]` 并入 show/probe；`artifact import` 复合输出（manifest +
   兼容 profile + 在场匹配设备）；`artifact show` 吸收离线 inspect；
   `job show` 内嵌事件尾/receipts/recovery guidance。

@@ -57,14 +57,22 @@ Start a local runtime and list observed devices:
 
 ```bash
 target/debug/arkforge --runtime-dir /tmp/arkforge daemon start
-target/debug/arkforge --runtime-dir /tmp/arkforge device list
+target/debug/arkforge --runtime-dir /tmp/arkforge device list --deep
 ```
 
-Firmware enters the content-addressed store before it is inspected offline by artifact ID:
+`device list` reports an identification block per device that keeps **compatible
+profile** and **physical model** apart, each with its evidence and strength. A USB
+vendor/product pair proves a protocol personality, never the board, so a device in
+Loader reports `model: null`. `--deep` additionally probes every candidate profile
+and reports the facts it returned.
+
+Firmware enters the content-addressed store first; one import returns every staging
+fact — CAS, a manifest summary, the profiles declaring that format, and the connected
+devices those profiles could flash:
 
 ```bash
 target/debug/arkforge --runtime-dir /tmp/arkforge artifact import --file ./firmware.tar.gz
-target/debug/arkforge --runtime-dir /tmp/arkforge artifact inspect \
+target/debug/arkforge --runtime-dir /tmp/arkforge artifact show \
   --artifact <artifact-id> \
   --profile-file profiles/dayu200.yaml
 ```
@@ -102,8 +110,8 @@ target/debug/arkforge completion --shell zsh
 
 ```text
 status      aggregate host / runtime / device / artifact / job / blocker snapshot
-device      list / show / probe / wait
-artifact    import / inspect / list / show
+device      list [--device] [--deep] / wait
+artifact    import / list / show
 flash       assess / plan / apply
 job         list / show / watch / cancel / reconcile / recovery
 rescue      list / inspect / read / plan / apply
@@ -112,6 +120,13 @@ signing     verify
 completion
 help        [<command path>] / --all
 ```
+
+The query surface is cut at **decision points** rather than internal resources:
+`device list` covers what show and probe used to, `artifact show` absorbed the offline
+inspect, and `job show` embeds the event tail, every action receipt, and the no-replay
+recovery block. Every embedded section in a composite document reports its own
+availability — an unobservable one is `items: null` with a typed reason, never an empty
+set wearing a plausible shape.
 
 Every command level has stable human-readable help and an `arkforge.command-help/v1` JSON description. `help --all` — and structured `help` without a path — returns the whole tree as one `arkforge.command-help-index/v1`, whose leaves are byte-identical to the per-path queries and each declare `runtime_effect` and `facts_projections`. Structured output never mixes in colors, progress bars, or prompts. Errors include a stable code, remediation, and executable next commands.
 
