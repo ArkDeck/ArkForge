@@ -92,7 +92,35 @@ target/debug/arkforge --runtime-dir /tmp/arkforge artifact show \
   --profile-file profiles/dayu200.yaml
 ```
 
-正常刷写是 `plan → apply` 两条命令。`flash plan` 一次完成导入、识别、评估与封 plan：
+人在终端前，正常刷写是**一条命令**：
+
+```bash
+target/debug/arkforge flash ./firmware.tar.gz
+```
+
+`flash run`（`arkforge flash` 即是它）把 runtime 确保 → 内容/设备/profile/intent 解析 →
+assessment → 封 plan → **同意门** → apply → 跟踪串成一步。同意门是唯一不被推断的环节。
+
+交互门的判据很窄：**stdin、stdout、stderr 三者都是 TTY，且 `--output human`，且没给
+`--no-input`**。任何一路被重定向都关闭它——stdout 接的是管道就说明读它的是程序，
+而程序没法回答问题，只会挂在那里。门关着时，每个缺失的决策都是 typed refusal。
+
+确认屏展示识别块（含证据与强度）、固件 hash、profile/intent 及其 resolution、全部
+persistent effect、要接受的 token 与当次 campaign。接受方式按身份强度升级：
+本构建**证不出**是哪块板子时，每次都要把 profile 声明的型号全称打出来——人工输入
+不会让 `strength` 变强，只是让这个断言归你；证得出且是这块板 × 这个 profile 的
+**首刷**时也要打全称；此后才降为 `y`。首刷只在任务成功终态后才被记下，失败或中断
+不消耗它。
+
+执行前，CLI authority 会先把一条独立的 `arkforge.cli-approval/v1` 记录**耐久落盘**：
+精确 plan/digest/token 集、`interactive-tty` 还是 `argv` 的来源、人工型号断言、campaign
+与时间。写不下去就零 dispatch——一次没人能证明被批准过的执行，比一次没发生的执行更糟。
+这条记录不改 `arkforged` 的 journal 与 receipt，也不计入 mechanics evidence。
+
+非交互路径缺 `--ack` 时返回 `ACKNOWLEDGEMENT_REQUIRED`，facts 里带**已经封好的那个
+plan** 和直接执行它的 `apply` 命令——不会再物化第二个 plan。
+
+需要分阶段 review 时仍是 `plan → apply` 两条命令。`flash plan` 一次完成导入、识别、评估与封 plan：
 
 ```bash
 target/debug/arkforge --runtime-dir /tmp/arkforge flash plan \
@@ -155,7 +183,7 @@ target/debug/arkforge completion --shell zsh
 status      主机 / runtime / 设备 / artifact / 任务 / blocker 聚合快照
 device      list [--device] [--deep] / wait
 artifact    import / list / show
-flash       plan [--assess-only]
+flash       run [FILE] / plan [--assess-only]
 apply       执行 sealed plan（normal 与 recovery 共用的同意动词）
 watch       [--job] 默认跟随在跑的 job
 cancel      --job --expect-sequence

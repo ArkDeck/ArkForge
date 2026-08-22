@@ -102,7 +102,46 @@ target/debug/arkforge --runtime-dir /tmp/arkforge artifact show \
   --profile-file profiles/dayu200.yaml
 ```
 
-Normal flashing is two commands, `plan` then `apply`. One `flash plan` call
+With a person at a terminal, a normal flash is **one command**:
+
+```bash
+target/debug/arkforge flash ./firmware.tar.gz
+```
+
+`flash run` — which is what a bare `arkforge flash` runs — joins runtime ensure,
+content/device/profile/intent resolution, assessment, sealing, the **consent
+gate**, apply, and tracking. The gate is the one step that is never inferred.
+
+The interaction gate is deliberately narrow: **stdin, stdout and stderr must all
+be terminals**, the output must be the human one, and `--no-input` must not be
+given. Any redirection closes it — a command whose stdout is a pipe is being read
+by a program, and a program cannot answer a question, only hang while one is
+asked. With the gate closed, every missing decision is a typed refusal.
+
+The confirmation screen shows the identification block with its evidence and
+strength, the firmware hash, the profile and intent with how each was decided,
+every persistent effect, the tokens being accepted, and the campaign if there is
+one. What it accepts escalates with what the machine can prove: when this build
+**cannot prove** which board it is, the operator types the profile's product
+model in full *every time* — a human assertion never raises `strength`, it only
+makes the assertion theirs — and one more time for the first flash of a board and
+profile this host has proved but not yet written to. Only after that does a plain
+`y` suffice. A first flash is remembered only once a job reaches a successful
+terminal state; a failure or an interruption leaves the screen owed.
+
+Before anything is dispatched, the CLI authority durably writes a separate
+`arkforge.cli-approval/v1` record: the exact plan and digest, the exact token set,
+whether consent arrived as `interactive-tty` or `argv`, the typed model assertion,
+the campaign, and the time. If it cannot be written, nothing is dispatched — an
+execution nobody can prove was approved is worse than one that did not happen.
+The record never enters `arkforged`'s journal or receipts and is not mechanics
+evidence.
+
+Without a terminal, a missing `--ack` returns `ACKNOWLEDGEMENT_REQUIRED` whose
+facts carry **the plan that was just sealed** and the exact `apply` command for
+it, so a second plan is never materialized.
+
+When the work needs staged review it is still two commands. One `flash plan` call
 imports, identifies, assesses, and seals:
 
 ```bash
@@ -181,7 +220,7 @@ target/debug/arkforge completion --shell zsh
 status      aggregate host / runtime / device / artifact / job / blocker snapshot
 device      list [--device] [--deep] / wait
 artifact    import / list / show
-flash       plan [--assess-only]
+flash       run [FILE] / plan [--assess-only]
 apply       execute a sealed plan (shared by normal and recovery)
 watch       [--job] follows the running job by default
 cancel      --job --expect-sequence

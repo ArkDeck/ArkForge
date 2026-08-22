@@ -168,3 +168,57 @@ fn the_absorbed_assess_leaf_is_gone_with_no_alias() {
     assert_eq!(removed.status.code(), Some(2), "{removed:?}");
     assert!(stdout(&removed).contains("\"code\":\"INVALID_ARGUMENT\""));
 }
+
+#[test]
+fn one_step_run_asks_nobody_when_nobody_can_answer() {
+    let runtime = TempRuntime::new("run");
+    let firmware = runtime.firmware();
+
+    // Neither stdout nor stdin is a terminal here, so every missing decision is
+    // a typed refusal rather than a question nothing would ever answer. The
+    // call returning at all is the assertion: a prompt would hang forever.
+    let missing = runtime.json(&["flash", "run"]);
+    assert_eq!(missing.status.code(), Some(2), "{missing:?}");
+    assert!(stdout(&missing).contains("\"code\":\"CONTENT_REQUIRED\""));
+
+    // The positional file exists only where a person can see what it resolved
+    // to; a script names its firmware.
+    let positional = runtime.json(&["flash", "run", &firmware]);
+    assert_eq!(positional.status.code(), Some(2), "{positional:?}");
+    assert!(stdout(&positional).contains("\"code\":\"INVALID_ARGUMENT\""));
+
+    // With firmware named, the next thing it needs is a runtime — still no
+    // question asked.
+    let refused = runtime.json(&["flash", "run", "--file", &firmware]);
+    assert_eq!(refused.status.code(), Some(5), "{refused:?}");
+    assert!(stdout(&refused).contains("\"code\":\"DAEMON_UNAVAILABLE\""));
+}
+
+#[test]
+fn the_one_step_verb_publishes_the_same_gate_the_two_step_path_has() {
+    let help = Command::new(env!("CARGO_BIN_EXE_arkforge"))
+        .args(["help", "flash", "run", "--format", "json"])
+        .output()
+        .unwrap();
+    assert!(help.status.success(), "{help:?}");
+    let help = stdout(&help);
+    assert!(help.contains("\"effect\":\"destructive\""));
+    assert!(help.contains("\"runtime_effect\":\"may-start-service\""));
+    // No broad consent flag was introduced by making the path shorter.
+    assert!(!help.contains("\"--yes\""));
+    assert!(!help.contains("\"--force\""));
+    assert!(help.contains("\"name\":\"--ack\",\"type\":\"acknowledgement-token\""));
+    assert!(help.contains(
+        "{\"kind\":\"exactAcknowledgementSet\",\"tokens\":\"--ack\",\"required\":\"unless-interactive\"}"
+    ));
+    // A refusal returns the sealed plan rather than sealing another.
+    assert!(help.contains("never materialized twice"), "{help}");
+    assert!(help.contains("durable CLI approval record"), "{help}");
+
+    // Bare `arkforge flash` is the one-step verb, so it is not a help page.
+    let index = Command::new(env!("CARGO_BIN_EXE_arkforge"))
+        .args(["help", "--all", "--format", "json"])
+        .output()
+        .unwrap();
+    assert!(stdout(&index).contains("\"command\":\"flash run\""));
+}

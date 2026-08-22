@@ -5,6 +5,7 @@
 //! wrapper around an older binary.
 
 mod inference;
+mod interaction;
 
 use arkforge_artifact::cas::{CasError, CasQuota, ContentAddressedStore, ImportedObject};
 use arkforge_client::{
@@ -31,6 +32,7 @@ use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 
 use arkforge_standalone::StandaloneError;
+use arkforge_standalone::approval::{self, ApprovalRecord, Provenance};
 use arkforge_standalone::config::{RuntimeConfig, pin};
 use arkforge_standalone::supervisor;
 
@@ -76,6 +78,7 @@ struct Globals {
     quiet: bool,
     verbose: bool,
     no_auto_start: bool,
+    no_input: bool,
 }
 
 #[derive(Debug)]
@@ -85,10 +88,22 @@ struct CliError {
     exit_code: i32,
     retryable: bool,
     required_acknowledgements: Vec<String>,
+    /// What a few refusals carry beyond the v1 envelope. Boxed because almost
+    /// none of them do, and every fallible function in this frontend returns
+    /// this type by value.
+    extras: Option<Box<ErrorExtras>>,
+}
+
+#[derive(Debug, Default)]
+struct ErrorExtras {
     /// Composite facts already established before the refusal, rendered as one
     /// canonical JSON object body. It is the additive `facts` member of
     /// `arkforge.command-result/v1.error`; the v1 members keep their meaning.
     facts: Option<String>,
+    /// The exact command that continues from here, when the refusal knows one
+    /// better than a generic retry — most importantly, executing a plan that is
+    /// already sealed rather than sealing a second one.
+    retry_command: Option<String>,
 }
 
 impl CliError {
@@ -104,7 +119,7 @@ impl CliError {
             exit_code,
             retryable,
             required_acknowledgements: Vec::new(),
-            facts: None,
+            extras: None,
         }
     }
 
@@ -125,8 +140,27 @@ impl CliError {
     /// path carries the same information a success path would have returned.
     #[allow(dead_code)]
     fn with_facts(mut self, facts: impl Into<String>) -> Self {
-        self.facts = Some(facts.into());
+        self.extras.get_or_insert_default().facts = Some(facts.into());
         self
+    }
+
+    /// Names the exact next command, and the tokens it will need.
+    fn with_retry(
+        mut self,
+        command: impl Into<String>,
+        required_acknowledgements: Vec<String>,
+    ) -> Self {
+        self.extras.get_or_insert_default().retry_command = Some(command.into());
+        self.required_acknowledgements = required_acknowledgements;
+        self
+    }
+
+    fn facts(&self) -> Option<&str> {
+        self.extras.as_ref()?.facts.as_deref()
+    }
+
+    fn retry_command(&self) -> Option<&str> {
+        self.extras.as_ref()?.retry_command.as_deref()
     }
 }
 
@@ -143,7 +177,7 @@ impl From<RescueError> for CliError {
             exit_code: error.exit_code,
             retryable: error.retryable,
             required_acknowledgements,
-            facts: None,
+            extras: None,
         }
     }
 }
@@ -156,7 +190,7 @@ impl From<PublicClientError> for CliError {
             exit_code: error.exit_code,
             retryable: error.retryable,
             required_acknowledgements: Vec::new(),
-            facts: None,
+            extras: None,
         }
     }
 }
@@ -169,7 +203,7 @@ impl From<StandaloneError> for CliError {
             exit_code: error.exit_code,
             retryable: error.retryable,
             required_acknowledgements: error.required_acknowledgements,
-            facts: None,
+            extras: None,
         }
     }
 }
@@ -322,7 +356,7 @@ impl HelpSpec {
             // rather than refuse, unless --no-auto-start says otherwise.
             command
                 if command.starts_with("device ")
-                    || command == "flash plan"
+                    || command.starts_with("flash ")
                     || matches!(command, "apply" | "watch" | "cancel")
                     || (command.starts_with("job ") && command != "job recovery") =>
             {
@@ -337,7 +371,7 @@ impl HelpSpec {
     /// facts yet; each composite surface declares its own as it lands.
     fn facts_projections(&self) -> &'static [(&'static str, &'static str, u64)] {
         match self.command {
-            "flash plan" => &[
+            "flash plan" | "flash run" => &[
                 ("flash_plan", "arkforge.flash-plan/v2", 1),
                 ("device_candidates", "arkforge.resolved-device/v1", 32),
             ],
@@ -371,7 +405,7 @@ impl HelpSpec {
 
     fn effect_class(&self) -> &'static str {
         match self.command {
-            "apply" | "rescue apply" => "destructive",
+            "apply" | "flash run" | "rescue apply" => "destructive",
             "cancel" => "mutating-control",
             "artifact import" | "rescue read" => "host-write",
             "flash plan" | "job recovery plan" | "rescue plan" => "read-device-and-host-write",
@@ -406,6 +440,7 @@ impl HelpSpec {
         matches!(
             self.command,
             "flash plan"
+                | "flash run"
                 | "apply"
                 | "cancel"
                 | "job reconcile"
@@ -422,7 +457,10 @@ impl HelpSpec {
     }
 }
 
-fn validate_against_command_tree(arguments: &[String]) -> Result<(), CliError> {
+fn validate_against_command_tree(
+    arguments: &[String],
+    interaction_open: bool,
+) -> Result<(), CliError> {
     // The command path is the longest prefix the typed tree still recognizes.
     // Stopping at the first option would swallow a `key=value` operand into the
     // path; stopping at the first unrecognized word keeps both readable.
@@ -452,6 +490,12 @@ fn validate_against_command_tree(arguments: &[String]) -> Result<(), CliError> {
     while index < arguments.len() {
         let token = &arguments[index];
         if !token.starts_with("--") {
+            // The one positional in the tree, and only where a person can see
+            // what it resolved to. A script names its firmware with --file.
+            if spec.command == "flash run" && index == path_len && interaction_open {
+                index += 1;
+                continue;
+            }
             if !operands.is_empty() {
                 validate_operand(operands, token)?;
                 index += 1;
@@ -565,7 +609,7 @@ fn validate_against_command_tree(arguments: &[String]) -> Result<(), CliError> {
             }
         }
     }
-    if spec.command == "flash plan"
+    if (spec.command == "flash plan" || (spec.command == "flash run" && !interaction_open))
         && !supplied.contains_key("file")
         && !supplied.contains_key("artifact")
     {
@@ -768,7 +812,10 @@ fn run(arguments: &[String]) -> Result<i32, CliError> {
         }
         return Ok(0);
     }
-    validate_against_command_tree(&command)?;
+    validate_against_command_tree(
+        &command,
+        interaction::open_for(globals.output == Output::Human, globals.no_input),
+    )?;
     match command[0].as_str() {
         "status" => {
             reject_extra(&command[1..], "status")?;
@@ -926,6 +973,7 @@ fn parse_globals(arguments: &[String]) -> Result<(Globals, Vec<String>), CliErro
     let mut quiet = false;
     let mut verbose = false;
     let mut no_auto_start = false;
+    let mut no_input = false;
     let mut command = Vec::new();
     let mut index = 0;
     while index < arguments.len() {
@@ -957,6 +1005,7 @@ fn parse_globals(arguments: &[String]) -> Result<(Globals, Vec<String>), CliErro
             "--quiet" => quiet = true,
             "--verbose" => verbose = true,
             "--no-auto-start" => no_auto_start = true,
+            "--no-input" => no_input = true,
             argument => command.push(argument.to_string()),
         }
         index += 1;
@@ -978,6 +1027,7 @@ fn parse_globals(arguments: &[String]) -> Result<(Globals, Vec<String>), CliErro
             quiet,
             verbose,
             no_auto_start,
+            no_input,
         },
         command,
     ))
@@ -1804,10 +1854,14 @@ fn present_matching_devices(
 }
 
 fn run_flash(arguments: &[String], globals: Globals) -> Result<i32, CliError> {
+    // A bare `arkforge flash` is the one-step verb, not a help page: the
+    // shortest thing an operator can type should be the thing they came to do.
     let Some(subcommand) = arguments.first() else {
-        print_help(help_spec(&["flash".into()])?, globals.output);
-        return Ok(0);
+        return run_flash_run(&[], globals);
     };
+    if subcommand == "run" {
+        return run_flash_run(&arguments[1..], globals);
+    }
     let options = Options::parse(&arguments[1..])?;
     match subcommand.as_str() {
         "plan" => run_flash_plan(&options, globals),
@@ -2234,6 +2288,293 @@ fn run_cancel(arguments: &[String], globals: Globals) -> Result<i32, CliError> {
     })
 }
 
+/// The whole flash, in one command.
+///
+/// Every stage before the consent gate reads, or writes only host storage, so
+/// the frontend performs them. The gate itself is never inferred: an operator
+/// at a terminal accepts named effects on a confirmation screen, and a script
+/// accepts them with exact `--ack` tokens. Nothing else changes — the same
+/// sealed plan, the same digest equality, the same exact token set, and the
+/// same journal `arkforged` would have written either way.
+fn run_flash_run(arguments: &[String], globals: Globals) -> Result<i32, CliError> {
+    let interactive = interaction::open_for(globals.output == Output::Human, globals.no_input);
+    let (positional, rest) = match arguments.first() {
+        Some(first) if !first.starts_with("--") => (Some(first.clone()), &arguments[1..]),
+        _ => (None, arguments),
+    };
+    let mut options = Options::parse(rest)?;
+    if let Some(file) = positional {
+        options.insert("file", file);
+    }
+    let registry = profile_registry()?;
+    let runtime_dir = command_runtime_dir(&globals)?;
+    let campaign = options
+        .optional_one("hardware-campaign")?
+        .map(str::to_string);
+    let detach = options.flag("detach");
+    ensure_runtime(&globals, campaign.as_deref())?;
+
+    let mut terminal = interaction::TerminalPrompt;
+    let resolved = {
+        let prompt: Option<&mut dyn interaction::Prompt> =
+            interactive.then_some(&mut terminal as &mut dyn interaction::Prompt);
+        resolve_plan_inputs(&globals, &registry, &options, true, prompt)?
+    };
+    let mut partial = PartialResolution::from_resolved(&resolved);
+
+    let assessment = supervisor::assess_plan(
+        &runtime_dir,
+        &resolved.artifact.artifact_id,
+        &resolved.profile.reference,
+        &resolved.device.observation.observation_id,
+    )
+    .map_err(|error| {
+        partial.refuse(&error.code, error.message, error.exit_code, error.retryable)
+    })?;
+    if !assessment_is_executable(&assessment) {
+        return Err(plan_unavailable(&partial, &assessment));
+    }
+    let materialized = supervisor::materialize_plan(
+        &runtime_dir,
+        &resolved.artifact.artifact_id,
+        &resolved.profile.reference,
+        &resolved.device.observation.observation_id,
+    )
+    .map_err(|error| {
+        partial.refuse(&error.code, error.message, error.exit_code, error.retryable)
+    })?;
+    let plan = match materialized {
+        MaterializePlanResponse::Plan(plan) => plan,
+        MaterializePlanResponse::Assessment(assessment) => {
+            return Err(plan_unavailable(&partial, &assessment));
+        }
+    };
+    partial.sealed_campaign = sealed_campaign(&plan);
+    let tokens = plan_acknowledgements(&plan);
+
+    // The one decision that is never inferred.
+    let first_flash_key = first_flash_key_for(&registry, &resolved);
+    let consent = if interactive {
+        confirm_on_terminal(
+            &mut terminal,
+            &runtime_dir,
+            &registry,
+            &resolved,
+            &assessment,
+            &plan,
+            &tokens,
+            first_flash_key.as_deref(),
+        )?
+    } else {
+        accept_from_arguments(&options, &tokens, &partial, &assessment, &plan)?
+    };
+
+    // Durable before dispatch, never after: an execution nobody can prove was
+    // approved is worse than one that did not happen.
+    let approval = ApprovalRecord {
+        plan_id: plan.plan_id.clone(),
+        plan_sha256: plan.plan_sha256.clone(),
+        tokens: tokens.clone(),
+        provenance: consent.0,
+        model_assertion: consent.1,
+        hardware_campaign: partial.sealed_campaign.clone(),
+        recorded_at_epoch_ms: now_epoch_ms()?,
+    };
+    let approval_id = approval::record(&runtime_dir, &approval)?;
+
+    let job_id = supervisor::apply_plan(
+        &runtime_dir,
+        &plan.plan_id,
+        &plan.plan_sha256,
+        &tokens,
+        detach,
+    )?;
+    if detach {
+        match globals.output {
+            Output::Human => {
+                println!("Started durable job {job_id} (approval {approval_id}).");
+                println!("Next: arkforge watch --job {job_id}");
+            }
+            Output::Json => emit_json!(
+                "{{\"schema\":\"arkforge.flash-run/v1\",\"job_id\":{},\"approval_id\":{},\"detached\":true,\"authority_continues\":true,\"next_commands\":[{}]}}",
+                json(&job_id),
+                json(&approval_id),
+                json(&format!("arkforge watch --job {job_id}")),
+            ),
+        }
+        return Ok(0);
+    }
+    let (events, summary, _) = watch_job(&globals, &job_id, 0, u64::MAX)?;
+    print_job_watch(
+        &globals,
+        &["flash", "run"],
+        0,
+        u64::MAX,
+        &events,
+        &summary,
+        false,
+    );
+    if summary.state == "succeeded"
+        && let Some(key) = first_flash_key
+    {
+        // Only a completed flash spends the first confirmation; a failure or an
+        // interruption leaves the screen owed next time.
+        approval::record_first_flash(&runtime_dir, &key)?;
+    }
+    Ok(match summary.state.as_str() {
+        "succeeded" => 0,
+        "outcomeUnknown" => 8,
+        "cancelledSafe" => 7,
+        _ if summary.terminal => 7,
+        _ => 9,
+    })
+}
+
+/// The remembered-pair key for this target, or `None` when nothing about the
+/// board is provable enough to remember.
+fn first_flash_key_for(
+    registry: &inference::ProfileRegistry,
+    resolved: &Resolved,
+) -> Option<String> {
+    let identity = resolved.device.identification.physical_identity_digest()?;
+    let profile = registry.find(&resolved.profile.reference)?;
+    let digest = profile.digest().ok()?;
+    Some(approval::first_flash_key(&identity, &digest.to_hex()))
+}
+
+/// The confirmation screen, and what it will accept.
+#[allow(clippy::too_many_arguments)]
+fn confirm_on_terminal(
+    prompt: &mut dyn interaction::Prompt,
+    runtime_dir: &Path,
+    registry: &inference::ProfileRegistry,
+    resolved: &Resolved,
+    assessment: &Assessment,
+    plan: &ExecutablePlan,
+    tokens: &[String],
+    first_flash_key: Option<&str>,
+) -> Result<(Provenance, Option<String>), CliError> {
+    let identification = &resolved.device.identification;
+    prompt.show("");
+    prompt.show("About to write this device:");
+    prompt.show(&format!(
+        "  device      {}  mode={}",
+        resolved.device.observation.observation_id, resolved.device.observation.mode
+    ));
+    prompt.show(&format!(
+        "  model       {}  strength={}",
+        identification.model.as_deref().unwrap_or("UNPROVEN"),
+        identification.strength.as_str()
+    ));
+    prompt.show(&format!(
+        "  evidence    {}",
+        identification.evidence.join(", ")
+    ));
+    prompt.show(&format!(
+        "  profile     {} ({})",
+        resolved.profile.reference, resolved.profile.resolution
+    ));
+    prompt.show(&format!(
+        "  intent      {} ({})",
+        resolved.intent.value, resolved.intent.resolution
+    ));
+    prompt.show(&format!(
+        "  firmware    {}  {}",
+        resolved.artifact.manifest.format_id, resolved.artifact.artifact_id
+    ));
+    if let Some(campaign) = sealed_campaign(plan) {
+        prompt.show(&format!("  campaign    {campaign}"));
+    }
+    prompt.show(&format!("  plan        {}", plan.plan_sha256));
+    prompt.show(&format!(
+        "  persistent effects ({})",
+        plan.persistent_effects.len()
+    ));
+    for effect in &plan.persistent_effects {
+        prompt.show(&format!("    {} {}", effect.kind, effect.target));
+    }
+    for unknown in &assessment.unknowns {
+        prompt.show(&format!("  unknown     {}={}", unknown.key, unknown.value));
+    }
+    prompt.show(&format!("  accepting   {}", tokens.join(", ")));
+
+    let strong = identification.strength == inference::Strength::Strong;
+    let first = first_flash_key.is_none_or(|key| approval::is_first_flash(runtime_dir, key));
+    let models = registry
+        .find(&resolved.profile.reference)
+        .map(|profile| profile.product_models.clone())
+        .unwrap_or_default();
+    let confirmation = interaction::Confirmation::required(strong, first, &models);
+    let answer = prompt.ask(&confirmation.question()).unwrap_or_default();
+    if !confirmation.accepts(&answer) {
+        return Err(CliError::new(
+            "CONSENT_DECLINED",
+            "The confirmation was not accepted; nothing was dispatched.",
+            4,
+            true,
+        ));
+    }
+    let model_assertion = match confirmation {
+        interaction::Confirmation::TypeModel(_) => Some(answer),
+        interaction::Confirmation::Acknowledge => None,
+    };
+    Ok((Provenance::InteractiveTty, model_assertion))
+}
+
+/// Consent from a script: exactly the sealed tokens, no more and no fewer.
+fn accept_from_arguments(
+    options: &Options,
+    tokens: &[String],
+    partial: &PartialResolution,
+    assessment: &Assessment,
+    plan: &ExecutablePlan,
+) -> Result<(Provenance, Option<String>), CliError> {
+    let supplied = options.many("ack");
+    let unexpected = supplied
+        .iter()
+        .filter(|token| !tokens.contains(token))
+        .cloned()
+        .collect::<Vec<_>>();
+    if !unexpected.is_empty() {
+        return Err(partial.refuse_with(
+            "UNEXPECTED_ACKNOWLEDGEMENT",
+            format!(
+                "This plan does not require [{}]; supply exactly [{}].",
+                unexpected.join(", "),
+                tokens.join(", ")
+            ),
+            4,
+            false,
+            Some(assessment),
+            Some(plan),
+        ));
+    }
+    let missing = tokens
+        .iter()
+        .filter(|token| !supplied.contains(token))
+        .cloned()
+        .collect::<Vec<_>>();
+    if !missing.is_empty() {
+        // The plan is already sealed. The way forward is to execute that one,
+        // not to seal a second by running this command again with tokens.
+        let command = apply_command(plan, partial.sealed_campaign.as_deref());
+        return Err(partial
+            .refuse_with(
+                "ACKNOWLEDGEMENT_REQUIRED",
+                format!(
+                    "This plan requires [{}]. It is sealed; accept it with the returned apply command.",
+                    tokens.join(", ")
+                ),
+                4,
+                true,
+                Some(assessment),
+                Some(plan),
+            )
+            .with_retry(command, tokens.to_vec()));
+    }
+    Ok((Provenance::Argv, None))
+}
+
 /// One staging call: import, identify, assess, and seal.
 ///
 /// The stages are joined here rather than left to the caller because every one
@@ -2244,7 +2585,7 @@ fn run_flash_plan(options: &Options, globals: Globals) -> Result<i32, CliError> 
     let registry = profile_registry()?;
     let runtime_dir = command_runtime_dir(&globals)?;
     ensure_runtime(&globals, options.optional_one("hardware-campaign")?)?;
-    let resolved = resolve_plan_inputs(&globals, &registry, options, !assess_only)?;
+    let resolved = resolve_plan_inputs(&globals, &registry, options, !assess_only, None)?;
     let mut partial = PartialResolution::from_resolved(&resolved);
 
     let assessment = supervisor::assess_plan(
@@ -2446,6 +2787,18 @@ impl PartialResolution {
         exit_code: i32,
         retryable: bool,
     ) -> CliError {
+        self.refuse_with(code, message, exit_code, retryable, None, None)
+    }
+
+    fn refuse_with(
+        &self,
+        code: &str,
+        message: impl Into<String>,
+        exit_code: i32,
+        retryable: bool,
+        assessment: Option<&Assessment>,
+        plan: Option<&ExecutablePlan>,
+    ) -> CliError {
         // The candidate list is bounded to what this command's help declares.
         // The full count travels with it, so a truncated list is never mistaken
         // for the whole field of candidates.
@@ -2457,7 +2810,7 @@ impl PartialResolution {
             .collect::<Vec<_>>();
         CliError::new(code, message, exit_code, retryable).with_facts(format!(
             "{{\"flash_plan\":{},\"device_candidates\":[{}],\"device_candidates_total\":{}}}",
-            flash_plan_v2_json(self, None, None),
+            flash_plan_v2_json(self, assessment, plan),
             listed.join(","),
             self.candidates.len()
         ))
@@ -2491,17 +2844,29 @@ fn resolved_device_json(candidate: &inference::Candidate) -> String {
 /// `materializing` gates the identity rule: sealing a plan against a board this
 /// build cannot name requires the caller to name it, while a read-only
 /// assessment may proceed and say plainly that the model is unproven.
+/// Hands the same operator to a nested step without giving up this one's.
+fn reborrow<'a>(
+    prompt: &'a mut Option<&mut dyn interaction::Prompt>,
+) -> Option<&'a mut (dyn interaction::Prompt + 'a)> {
+    match prompt {
+        Some(prompt) => Some(*prompt),
+        None => None,
+    }
+}
+
 fn resolve_plan_inputs(
     globals: &Globals,
     registry: &inference::ProfileRegistry,
     options: &Options,
     materializing: bool,
+    mut prompt: Option<&mut dyn interaction::Prompt>,
 ) -> Result<Resolved, CliError> {
+    let interactive = prompt.is_some();
     let mut partial = PartialResolution::default();
 
     // 1. Content. Bytes always enter the content store before anything binds
     //    to them, whether the caller passed a path or an artifact id.
-    let artifact = resolve_artifact(globals, registry, options)?;
+    let artifact = resolve_artifact(globals, registry, options, reborrow(&mut prompt))?;
     partial.artifact = Some(resolved_artifact_json(&artifact));
     if artifact.compatible_profiles.is_empty() {
         return Err(partial.refuse(
@@ -2536,6 +2901,7 @@ fn resolve_plan_inputs(
         target,
         wait_device_ms,
         &mut partial,
+        reborrow(&mut prompt),
     )?;
     partial.device = Some(resolved_device_json(&device));
 
@@ -2594,8 +2960,10 @@ fn resolve_plan_inputs(
 
     // 4. Identity gate. A compatible profile is not a proven board, and a
     //    caller asserting one does not make the evidence stronger — it only
-    //    makes the assertion theirs.
+    //    makes the assertion theirs. An operator at a terminal answers this at
+    //    the confirmation screen instead, by typing the model out.
     if materializing
+        && !interactive
         && device.identification.strength != inference::Strength::Strong
         && !(explicit_device.is_some() && options.optional_one("profile")?.is_some())
     {
@@ -2670,14 +3038,93 @@ fn resolve_plan_inputs(
     })
 }
 
+/// Firmware an operator can pick from a line list.
+enum Content {
+    /// Bytes already in the content store.
+    Stored(String),
+    /// A file in the current directory, still to be imported.
+    File(String),
+}
+
+/// Offers the firmware this host already has, plus what is in front of the
+/// operator right now.
+///
+/// One directory level and known container suffixes only: this is a line list,
+/// not a file browser, and a firmware image somewhere else is named with
+/// `--file` rather than navigated to.
+fn select_content(
+    globals: &Globals,
+    prompt: &mut dyn interaction::Prompt,
+) -> Result<Content, CliError> {
+    let mut choices = Vec::new();
+    let mut values = Vec::new();
+    for (digest, size) in list_artifacts(globals)? {
+        values.push(Content::Stored(digest.to_hex()));
+        choices.push(interaction::Choice {
+            value: digest.to_hex(),
+            label: format!("stored  {}  {size} bytes", digest.to_hex()),
+        });
+    }
+    if let Ok(entries) = std::fs::read_dir(".") {
+        let mut local = entries
+            .filter_map(Result::ok)
+            .filter(|entry| entry.path().is_file())
+            .map(|entry| entry.path())
+            .filter(|path| {
+                let name = path.to_string_lossy().to_ascii_lowercase();
+                name.ends_with(".tar.gz") || name.ends_with(".pac")
+            })
+            .collect::<Vec<_>>();
+        local.sort();
+        for path in local {
+            let display = path.display().to_string();
+            values.push(Content::File(display.clone()));
+            choices.push(interaction::Choice {
+                value: display.clone(),
+                label: format!("file    {display}"),
+            });
+        }
+    }
+    if choices.is_empty() {
+        return Err(CliError::new(
+            "CONTENT_REQUIRED",
+            "No firmware is stored in this runtime and none is in the current directory; supply --file <path>.",
+            2,
+            false,
+        ));
+    }
+    let selected = interaction::select(prompt, "Select the firmware to write:", &choices)
+        .ok_or_else(|| CliError::new("CONTENT_REQUIRED", "No firmware was selected.", 2, true))?;
+    let index = choices
+        .iter()
+        .position(|choice| choice.value == selected)
+        .expect("the selection came from the choice list");
+    Ok(match &values[index] {
+        Content::Stored(id) => Content::Stored(id.clone()),
+        Content::File(path) => Content::File(path.clone()),
+    })
+}
+
 /// Brings the firmware into the content store and reports what it is.
 fn resolve_artifact(
     globals: &Globals,
     registry: &inference::ProfileRegistry,
     options: &Options,
+    prompt: Option<&mut dyn interaction::Prompt>,
 ) -> Result<ResolvedArtifact, CliError> {
-    let file = options.optional_one("file")?;
-    let artifact = options.optional_one("artifact")?;
+    let mut file = options.optional_one("file")?.map(str::to_string);
+    let mut artifact = options.optional_one("artifact")?.map(str::to_string);
+    if file.is_none()
+        && artifact.is_none()
+        && let Some(prompt) = prompt
+    {
+        match select_content(globals, prompt)? {
+            Content::Stored(id) => artifact = Some(id),
+            Content::File(path) => file = Some(path),
+        }
+    }
+    let file = file.as_deref();
+    let artifact = artifact.as_deref();
     if file.is_some() && artifact.is_some() {
         return Err(CliError::invalid(
             "--file imports bytes and --artifact names bytes already imported; supply at most one.",
@@ -2749,6 +3196,7 @@ fn resolve_device(
     target: Option<&str>,
     wait_device_ms: u64,
     partial: &mut PartialResolution,
+    mut prompt: Option<&mut dyn interaction::Prompt>,
 ) -> Result<inference::Candidate, CliError> {
     // Every refusal from here on carries what resolution already established:
     // the caller should never have to re-import or re-query to learn how far
@@ -2757,6 +3205,8 @@ fn resolve_device(
         partial.refuse(&error.code, error.message, error.exit_code, error.retryable)
     })?;
     let deadline = std::time::Instant::now() + std::time::Duration::from_millis(wait_device_ms);
+    let interactive = prompt.is_some();
+    let mut waiting_announced = false;
     loop {
         let observations = client.device_list().map_err(|error| {
             partial.refuse(&error.code, error.message, error.exit_code, error.retryable)
@@ -2796,6 +3246,20 @@ fn resolve_device(
 
         match candidates.len() {
             1 => return Ok(candidates.remove(0)),
+            // An operator at a terminal is told what is being waited for rather
+            // than refused for not having plugged it in yet.
+            0 if interactive => {
+                if let Some(prompt) = reborrow(&mut prompt)
+                    && !waiting_announced
+                {
+                    waiting_announced = true;
+                    prompt.show(&format!(
+                        "Waiting for a device that can take {}. Press Ctrl-C to stop.",
+                        artifact.manifest.format_id
+                    ));
+                }
+                std::thread::sleep(std::time::Duration::from_millis(200));
+            }
             0 if std::time::Instant::now() < deadline => {
                 std::thread::sleep(std::time::Duration::from_millis(200));
             }
@@ -2818,6 +3282,30 @@ fn resolve_device(
                     5,
                     true,
                 ));
+            }
+            _ if interactive => {
+                let choices = candidates
+                    .iter()
+                    .map(|candidate| interaction::Choice {
+                        value: candidate.observation.observation_id.clone(),
+                        label: candidate.summary(),
+                    })
+                    .collect::<Vec<_>>();
+                let selected = reborrow(&mut prompt)
+                    .and_then(|prompt| {
+                        interaction::select(
+                            prompt,
+                            "Several devices can take this firmware:",
+                            &choices,
+                        )
+                    })
+                    .ok_or_else(|| {
+                        partial.refuse("DEVICE_AMBIGUOUS", "No device was selected.", 6, true)
+                    })?;
+                return Ok(candidates
+                    .into_iter()
+                    .find(|candidate| candidate.observation.observation_id == selected)
+                    .expect("the selection came from the candidate list"));
             }
             count => {
                 return Err(partial.refuse(
@@ -4718,6 +5206,16 @@ impl Options {
         self.values.contains_key(name)
     }
 
+    /// Every value supplied for one option.
+    fn many(&self, name: &str) -> &[String] {
+        self.values.get(name).map_or(&[], Vec::as_slice)
+    }
+
+    /// Records a value the frontend resolved rather than the caller typed.
+    fn insert(&mut self, name: &str, value: String) {
+        self.values.insert(name.to_string(), vec![value]);
+    }
+
     fn optional_one(&self, name: &str) -> Result<Option<&str>, CliError> {
         match self.values.get(name).map(Vec::as_slice) {
             Some([value]) => Ok(Some(value)),
@@ -5035,7 +5533,10 @@ fn print_error(output: Output, command: &[String], arguments: &[String], error: 
     } else {
         remediation(&error.code).map(str::to_string)
     };
-    let exact_retry = acknowledgement_retry_command(arguments, error);
+    let exact_retry = error
+        .retry_command()
+        .map(str::to_string)
+        .or_else(|| acknowledgement_retry_command(arguments, error));
     let next_commands = exact_retry
         .or(fallback_next)
         .into_iter()
@@ -5071,7 +5572,7 @@ fn print_error(output: Output, command: &[String], arguments: &[String], error: 
             error.retryable,
             json_strings(&error.required_acknowledgements),
             json_strings(&next_commands),
-            error.facts.as_deref().unwrap_or("null"),
+            error.facts().unwrap_or("null"),
         ),
     }
 }
@@ -5116,7 +5617,7 @@ fn requested_command_path(arguments: &[String]) -> Vec<String> {
     while index < arguments.len() {
         match arguments[index].as_str() {
             "--runtime-dir" | "--output" => index += 2,
-            "--no-color" | "--quiet" | "--verbose" | "--no-auto-start" => index += 1,
+            "--no-color" | "--quiet" | "--verbose" | "--no-auto-start" | "--no-input" => index += 1,
             value if value.starts_with('-') => break,
             value => {
                 command.push(value.to_string());
@@ -5142,7 +5643,7 @@ fn acknowledgement_retry_command(arguments: &[String], error: &CliError) -> Opti
     while index < arguments.len() {
         match arguments[index].as_str() {
             "--runtime-dir" | "--output" => index += 2,
-            "--no-color" | "--quiet" | "--verbose" | "--no-auto-start" => index += 1,
+            "--no-color" | "--quiet" | "--verbose" | "--no-auto-start" | "--no-input" => index += 1,
             _ => {
                 command.push(arguments[index].clone());
                 index += 1;
@@ -5284,6 +5785,16 @@ fn help_constraints(spec: &HelpSpec) -> Vec<String> {
     if spec.command == "flash plan" {
         constraints.push(
             "{\"kind\":\"exactlyOneOf\",\"options\":[\"--file\",\"--artifact\"],\"required\":true}"
+                .into(),
+        );
+    }
+    if spec.command == "flash run" {
+        constraints.push(
+            "{\"kind\":\"exactlyOneOf\",\"options\":[\"--file\",\"--artifact\"],\"required\":\"unless-interactive\"}"
+                .into(),
+        );
+        constraints.push(
+            "{\"kind\":\"exactAcknowledgementSet\",\"tokens\":\"--ack\",\"required\":\"unless-interactive\"}"
                 .into(),
         );
     }
@@ -5564,6 +6075,10 @@ static HELP: &[HelpSpec] = &[
                 "Refuse instead of starting a runtime that is not already listening.",
             ),
             (
+                "--no-input",
+                "Never ask; treat every missing decision as a typed refusal.",
+            ),
+            (
                 "--verbose",
                 "Include diagnostic evidence; never include secrets.",
             ),
@@ -5807,15 +6322,15 @@ static HELP: &[HelpSpec] = &[
     HelpSpec {
         command: "flash",
         summary: "Stage and seal normal firmware work against exact resources.",
-        usage: "arkforge flash plan [options]",
-        effect: "Plan reads the device and stores a sealed host object. Executing what it sealed is the top-level apply command.",
+        usage: "arkforge flash <run|plan> [options]",
+        effect: "Run performs the whole flash behind one consent gate; plan stops after sealing, and the top-level apply executes what it sealed.",
         requires: &[
             "Firmware content, and enough evidence to name exactly one device and profile.",
         ],
         produces: &["One composite staging document."],
         options: &[],
-        examples: &["arkforge help flash plan --format json"],
-        next: &["arkforge flash plan --file <firmware-file>"],
+        examples: &["arkforge help flash run --format json"],
+        next: &["arkforge flash run --file <firmware-file> --ack <token>"],
         exits: &[
             (0, "Staging document produced."),
             (2, "Command or option is invalid."),
@@ -5826,6 +6341,88 @@ static HELP: &[HelpSpec] = &[
                 "The device or profile could not be narrowed to exactly one.",
             ),
             (10, "Assessment or IPC failed."),
+        ],
+    },
+    HelpSpec {
+        command: "flash run",
+        summary: "Import, identify, assess, seal, accept, and write, in one command.",
+        usage: "arkforge flash run [FILE] [--file <firmware-file> | --artifact <artifact-id>] [--device <observation-id> | --target <selector>] [--profile <id@version>] [--intent <full-restore>] [--hardware-campaign <campaign-id>] [--ack <token>]... [--wait-device <u64>] [--detach]",
+        effect: "Destructive. Every stage before consent only reads or writes host storage; the write itself passes the same sealed plan, exact digest, and exact acknowledgement set the two-command path does. There is no broad --yes or --force.",
+        requires: &[
+            "A running paired CLI authority supervisor, started for this call if none is listening.",
+            "Firmware content, named or selected.",
+            "Consent: a confirmation screen on a terminal, or exactly the sealed tokens as --ack.",
+            "A durable CLI approval record; if it cannot be written, nothing is dispatched.",
+        ],
+        produces: &[
+            "arkforge.job-event/v1 and arkforge.command-result/v1 with a durable job id and terminal classification; --detach returns arkforge.flash-run/v1. A missing acknowledgement returns the sealed plan and the exact apply command under error.facts, so the plan is never materialized twice.",
+        ],
+        options: &[
+            (
+                "--file <firmware-file>",
+                "Firmware container imported into the content store before the plan binds it.",
+            ),
+            (
+                "--artifact <artifact-id>",
+                "Exact already-imported content id; conflicts with --file.",
+            ),
+            (
+                "--device <observation-id>",
+                "Exact current observation; conflicts with --target.",
+            ),
+            (
+                "--target <selector>",
+                "Serial digest, unique identifier prefix of at least four characters, or proven product model; conflicts with --device.",
+            ),
+            (
+                "--profile <id@version>",
+                "Exact loaded profile identity; inferred when the compatible set has exactly one member.",
+            ),
+            (
+                "--intent <full-restore>",
+                "Semantic intent; defaulted when the profile and format admit exactly one.",
+            ),
+            (
+                "--hardware-campaign <campaign-id>",
+                "Named acceptance campaign the running runtime must serve; never inherited.",
+            ),
+            (
+                "--ack <token>",
+                "Exact required effect token; repeat exactly as the plan declares. Required when no confirmation screen is available.",
+            ),
+            (
+                "--wait-device <u64>",
+                "Bounded wait in milliseconds for a matching device to appear.",
+            ),
+            (
+                "--detach",
+                "Return after job creation; does not cancel or transfer authority.",
+            ),
+        ],
+        examples: &[
+            "arkforge flash run --file <firmware-file> --profile org.openharmony.dayu200@1.0.0 --device OBS-PREFLIGHT --ack data-loss:userdata",
+        ],
+        next: &["arkforge watch --job <job-id>"],
+        exits: &[
+            (0, "The device was written and the job succeeded."),
+            (2, "Inputs are invalid, or no firmware was named."),
+            (
+                3,
+                "Mechanics, authority, campaign, or physical identity precondition refused.",
+            ),
+            (
+                4,
+                "Consent was declined, or the acknowledgement set is not exact.",
+            ),
+            (5, "A named resource, device, or runtime is unavailable."),
+            (
+                6,
+                "The device or profile could not be narrowed to exactly one, or an approval conflicts.",
+            ),
+            (7, "Operation ended with a known non-success outcome."),
+            (8, "Outcome is unknown; never retry automatically."),
+            (9, "Tracking ended without a terminal result."),
+            (10, "Controller, store, approval, or supervisor failed."),
         ],
     },
     HelpSpec {
@@ -6799,14 +7396,19 @@ mod tests {
     fn rescue_options_reject_positionals_duplicates_and_unknowns() {
         assert!(Options::parse(&strings(&["device-id"])).is_err());
         assert!(
-            validate_against_command_tree(&strings(&[
+            validate_against_command_tree_for_test(&strings(&[
                 "rescue", "inspect", "--device", "a", "--device", "b"
             ]))
             .is_err()
         );
         assert!(
-            validate_against_command_tree(&strings(&["rescue", "list", "--backend", "external"]))
-                .is_err()
+            validate_against_command_tree_for_test(&strings(&[
+                "rescue",
+                "list",
+                "--backend",
+                "external"
+            ]))
+            .is_err()
         );
     }
 
@@ -6819,6 +7421,7 @@ mod tests {
             "artifact import",
             "artifact list",
             "artifact show",
+            "flash run",
             "flash plan",
             "apply",
             "watch",
@@ -6922,7 +7525,7 @@ mod tests {
             &uppercase_digest,
         ] {
             assert!(
-                validate_against_command_tree(&strings(&[
+                validate_against_command_tree_for_test(&strings(&[
                     "flash",
                     "assess",
                     "--artifact",
@@ -6939,7 +7542,7 @@ mod tests {
             );
         }
         assert!(
-            validate_against_command_tree(&strings(&[
+            validate_against_command_tree_for_test(&strings(&[
                 "device",
                 "list",
                 "--device",
@@ -6952,11 +7555,13 @@ mod tests {
     #[test]
     fn typed_relations_refuse_ambiguous_or_incomplete_effect_inputs() {
         assert!(
-            validate_against_command_tree(&strings(&["daemon", "start", "--hdc", "/opt/hdc"]))
-                .is_err()
+            validate_against_command_tree_for_test(&strings(&[
+                "daemon", "start", "--hdc", "/opt/hdc"
+            ]))
+            .is_err()
         );
         assert!(
-            validate_against_command_tree(&strings(&[
+            validate_against_command_tree_for_test(&strings(&[
                 "rescue",
                 "plan",
                 "--device",
@@ -6969,7 +7574,7 @@ mod tests {
             .is_err()
         );
         assert!(
-            validate_against_command_tree(&strings(&[
+            validate_against_command_tree_for_test(&strings(&[
                 "rescue",
                 "plan",
                 "--device",
@@ -6982,7 +7587,7 @@ mod tests {
             .is_err()
         );
         assert!(
-            validate_against_command_tree(&strings(&[
+            validate_against_command_tree_for_test(&strings(&[
                 "flash",
                 "apply",
                 "--plan",
@@ -6993,7 +7598,7 @@ mod tests {
             .is_err()
         );
         assert!(
-            validate_against_command_tree(&strings(&[
+            validate_against_command_tree_for_test(&strings(&[
                 "rescue",
                 "list",
                 "--backend",
@@ -7046,7 +7651,7 @@ mod tests {
     fn signing_requires_explicit_file_and_mode_options() {
         let valid =
             Options::parse(&strings(&["--file", "./arkforged", "--mode", "release"])).unwrap();
-        validate_against_command_tree(&strings(&[
+        validate_against_command_tree_for_test(&strings(&[
             "signing",
             "verify",
             "--file",
@@ -7059,8 +7664,13 @@ mod tests {
         assert_eq!(valid.one("mode").unwrap(), "release");
 
         assert!(
-            validate_against_command_tree(&strings(&["signing", "verify", "--release", "true"]))
-                .is_err()
+            validate_against_command_tree_for_test(&strings(&[
+                "signing",
+                "verify",
+                "--release",
+                "true"
+            ]))
+            .is_err()
         );
     }
 
@@ -7130,6 +7740,11 @@ mod tests {
         values.iter().map(|value| (*value).to_string()).collect()
     }
 
+    /// The tree check as a script sees it: no terminal, so no positionals.
+    fn validate_against_command_tree_for_test(arguments: &[String]) -> Result<(), CliError> {
+        validate_against_command_tree(arguments, false)
+    }
+
     fn parse_only(arguments: &[String]) -> Result<(), CliError> {
         let (_, command) = parse_globals(arguments)?;
         if command.is_empty() || command == ["--version"] || command == ["-V"] {
@@ -7157,7 +7772,7 @@ mod tests {
             help_spec(&topic)?;
             return Ok(());
         }
-        validate_against_command_tree(&command)
+        validate_against_command_tree(&command, false)
     }
 
     fn example_fixture(word: &str) -> String {

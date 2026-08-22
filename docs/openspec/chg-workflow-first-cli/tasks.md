@@ -64,7 +64,7 @@
 
 ## TASK-WF-006 — `flash run` 与交互层 v1
 
-- Status: pending
+- Status: done
 - 一步动词：runtime 确保 → 内容/设备/profile/intent 解析 → assessment →
   plan → 同意门 → apply → 跟踪；交互门规则（stdin/stdout/stderr 均为 TTY
   ∧ human ∧ 无 --no-input）；行式编号选择器、确认屏、waiting-for-device。

@@ -113,6 +113,26 @@ pub struct Identification {
 }
 
 impl Identification {
+    /// A digest of the facts that proved which physical board this is, or
+    /// `None` when nothing did.
+    ///
+    /// Only model-binding evidence goes in. An observation id or a bus position
+    /// would change on every replug, which would make a remembered board look
+    /// new each time it was plugged in.
+    pub fn physical_identity_digest(&self) -> Option<String> {
+        self.model.as_ref()?;
+        let binding = self
+            .evidence
+            .iter()
+            .filter(|entry| entry.starts_with("product-model:"))
+            .cloned()
+            .collect::<Vec<_>>();
+        if binding.is_empty() {
+            return None;
+        }
+        Some(arkforge_core::digest::sha256(binding.join("\n").as_bytes()).to_hex())
+    }
+
     pub fn to_json(&self, json: impl Fn(&str) -> String) -> String {
         let optional = |value: Option<&str>| value.map(&json).unwrap_or_else(|| "null".to_string());
         format!(
