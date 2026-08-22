@@ -46,6 +46,10 @@ const PROTECTED_DACL_SECURITY_INFORMATION: Dword = 0x8000_0000;
 const SDDL_REVISION_1: Dword = 1;
 const BCRYPT_USE_SYSTEM_PREFERRED_RNG: Dword = 0x0000_0002;
 const PIPE_BUFFER_BYTES: Dword = 64 * 1024;
+const STD_INPUT_HANDLE: Dword = -10i32 as Dword;
+const STD_OUTPUT_HANDLE: Dword = -11i32 as Dword;
+const STD_ERROR_HANDLE: Dword = -12i32 as Dword;
+const HANDLE_FLAG_INHERIT: Dword = 0x0000_0001;
 /// How often a bounded read looks again while the peer stays silent.
 const READ_POLL_INTERVAL: Duration = Duration::from_millis(5);
 const WTD_UI_NONE: Dword = 2;
@@ -157,6 +161,8 @@ unsafe extern "system" {
     fn CloseHandle(handle: Handle) -> Bool;
     fn GetLastError() -> Dword;
     fn GetCurrentProcess() -> Handle;
+    fn GetStdHandle(kind: Dword) -> Handle;
+    fn SetHandleInformation(object: Handle, mask: Dword, flags: Dword) -> Bool;
     fn DuplicateHandle(
         source_process: Handle,
         source_handle: Handle,
@@ -532,6 +538,28 @@ pub fn bind(endpoint: &Endpoint) -> io::Result<Listener> {
         pending: Some(pending),
         nonblocking: false,
     })
+}
+
+/// Stops this process's standard handles from reaching any later child.
+///
+/// `CreateProcess` duplicates every inheritable handle into the new process,
+/// which is not narrowed by giving that process its own `NUL` standard
+/// handles: it receives those *and* a copy of ours. A child that exits with us
+/// never shows it. A background service does — it holds our stdout for as long
+/// as it runs, and whoever captured our output goes on waiting for a pipe that
+/// will never close, long after we exited. Clearing the flag changes nothing
+/// about our own writes, only what a child is handed.
+pub fn detach_standard_handles() -> io::Result<()> {
+    for kind in [STD_INPUT_HANDLE, STD_OUTPUT_HANDLE, STD_ERROR_HANDLE] {
+        let handle = unsafe { GetStdHandle(kind) };
+        if handle.is_null() || handle == INVALID_HANDLE_VALUE {
+            continue;
+        }
+        // A handle that will not carry the flag is not one a child could hold
+        // a pipe through, so a refusal here is not this function failing.
+        let _ = unsafe { SetHandleInformation(handle, HANDLE_FLAG_INHERIT, 0) };
+    }
+    Ok(())
 }
 
 pub fn protect_path(path: &Path, directory: bool) -> io::Result<()> {

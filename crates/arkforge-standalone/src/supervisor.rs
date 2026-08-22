@@ -26,8 +26,8 @@ use arkforge_ipc::messages::{
 };
 use arkforge_ipc::wire;
 use arkforge_platform::{
-    LocalChannel, LocalEndpoint, LocalListener, LocalStream, fill_random, protect_path,
-    replace_file, sync_directory, unix_socket_path,
+    LocalChannel, LocalEndpoint, LocalListener, LocalStream, detach_standard_handles, fill_random,
+    protect_path, replace_file, sync_directory, unix_socket_path,
 };
 use std::collections::BTreeMap;
 use std::io::Write;
@@ -369,6 +369,12 @@ pub fn start_with_launcher(
             false,
         ));
     }
+    // The supervisor is started to outlive this command, so anything it
+    // inherits it holds for its whole life — including, on Windows, a copy of
+    // our own stdout. A caller capturing our output would then wait on a pipe
+    // the supervisor is still holding, having already seen us exit.
+    detach_standard_handles()
+        .map_err(|error| internal("detach the standard handles from the supervisor", error))?;
     let mut command = Command::new(executable);
     options.append_public_arguments(&mut command, &runtime_dir);
     command

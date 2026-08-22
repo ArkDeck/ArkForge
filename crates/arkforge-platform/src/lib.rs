@@ -123,6 +123,17 @@ impl LocalListener {
 }
 
 /// Applies an owner-only access boundary to an existing filesystem object.
+/// Stops this process's standard handles from reaching any later child.
+///
+/// Call this before starting a service meant to outlive the command that
+/// starts it. On Windows a child inherits the parent's standard handles even
+/// when it is given its own, and a service holding a captured stdout keeps the
+/// capturing process waiting long after the command itself exited. Unix closes
+/// these on exec already, so there it is a no-op.
+pub fn detach_standard_handles() -> std::io::Result<()> {
+    platform::detach_standard_handles()
+}
+
 pub fn protect_path(path: &Path, directory: bool) -> std::io::Result<()> {
     platform::protect_path(path, directory)
 }
@@ -234,6 +245,12 @@ mod platform {
         let listener = UnixListener::bind(&endpoint.0)?;
         fs::set_permissions(&endpoint.0, fs::Permissions::from_mode(0o600))?;
         Ok(Listener(listener))
+    }
+
+    pub fn detach_standard_handles() -> std::io::Result<()> {
+        // Every descriptor this process opens is close-on-exec already, and
+        // the standard three are replaced outright by the child's own stdio.
+        Ok(())
     }
 
     pub fn protect_path(path: &Path, directory: bool) -> std::io::Result<()> {
