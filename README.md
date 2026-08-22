@@ -40,7 +40,7 @@ ArkForge 目前处于**硬件准入阶段**，还不是面向普通用户的一�
 ## 快速体验
 
 当前 runtime 支持 macOS 与 Windows x64；Windows 的发布签名与真机证据仍按独立组合
-验收。仓库固定使用 Rust 1.97.1 / Edition 2024。先构建工作区并查看当前主机能做什么：
+验收。仓库固定使用 Rust 1.98.0 / Edition 2024。先构建工作区并查看当前主机能做什么：
 
 ```bash
 cargo build --workspace

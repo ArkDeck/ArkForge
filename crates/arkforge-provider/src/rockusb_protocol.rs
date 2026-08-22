@@ -422,8 +422,8 @@ fn parse_partition_entries(
             RockUsbProtocolError::MalformedGpt(format!("entry {index} has no UTF-16 name"))
         })?;
         let mut units = Vec::new();
-        for pair in name_bytes.chunks_exact(2) {
-            let unit = u16::from_le_bytes([pair[0], pair[1]]);
+        for pair in name_bytes.as_chunks::<2>().0 {
+            let unit = u16::from_le_bytes(*pair);
             if unit == 0 {
                 break;
             }
@@ -788,8 +788,13 @@ mod tests {
         entry[0] = 1; // a non-zero type GUID marks the entry as used
         entry[32..40].copy_from_slice(&first_lba.to_le_bytes());
         entry[40..48].copy_from_slice(&last_lba.to_le_bytes());
-        for (slot, unit) in entry[56..128].chunks_exact_mut(2).zip(name.encode_utf16()) {
-            slot.copy_from_slice(&unit.to_le_bytes());
+        for (slot, unit) in entry[56..128]
+            .as_chunks_mut::<2>()
+            .0
+            .iter_mut()
+            .zip(name.encode_utf16())
+        {
+            *slot = unit.to_le_bytes();
         }
     }
 }

@@ -39,7 +39,7 @@ See the [implementation tracker](TASKS.md) and [evidence ledger](docs/evidence/l
 
 ## Quick start
 
-The runtime supports macOS and Windows x64; Windows signing and physical-device evidence remain a separately accepted maturity combination. The repository pins Rust 1.97.1 and Edition 2024. Build the workspace, then ask ArkForge what the current host can do:
+The runtime supports macOS and Windows x64; Windows signing and physical-device evidence remain a separately accepted maturity combination. The repository pins Rust 1.98.0 and Edition 2024. Build the workspace, then ask ArkForge what the current host can do:
 
 ```bash
 cargo build --workspace
