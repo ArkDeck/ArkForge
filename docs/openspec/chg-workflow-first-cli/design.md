@@ -364,6 +364,8 @@ arkforge config show
 配置规则：
 
 - HDC path + digest 必须在一个原子 transaction 中设置/验证；拒绝相对路径。
+  「绝对」由 host 判定：Windows 上的绝对路径带盘符，上面的 `hdc.path` 相应写成
+  `C:\controlled-tools\hdc.exe`，help 里的示例文本按 host 选择而非硬编码。
 - profile-file 在 `add` 时解析为规范绝对路径、复验期望 digest；
   每次启动前重新 hash，字节漂移则 typed refusal。`remove` 按 digest 精确删除。
 - 更新通过同目录临时文件 + sync + atomic replace 提交；失败保留旧配置。

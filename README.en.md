@@ -47,6 +47,15 @@ target/debug/arkforge help --all --format json
 target/debug/arkforge --runtime-dir /tmp/arkforge status
 ```
 
+The paths here are written for macOS and Linux. On Windows use drive-rooted
+ones: a runtime directory under `%LOCALAPPDATA%`, where `arkforge` also keeps
+its own default, and an `hdc.path` shaped like `C:\controlled-tools\hdc.exe`.
+The difference is not cosmetic. `config set` requires an absolute path and
+absoluteness is decided by the host, so a path carrying no drive is refused
+there; `--runtime-dir /tmp/arkforge` is not refused and lands silently in
+`C:\tmp\arkforge`. The examples printed by `arkforge <command> --help` always
+follow the host you are on.
+
 `status` — which is also what a bare `arkforge` runs — aggregates host, runtime,
 devices, artifacts, jobs, and blockers into one `arkforge.status/v1` document. A
 section that could not be observed reports `items: null` with a typed `reason`;

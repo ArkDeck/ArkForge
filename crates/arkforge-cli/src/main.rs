@@ -6006,7 +6006,7 @@ fn optional_u64(value: Option<u64>) -> String {
 
 /// The `config set` binding example, written for the host this binary serves.
 ///
-/// Absoluteness is a host judgement, and `validate_operand_value` applies the
+/// Absoluteness is a host judgement, and `validate_operand` applies the
 /// host's: `/usr/local/bin/hdc` names a binding on macOS and a rootless guess
 /// on Windows, where an absolute path carries a drive. One hardcoded literal
 /// would therefore publish, on one of the two supported platforms, advice that
@@ -6017,6 +6017,24 @@ const HDC_BINDING_EXAMPLE: &str =
 #[cfg(not(target_os = "windows"))]
 const HDC_BINDING_EXAMPLE: &str =
     "arkforge config set hdc.path=/usr/local/bin/hdc hdc.sha256=<64-lowercase-hex>";
+
+/// The `daemon run` runtime-directory example, written for the host this
+/// binary serves.
+///
+/// `--runtime-dir` carries the `<dir>` shape, so `validate_operand` never
+/// judges its absoluteness and nothing refuses `/tmp/arkforge` on Windows.
+/// That is the reason to split the literal, not a reason to leave it alone: a
+/// refusal is read, while a rooted-but-driveless path is resolved silently
+/// against whatever the current drive happens to be, and the operator learns
+/// the runtime went to `C:\tmp\arkforge` only by going looking for it. The
+/// Windows literal is per-user under LOCALAPPDATA, the location
+/// `default_runtime_dir` already chooses there, and names the runtime it
+/// creates rather than shadowing the default one.
+#[cfg(target_os = "windows")]
+const DAEMON_RUN_EXAMPLE: &str =
+    r"arkforge --runtime-dir C:\Users\you\AppData\Local\ArkForge-Foreground daemon run";
+#[cfg(not(target_os = "windows"))]
+const DAEMON_RUN_EXAMPLE: &str = "arkforge --runtime-dir /tmp/arkforge daemon run";
 
 static HELP: &[HelpSpec] = &[
     HelpSpec {
@@ -6997,7 +7015,7 @@ static HELP: &[HelpSpec] = &[
                 "Explicit mechanics and CLI-authority acceptance campaign; receipts remain campaign evidence and never publish production support.",
             ),
         ],
-        examples: &["arkforge --runtime-dir /tmp/arkforge daemon run"],
+        examples: &[DAEMON_RUN_EXAMPLE],
         next: &["arkforge status"],
         exits: &[
             (0, "Runtime stopped cleanly."),

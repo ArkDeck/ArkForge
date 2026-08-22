@@ -48,6 +48,13 @@ target/debug/arkforge help --all --format json
 target/debug/arkforge --runtime-dir /tmp/arkforge status
 ```
 
+示例路径按 POSIX 写；Windows 上换成带盘符的绝对路径——runtime-dir 放在
+`%LOCALAPPDATA%` 下（`arkforge` 的默认值也在那里），`hdc.path` 写成
+`C:\controlled-tools\hdc.exe` 这种形状。这不是风格问题：`config set` 要求绝对路径，
+而「绝对」由 host 判定，Windows 上没有盘符会被直接拒绝；`--runtime-dir /tmp/arkforge`
+不会被拒绝，但会静默落到 `C:\tmp\arkforge`。`arkforge <命令> --help` 打印的示例
+始终跟随当前 host。
+
 `status`（等价于不带子命令的 `arkforge`）把主机、runtime、设备、artifact、任务与
 blocker 聚合成一份 `arkforge.status/v1`：无法观测的区段报告 `items: null` 与 typed
 `reason`，只有完成枚举且结果为零才是 `items: []`。它永远不会顺手把 runtime 拉起来。
