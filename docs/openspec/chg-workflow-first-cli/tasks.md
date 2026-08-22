@@ -42,7 +42,7 @@
 
 ## TASK-WF-004 — 顶层 `apply` / `watch` / `cancel`
 
-- Status: pending
+- Status: done
 - `apply` 提升为通用同意动词（normal + recovery plan，拒绝 rescue plan）；
   `watch` 默认最近活动 job；`cancel` 位置提升，语义不变。
 - campaign plan 的 `apply` 要求当次显式给相同 ID；此阶段 `apply` 仍仅支持

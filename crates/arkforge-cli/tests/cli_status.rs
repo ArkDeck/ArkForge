@@ -181,7 +181,7 @@ fn help_all_is_the_whole_tree_and_agrees_with_every_per_path_leaf() {
     // Every leaf must be byte-identical to its own per-path query, or an Agent
     // reading the index would be reading a second, drifting contract.
     for path in [
-        vec!["flash", "apply"],
+        vec!["apply"],
         vec!["status"],
         vec!["job", "recovery", "plan"],
         vec!["rescue", "read"],
@@ -212,6 +212,9 @@ fn removed_leaves_are_absent_from_the_parser_help_and_completion() {
         vec!["device", "probe"],
         vec!["artifact", "inspect"],
         vec!["job", "recovery", "guide"],
+        vec!["flash", "apply"],
+        vec!["job", "watch"],
+        vec!["job", "cancel"],
     ] {
         let invoked = offline(&removed);
         assert_eq!(
@@ -238,6 +241,10 @@ fn removed_leaves_are_absent_from_the_parser_help_and_completion() {
         "device probe",
         "artifact inspect",
         "job recovery guide",
+        "flash assess",
+        "flash apply",
+        "job watch",
+        "job cancel",
     ] {
         assert!(
             !index.contains(&format!("\"command\":\"{command}\"")),

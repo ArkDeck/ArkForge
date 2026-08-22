@@ -111,12 +111,38 @@ directly executable `apply_command`. When a gate does not pass the call exits 3
 and the same document appears under `error.facts.flash_plan` with `plan: null` —
 the failure path carries what the success path would have.
 
-`plan` does not mutate the device. Execution requires the returned plan ID, SHA-256 digest, and every acknowledgement token to be supplied unchanged. Direct CLI flashing also requires a runtime bound to an HDC binary with the exact expected digest. Until production support is published, execution is available only inside an explicitly authorized hardware campaign.
+`plan` does not mutate the device. Execution is the top-level `apply` — the
+consent verb shared by a normal flash plan and a recovery plan, because what it
+asks of the operator is the same act in both cases: accepting a named set of
+destructive effects.
+
+```bash
+target/debug/arkforge --runtime-dir /tmp/arkforge apply \
+  --plan <plan-id> \
+  --expect-plan-sha256 <sha256> \
+  --ack <token>
+```
+
+The returned plan ID, SHA-256 digest, and every acknowledgement token must be
+supplied unchanged: one extra token is `UNEXPECTED_ACKNOWLEDGEMENT`, one missing
+token does not pass, and no broad `--yes` or `--force` exists. A rescue plan
+(`rescue-plan:<sha256>`) is refused on its identifier shape *before* any
+authority store is read and directed to `rescue apply` — rescue is a separate
+consent domain. When the runtime serves a hardware campaign, the same id must be
+named for this call with `--hardware-campaign`: a campaign is never inherited and
+the runtime is never restarted to match an argument, and a mismatch costs zero
+dispatch.
+
+`watch` with no arguments follows the single running job; with none running it
+reports the most recently active one; several running is a real ambiguity, listed
+and refused. `cancel --job --expect-sequence` keeps its semantics.
+
+Direct CLI flashing also requires a runtime bound to an HDC binary with the exact expected digest. Until production support is published, execution is available only inside an explicitly authorized hardware campaign.
 
 Do not guess options or reuse historical command names. Ask the current build for its complete contract:
 
 ```bash
-target/debug/arkforge help flash apply --format json
+target/debug/arkforge help apply --format json
 target/debug/arkforge completion --shell zsh
 ```
 
@@ -130,8 +156,11 @@ target/debug/arkforge completion --shell zsh
 status      aggregate host / runtime / device / artifact / job / blocker snapshot
 device      list [--device] [--deep] / wait
 artifact    import / list / show
-flash       plan [--assess-only] / apply
-job         list / show / watch / cancel / reconcile / recovery
+flash       plan [--assess-only]
+apply       execute a sealed plan (shared by normal and recovery)
+watch       [--job] follows the running job by default
+cancel      --job --expect-sequence
+job         list / show / reconcile / recovery
 rescue      list / inspect / read / plan / apply
 daemon      run / start / stop
 signing     verify

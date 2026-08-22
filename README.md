@@ -97,12 +97,32 @@ VID/PID 与 mode），封 plan 必须同时显式给 `--profile` 与精确 `--de
 `assessment`、`plan` 与可直接执行的 `apply_command`。门未通过时 exit 3，同一份文档出现在
 `error.facts.flash_plan` 里且 `plan:null`——失败路径与成功路径信息等价。
 
-`plan` 不会修改设备。真正执行时，必须原样带回结果中的 plan ID、SHA-256 和全部 acknowledgement token。直接 CLI 刷写还要求 runtime 绑定摘要完全匹配的 HDC；在生产支持发布前，只能在明确授权的硬件 campaign 中执行。
+`plan` 不会修改设备。执行用顶层 `apply`——它是 normal flash plan 与 recovery plan
+**共用的同意动词**，因为两者要求操作者做的是同一件事：对一组具名的破坏性 effect 表示同意。
+
+```bash
+target/debug/arkforge --runtime-dir /tmp/arkforge apply \
+  --plan <plan-id> \
+  --expect-plan-sha256 <sha256> \
+  --ack <token>
+```
+
+必须原样带回结果中的 plan ID、SHA-256 和全部 acknowledgement token：多一个 token 是
+`UNEXPECTED_ACKNOWLEDGEMENT`，少一个不放行，宽泛的 `--yes` / `--force` 不存在。
+rescue plan（`rescue-plan:<sha256>`）会在读 authority store **之前**按 ID 形状被拒绝并
+指向 `rescue apply`——救援是独立的同意域。runtime 若正服务某个 hardware campaign，
+当次必须显式给出同一个 `--hardware-campaign`：campaign 永不被继承，也永不为了迁就参数
+而重启 runtime，不匹配时零 dispatch。
+
+`watch` 不带参数时默认跟随唯一在跑的 job；没有在跑的就报告最近活动过的那个；多个在跑
+是真歧义，列出候选并拒绝。`cancel --job --expect-sequence` 语义不变。
+
+直接 CLI 刷写还要求 runtime 绑定摘要完全匹配的 HDC；在生产支持发布前，只能在明确授权的硬件 campaign 中执行。
 
 不要猜参数或复用历史命令，让 CLI 返回当前构建的完整契约：
 
 ```bash
-target/debug/arkforge help flash apply --format json
+target/debug/arkforge help apply --format json
 target/debug/arkforge completion --shell zsh
 ```
 
@@ -116,8 +136,11 @@ target/debug/arkforge completion --shell zsh
 status      主机 / runtime / 设备 / artifact / 任务 / blocker 聚合快照
 device      list [--device] [--deep] / wait
 artifact    import / list / show
-flash       plan [--assess-only] / apply
-job         list / show / watch / cancel / reconcile / recovery
+flash       plan [--assess-only]
+apply       执行 sealed plan（normal 与 recovery 共用的同意动词）
+watch       [--job] 默认跟随在跑的 job
+cancel      --job --expect-sequence
+job         list / show / reconcile / recovery
 rescue      list / inspect / read / plan / apply
 daemon      run / start / stop
 signing     verify

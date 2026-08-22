@@ -237,7 +237,7 @@ impl HelpSpec {
                 let required = (prose.contains("required.")
                     && !prose.contains("required for")
                     && !prose.contains("when required"))
-                    || (name == "ack" && matches!(self.command, "flash apply" | "rescue apply"));
+                    || (name == "ack" && matches!(self.command, "apply" | "rescue apply"));
                 let repeatable = prose.contains("repeatable") || prose.contains("repeat ");
                 let mut requires = Vec::new();
                 for token in description.split_whitespace() {
@@ -323,8 +323,8 @@ impl HelpSpec {
 
     fn effect_class(&self) -> &'static str {
         match self.command {
-            "flash apply" | "rescue apply" => "destructive",
-            "job cancel" => "mutating-control",
+            "apply" | "rescue apply" => "destructive",
+            "cancel" => "mutating-control",
             "artifact import" | "rescue read" => "host-write",
             "flash plan" | "job recovery plan" | "rescue plan" => "read-device-and-host-write",
             command if command.starts_with("daemon") => "service-lifecycle",
@@ -357,8 +357,8 @@ impl HelpSpec {
         matches!(
             self.command,
             "flash plan"
-                | "flash apply"
-                | "job cancel"
+                | "apply"
+                | "cancel"
                 | "job reconcile"
                 | "job recovery plan"
                 | "daemon stop"
@@ -369,7 +369,7 @@ impl HelpSpec {
         self.command.starts_with("device ")
             || self.command.starts_with("flash ")
             || self.command.starts_with("job ")
-            || self.command == "daemon stop"
+            || matches!(self.command, "apply" | "watch" | "cancel" | "daemon stop")
     }
 }
 
@@ -617,6 +617,9 @@ fn run(arguments: &[String]) -> Result<i32, CliError> {
         "device" => run_device(&command[1..], globals),
         "artifact" => run_artifact(&command[1..], globals),
         "flash" => run_flash(&command[1..], globals),
+        "apply" => run_apply(&command[1..], globals),
+        "watch" => run_watch(&command[1..], globals),
+        "cancel" => run_cancel(&command[1..], globals),
         "job" => run_job(&command[1..], globals),
         "rescue" => run_rescue(&command[1..], globals),
         "daemon" => run_daemon(&command[1..], globals),
@@ -1630,55 +1633,191 @@ fn run_flash(arguments: &[String], globals: Globals) -> Result<i32, CliError> {
     let options = Options::parse(&arguments[1..])?;
     match subcommand.as_str() {
         "plan" => run_flash_plan(&options, globals),
-        "apply" => {
-            let plan_id = options.one("plan")?;
-            let expected = options.one("expect-plan-sha256")?;
-            parse_digest("--expect-plan-sha256", expected)?;
-            let acknowledgements = options.many_required("ack")?.to_vec();
-            let detach = options.flag("detach");
-            let runtime_dir = command_runtime_dir(&globals)?;
-            if let Some(campaign) = options.optional_one("hardware-campaign")? {
-                require_runtime_campaign(&runtime_dir, campaign)?;
-            }
-            let job_id =
-                supervisor::apply_plan(&runtime_dir, plan_id, expected, &acknowledgements, detach)?;
-            if detach {
-                match globals.output {
-                    Output::Human => {
-                        println!("Started durable job {job_id}.");
-                        println!("The authority supervisor continues to drive it.");
-                        println!("Next: arkforge job watch --job {job_id}");
-                    }
-                    Output::Json => println!(
-                        "{{\"schema\":\"arkforge.flash-apply/v1\",\"job_id\":{},\"detached\":true,\"authority_continues\":true,\"next_commands\":[{}]}}",
-                        json(&job_id),
-                        json(&format!("arkforge job watch --job {job_id}")),
-                    ),
-                }
-                return Ok(0);
-            }
-            let (events, summary, _) = watch_job(&globals, &job_id, 0, u64::MAX)?;
-            print_job_watch(
-                &globals,
-                &["flash", "apply"],
-                0,
-                u64::MAX,
-                &events,
-                &summary,
-                false,
-            );
-            Ok(match summary.state.as_str() {
-                "succeeded" => 0,
-                "outcomeUnknown" => 8,
-                "cancelledSafe" => 7,
-                _ if summary.terminal => 7,
-                _ => 9,
-            })
-        }
         other => Err(CliError::invalid(format!(
             "Unknown flash command {other:?}. Run 'arkforge help flash'."
         ))),
     }
+}
+
+/// The general consent verb.
+///
+/// One command for every plan an authority sealed — a normal flash plan and a
+/// superseding recovery plan alike — because what the caller is doing is the
+/// same act: accepting a named set of destructive effects. Nothing here relaxes
+/// the gate; the exact digest and the exact acknowledgement set are still the
+/// only way through, and no broad `--yes` exists to add.
+fn run_apply(arguments: &[String], globals: Globals) -> Result<i32, CliError> {
+    let options = Options::parse(arguments)?;
+    let plan_id = options.one("plan")?;
+    // Rescue keeps its own consent surface on purpose. The canonical shape is
+    // recognized here, before any authority store is read, so a rescue id can
+    // never be resolved against the wrong domain even momentarily.
+    if plan_id.starts_with(RESCUE_PLAN_PREFIX) {
+        return Err(CliError::new(
+            "RESCUE_PLAN_DOMAIN",
+            format!(
+                "{plan_id} is a rescue plan. Rescue keeps a separate plan, receipt, and evidence domain; apply it with 'arkforge rescue apply'."
+            ),
+            2,
+            false,
+        ));
+    }
+    let expected = options.one("expect-plan-sha256")?;
+    parse_digest("--expect-plan-sha256", expected)?;
+    let acknowledgements = options.many_required("ack")?.to_vec();
+    let detach = options.flag("detach");
+    let runtime_dir = command_runtime_dir(&globals)?;
+    // Before dispatch, never after: a campaign mismatch must cost nothing.
+    require_campaign_acknowledgement(&runtime_dir, options.optional_one("hardware-campaign")?)?;
+    let job_id =
+        supervisor::apply_plan(&runtime_dir, plan_id, expected, &acknowledgements, detach)?;
+    if detach {
+        match globals.output {
+            Output::Human => {
+                println!("Started durable job {job_id}.");
+                println!("The authority supervisor continues to drive it.");
+                println!("Next: arkforge watch --job {job_id}");
+            }
+            Output::Json => println!(
+                "{{\"schema\":\"arkforge.apply/v1\",\"job_id\":{},\"detached\":true,\"authority_continues\":true,\"next_commands\":[{}]}}",
+                json(&job_id),
+                json(&format!("arkforge watch --job {job_id}")),
+            ),
+        }
+        return Ok(0);
+    }
+    let (events, summary, _) = watch_job(&globals, &job_id, 0, u64::MAX)?;
+    print_job_watch(&globals, &["apply"], 0, u64::MAX, &events, &summary, false);
+    Ok(match summary.state.as_str() {
+        "succeeded" => 0,
+        "outcomeUnknown" => 8,
+        "cancelledSafe" => 7,
+        _ if summary.terminal => 7,
+        _ => 9,
+    })
+}
+
+/// The canonical rescue plan identifier shape.
+const RESCUE_PLAN_PREFIX: &str = "rescue-plan:";
+
+/// Follows one job's durable events, defaulting to the one that is running.
+fn run_watch(arguments: &[String], globals: Globals) -> Result<i32, CliError> {
+    let options = Options::parse(arguments)?;
+    let after_sequence = options
+        .optional_one("after-sequence")?
+        .map(|value| parse_u64("--after-sequence", value))
+        .transpose()?
+        .unwrap_or(0);
+    let timeout_ms = options
+        .optional_one("timeout-ms")?
+        .map(|value| parse_u64("--timeout-ms", value))
+        .transpose()?
+        .unwrap_or(30_000);
+    let job_id = match options.optional_one("job")? {
+        Some(job) => job.to_string(),
+        None => default_watch_job(&globals)?,
+    };
+    let (events, summary, timed_out) = watch_job(&globals, &job_id, after_sequence, timeout_ms)?;
+    print_job_watch(
+        &globals,
+        &["watch"],
+        after_sequence,
+        timeout_ms,
+        &events,
+        &summary,
+        timed_out,
+    );
+    Ok(0)
+}
+
+/// The job a bare `watch` means.
+///
+/// Exactly one running job is the only unambiguous answer, so it is the only
+/// one taken. With none running the most recently active job is reported —
+/// terminal jobs return immediately, which is the report. Several running jobs
+/// is a real ambiguity and is refused with all of them named.
+fn default_watch_job(globals: &Globals) -> Result<String, CliError> {
+    let mut client = public_client(globals)?;
+    let jobs = client.job_list()?;
+    if jobs.is_empty() {
+        return Err(CliError::new(
+            "NO_JOBS_RECORDED",
+            "This runtime has no durable jobs to watch.",
+            5,
+            false,
+        ));
+    }
+    let mut active = jobs.iter().filter(|job| !job.terminal).collect::<Vec<_>>();
+    match active.len() {
+        1 => return Ok(active.remove(0).job_id.clone()),
+        0 => {}
+        count => {
+            return Err(CliError::new(
+                "JOB_AMBIGUOUS",
+                format!(
+                    "{count} jobs are still running; name one with --job <job-id>. Candidates: {}.",
+                    active
+                        .iter()
+                        .map(|job| format!("{} ({})", job.job_id, job.state))
+                        .collect::<Vec<_>>()
+                        .join("; ")
+                ),
+                6,
+                false,
+            ));
+        }
+    }
+    // No job is running, so "most recent" is decided by durable evidence: the
+    // timestamp of each job's last journalled event, with the identifier
+    // breaking a tie so the answer is the same on every run.
+    let mut ranked = Vec::with_capacity(jobs.len());
+    for job in &jobs {
+        ranked.push((job_last_activity(&mut client, job), job.job_id.clone()));
+    }
+    ranked.sort_by(|left, right| left.0.cmp(&right.0).then_with(|| left.1.cmp(&right.1)));
+    Ok(ranked
+        .pop()
+        .map(|(_, job_id)| job_id)
+        .expect("the job list was checked to be non-empty"))
+}
+
+/// When a job last wrote to its journal, or zero when it never did.
+fn job_last_activity(client: &mut PublicClient, job: &JobSummary) -> u64 {
+    if job.last_sequence == 0 {
+        return 0;
+    }
+    client
+        .job_events(&job.job_id, job.last_sequence - 1)
+        .ok()
+        .and_then(|events| events.last().map(|event| event.at_epoch_ms))
+        .unwrap_or(0)
+}
+
+/// Asks the authority to stop a job at a safe boundary.
+fn run_cancel(arguments: &[String], globals: Globals) -> Result<i32, CliError> {
+    let options = Options::parse(arguments)?;
+    let job_id = options.one("job")?;
+    let expected_sequence = parse_u64("--expect-sequence", options.one("expect-sequence")?)?;
+    let runtime_dir = command_runtime_dir(&globals)?;
+    let state = supervisor::cancel_job(&runtime_dir, job_id, expected_sequence)?;
+    match globals.output {
+        Output::Human => {
+            println!("Cancellation result for {job_id}: {state}");
+            println!("The original journal remains durable; no action was replayed.");
+        }
+        Output::Json => println!(
+            "{{\"schema\":\"arkforge.job-cancellation/v1\",\"job_id\":{},\"expect_sequence\":{},\"disposition\":{},\"automatic_replay\":false,\"next_commands\":[{}]}}",
+            json(job_id),
+            expected_sequence,
+            json(&state),
+            json(&format!("arkforge job show --job {job_id}")),
+        ),
+    }
+    Ok(match state.as_str() {
+        "cancelled-safe" | "already-terminal" => 0,
+        "outcome-unknown" => 8,
+        _ => 9,
+    })
 }
 
 /// One staging call: import, identify, assess, and seal.
@@ -1690,9 +1829,7 @@ fn run_flash_plan(options: &Options, globals: Globals) -> Result<i32, CliError> 
     let assess_only = options.flag("assess-only");
     let registry = profile_registry()?;
     let runtime_dir = command_runtime_dir(&globals)?;
-    if let Some(campaign) = options.optional_one("hardware-campaign")? {
-        require_runtime_campaign(&runtime_dir, campaign)?;
-    }
+    require_campaign_acknowledgement(&runtime_dir, options.optional_one("hardware-campaign")?)?;
     let resolved = resolve_plan_inputs(&globals, &registry, options, !assess_only)?;
     let mut partial = PartialResolution::from_resolved(&resolved);
 
@@ -1784,33 +1921,45 @@ fn plan_unavailable(partial: &PartialResolution, assessment: &Assessment) -> Cli
     ))
 }
 
-/// A running runtime must already be the named campaign.
+/// A campaign is named for this call, or it is not in play.
 ///
-/// It is never restarted to become one: a campaign is a named, reviewed
-/// acceptance run, and silently reconfiguring the runtime to match an argument
-/// would make the name meaningless.
-fn require_runtime_campaign(runtime_dir: &Path, campaign: &str) -> Result<(), CliError> {
-    let Ok(status) = supervisor::status(runtime_dir) else {
-        return Ok(());
-    };
-    if status.hardware_campaign == campaign {
-        return Ok(());
+/// A running campaign runtime is never inherited silently and never restarted
+/// to match an argument: a named acceptance run means nothing if a command can
+/// wander into or out of one without saying so.
+fn require_campaign_acknowledgement(
+    runtime_dir: &Path,
+    given: Option<&str>,
+) -> Result<(), CliError> {
+    let running = supervisor::status(runtime_dir)
+        .ok()
+        .map(|status| status.hardware_campaign)
+        .filter(|campaign| !campaign.is_empty());
+    match (running.as_deref(), given) {
+        (None, None) => Ok(()),
+        (Some(running), Some(given)) if running == given => Ok(()),
+        (Some(running), None) => Err(CliError::new(
+            "CAMPAIGN_ACKNOWLEDGEMENT_REQUIRED",
+            format!(
+                "This runtime serves hardware campaign {running}. Name it for this call with --hardware-campaign {running}; it is never inherited."
+            ),
+            3,
+            false,
+        )),
+        (Some(running), Some(given)) => Err(CliError::new(
+            "RUNTIME_CAMPAIGN_MISMATCH",
+            format!("The running runtime serves hardware campaign {running}, not {given}."),
+            6,
+            false,
+        )),
+        (None, Some(given)) => Err(CliError::new(
+            "RUNTIME_CAMPAIGN_MISMATCH",
+            format!(
+                "The running runtime has no hardware campaign, so it cannot serve campaign {given}."
+            ),
+            6,
+            false,
+        )),
     }
-    Err(CliError::new(
-        "RUNTIME_CAMPAIGN_MISMATCH",
-        if status.hardware_campaign.is_empty() {
-            format!(
-                "The running runtime has no hardware campaign, so it cannot serve campaign {campaign}."
-            )
-        } else {
-            format!(
-                "The running runtime serves hardware campaign {}, not {campaign}.",
-                status.hardware_campaign
-            )
-        },
-        6,
-        false,
-    ))
 }
 
 /// The declared upper bound on the `device_candidates` refusal projection,
@@ -2371,7 +2520,7 @@ fn assessment_blockers(assessment: &Assessment) -> Vec<String> {
 /// The exact command that executes this sealed plan, with nothing to look up.
 fn apply_command(plan: &ExecutablePlan, campaign: Option<&str>) -> String {
     format!(
-        "arkforge flash apply --plan {} --expect-plan-sha256 {}{}{}",
+        "arkforge apply --plan {} --expect-plan-sha256 {}{}{}",
         plan.plan_id,
         plan.plan_sha256,
         campaign
@@ -2515,7 +2664,7 @@ fn print_flash_plan(output: Output, plan: &ExecutablePlan, extra_acknowledgement
                 .map(|token| format!(" --ack {token}"))
                 .collect::<String>();
             println!(
-                "Next: arkforge flash apply --plan {} --expect-plan-sha256 {}{}",
+                "Next: arkforge apply --plan {} --expect-plan-sha256 {}{}",
                 plan.plan_id, plan.plan_sha256, ack
             );
         }
@@ -2565,7 +2714,7 @@ fn print_flash_plan(output: Output, plan: &ExecutablePlan, extra_acknowledgement
                 effects,
                 json_strings(&acknowledgements),
                 json(&format!(
-                    "arkforge flash apply --plan {} --expect-plan-sha256 {}{}",
+                    "arkforge apply --plan {} --expect-plan-sha256 {}{}",
                     plan.plan_id,
                     plan.plan_sha256,
                     acknowledgements
@@ -2603,58 +2752,6 @@ fn run_job(arguments: &[String], globals: Globals) -> Result<i32, CliError> {
             let recovery = client.recovery_guide(job_id);
             print_job(globals.output, &job, events.as_deref(), recovery.as_ref());
             Ok(0)
-        }
-        "watch" => {
-            let options = Options::parse(&arguments[1..])?;
-            let job_id = options.one("job")?;
-            let after_sequence = options
-                .optional_one("after-sequence")?
-                .map(|value| parse_u64("--after-sequence", value))
-                .transpose()?
-                .unwrap_or(0);
-            let timeout_ms = options
-                .optional_one("timeout-ms")?
-                .map(|value| parse_u64("--timeout-ms", value))
-                .transpose()?
-                .unwrap_or(30_000);
-            let (events, summary, timed_out) =
-                watch_job(&globals, job_id, after_sequence, timeout_ms)?;
-            print_job_watch(
-                &globals,
-                &["job", "watch"],
-                after_sequence,
-                timeout_ms,
-                &events,
-                &summary,
-                timed_out,
-            );
-            Ok(0)
-        }
-        "cancel" => {
-            let options = Options::parse(&arguments[1..])?;
-            let job_id = options.one("job")?;
-            let expected_sequence =
-                parse_u64("--expect-sequence", options.one("expect-sequence")?)?;
-            let runtime_dir = command_runtime_dir(&globals)?;
-            let state = supervisor::cancel_job(&runtime_dir, job_id, expected_sequence)?;
-            match globals.output {
-                Output::Human => {
-                    println!("Cancellation result for {job_id}: {state}");
-                    println!("The original journal remains durable; no action was replayed.");
-                }
-                Output::Json => println!(
-                    "{{\"schema\":\"arkforge.job-cancellation/v1\",\"job_id\":{},\"expect_sequence\":{},\"disposition\":{},\"automatic_replay\":false,\"next_commands\":[{}]}}",
-                    json(job_id),
-                    expected_sequence,
-                    json(&state),
-                    json(&format!("arkforge job show --job {job_id}")),
-                ),
-            }
-            Ok(match state.as_str() {
-                "cancelled-safe" | "already-terminal" => 0,
-                "outcome-unknown" => 8,
-                _ => 9,
-            })
         }
         "reconcile" => {
             let options = Options::parse(&arguments[1..])?;
@@ -3712,7 +3809,7 @@ fn print_job_watch(
         Vec::new()
     } else {
         vec![format!(
-            "arkforge job watch --job {} --after-sequence {cursor}",
+            "arkforge watch --job {} --after-sequence {cursor}",
             summary.job_id
         )]
     };
@@ -3801,7 +3898,7 @@ fn render_job_jsonl(
         Vec::new()
     } else {
         vec![format!(
-            "arkforge job watch --job {} --after-sequence {cursor}",
+            "arkforge watch --job {} --after-sequence {cursor}",
             summary.job_id
         )]
     };
@@ -4649,7 +4746,7 @@ fn remediation(code: &str) -> Option<&'static str> {
         | "HDC_DIGEST_MISMATCH" => Some("arkforge status"),
         "MECHANICS_RUNTIME_CHANGED" => Some("arkforge help flash plan --format json"),
         "PLAN_DIGEST_MISMATCH" | "UNEXPECTED_ACKNOWLEDGEMENT" => {
-            Some("arkforge help flash apply --format json")
+            Some("arkforge help apply --format json")
         }
         "UNKNOWN_JOB" => Some("arkforge job list"),
         "STALE_JOB_SEQUENCE" => Some("arkforge job show --job <job-id>"),
@@ -4709,7 +4806,7 @@ fn help_constraints(spec: &HelpSpec) -> Vec<String> {
                 .into(),
         );
     }
-    if matches!(spec.command, "flash apply" | "rescue apply") {
+    if matches!(spec.command, "apply" | "rescue apply") {
         constraints.push(
             "{\"kind\":\"exactAcknowledgementSet\",\"plan\":\"--plan\",\"digest\":\"--expect-plan-sha256\",\"tokens\":\"--ack\"}"
                 .into(),
@@ -5225,12 +5322,12 @@ static HELP: &[HelpSpec] = &[
     HelpSpec {
         command: "flash",
         summary: "Stage and seal normal firmware work against exact resources.",
-        usage: "arkforge flash <plan|apply> [options]",
-        effect: "Plan reads the device and stores a sealed host object; apply is the only destructive normal-flash command.",
+        usage: "arkforge flash plan [options]",
+        effect: "Plan reads the device and stores a sealed host object. Executing what it sealed is the top-level apply command.",
         requires: &[
             "Firmware content, and enough evidence to name exactly one device and profile.",
         ],
-        produces: &["One composite staging document, or a durable job."],
+        produces: &["One composite staging document."],
         options: &[],
         examples: &["arkforge help flash plan --format json"],
         next: &["arkforge flash plan --file <firmware-file>"],
@@ -5323,21 +5420,22 @@ static HELP: &[HelpSpec] = &[
         ],
     },
     HelpSpec {
-        command: "flash apply",
-        summary: "Apply one sealed normal-flash plan under persistent per-step authority.",
-        usage: "arkforge flash apply --plan <plan-id> --expect-plan-sha256 <sha256> --ack <token> [--ack <token>...] [--hardware-campaign <campaign-id>] [--detach]",
-        effect: "Destructive. Starts only the exact sealed plan after digest and acknowledgement equality; the supervisor mints one durable single-use permit per admitted step.",
+        command: "apply",
+        summary: "Execute one sealed plan after exact digest and acknowledgement equality.",
+        usage: "arkforge apply --plan <plan-id> --expect-plan-sha256 <sha256> --ack <token> [--ack <token>...] [--hardware-campaign <campaign-id>] [--detach]",
+        effect: "Destructive. Starts only the exact sealed plan after digest and acknowledgement equality; the supervisor mints one durable single-use permit per admitted step. There is no broad --yes or --force.",
         requires: &[
             "A live paired authority supervisor and fresh exact target continuity.",
             "The exact plan digest and exactly every returned acknowledgement token, with no extras.",
+            "The runtime's hardware campaign named for this call, when it serves one.",
         ],
         produces: &[
-            "arkforge.job-event/v1 and arkforge.command-result/v1 with a durable job id, ordered events, and terminal classification; --detach returns after durable job creation while authority continues.",
+            "arkforge.job-event/v1 and arkforge.command-result/v1 with a durable job id, ordered events, and terminal classification; --detach returns arkforge.apply/v1 after durable job creation while authority continues.",
         ],
         options: &[
             (
                 "--plan <plan-id>",
-                "Exact stored normal-flash plan; required.",
+                "Exact sealed normal-flash or recovery plan; required. A rescue-plan id is refused and directed to rescue apply.",
             ),
             (
                 "--expect-plan-sha256 <sha256>",
@@ -5349,7 +5447,7 @@ static HELP: &[HelpSpec] = &[
             ),
             (
                 "--hardware-campaign <campaign-id>",
-                "Named acceptance campaign the running runtime must already serve; required when the sealed plan carries one.",
+                "Named acceptance campaign the running runtime already serves; never inherited and never restarted to match.",
             ),
             (
                 "--detach",
@@ -5357,18 +5455,22 @@ static HELP: &[HelpSpec] = &[
             ),
         ],
         examples: &[
-            "arkforge flash apply --plan PLAN-EXAMPLE --expect-plan-sha256 <64-lowercase-hex> --ack data-loss:userdata",
+            "arkforge apply --plan PLAN-EXAMPLE --expect-plan-sha256 <64-lowercase-hex> --ack data-loss:userdata",
         ],
-        next: &["arkforge job watch --job <job-id>"],
+        next: &["arkforge watch --job <job-id>"],
         exits: &[
             (0, "Detached job created or watched job succeeded."),
-            (2, "Inputs are invalid."),
+            (
+                2,
+                "Inputs are invalid, or the plan belongs to the rescue domain.",
+            ),
             (
                 3,
-                "Plan, target, authority, or freshness precondition refused.",
+                "Plan, target, authority, campaign, or freshness precondition refused.",
             ),
             (4, "Plan digest or acknowledgement set is not exact."),
             (5, "Runtime or plan was not found."),
+            (6, "The runtime serves another hardware campaign."),
             (7, "Operation ended with a known non-success outcome."),
             (8, "Outcome is unknown; never retry automatically."),
             (9, "Watching ended without a terminal result."),
@@ -5376,10 +5478,87 @@ static HELP: &[HelpSpec] = &[
         ],
     },
     HelpSpec {
+        command: "watch",
+        summary: "Follow one job's durable events, defaulting to the job that is running.",
+        usage: "arkforge watch [--job <job-id>] [--after-sequence <u64>] [--timeout-ms <u64>]",
+        effect: "Read-only polling of durable events and point-in-time status. Timeout ends only this observation; it never cancels or changes the job.",
+        requires: &[
+            "A running ArkForge runtime, and a resume sequence no greater than the durable last_sequence.",
+        ],
+        produces: &[
+            "arkforge.job-watch/v1, arkforge.job-event/v1, and arkforge.command-result/v1 with strictly ordered typed events, terminal/timed-out status, and an exact resume command.",
+        ],
+        options: &[
+            (
+                "--job <job-id>",
+                "Exact durable job; defaults to the single running job, or the most recently active one when none is running.",
+            ),
+            (
+                "--after-sequence <u64>",
+                "Return events strictly after this cursor; optional, default 0.",
+            ),
+            (
+                "--timeout-ms <u64>",
+                "Bounded observation; optional, default 30000.",
+            ),
+        ],
+        examples: &[
+            "arkforge --output json watch",
+            "arkforge --output json watch --job <job-id> --after-sequence 0 --timeout-ms 30000",
+        ],
+        next: &[
+            "If non-terminal, repeat next_commands[0]; stopping the watch never cancels the job.",
+        ],
+        exits: &[
+            (
+                0,
+                "Events and status produced, including a timed-out observation.",
+            ),
+            (2, "Options are invalid."),
+            (
+                5,
+                "The runtime or job was not found, or no job is recorded.",
+            ),
+            (
+                6,
+                "Several jobs are running, or the resume cursor is ahead of the durable sequence.",
+            ),
+            (10, "Job query or IPC failed."),
+        ],
+    },
+    HelpSpec {
+        command: "cancel",
+        summary: "Ask the authority to stop one job at a safe boundary.",
+        usage: "arkforge cancel --job <job-id> --expect-sequence <u64>",
+        effect: "Mutating control only. It requests a safe stop at an optimistic sequence; it never edits the journal, replays an action, or reclassifies an outcome.",
+        requires: &["A durable job and the exact expected last sequence."],
+        produces: &[
+            "arkforge.job-cancellation/v1 with one of four typed dispositions and no automatic replay.",
+        ],
+        options: &[
+            ("--job <job-id>", "Exact durable job; required."),
+            (
+                "--expect-sequence <u64>",
+                "Optimistic concurrency cursor; required.",
+            ),
+        ],
+        examples: &["arkforge --output json cancel --job JOB-EXAMPLE --expect-sequence 4"],
+        next: &["arkforge job show --job <job-id>"],
+        exits: &[
+            (0, "Cancelled safely or already terminal."),
+            (2, "Inputs are invalid."),
+            (5, "Runtime or job was not found."),
+            (6, "Expected sequence is stale."),
+            (8, "Outcome is unknown."),
+            (9, "Cancellation is queued at a safe boundary."),
+            (10, "Controller or supervisor failed."),
+        ],
+    },
+    HelpSpec {
         command: "job",
-        summary: "Observe, cancel, reconcile, and recover durable jobs.",
-        usage: "arkforge job <list|show|watch|cancel|reconcile|recovery> [options]",
-        effect: "Observation and reconciliation are read-only; cancel is explicit optimistic control; recovery creates a distinct superseding plan and never replays the original job.",
+        summary: "Observe, reconcile, and recover durable jobs.",
+        usage: "arkforge job <list|show|reconcile|recovery> [options]",
+        effect: "Observation and reconciliation are read-only; recovery creates a distinct superseding plan and never replays the original job. Following and stopping a job are the top-level watch and cancel commands.",
         requires: &["A running ArkForge runtime."],
         produces: &["Durable point-in-time job status or typed recovery guidance."],
         options: &[],
@@ -5429,72 +5608,6 @@ static HELP: &[HelpSpec] = &[
             (2, "The job id is missing."),
             (5, "The runtime or job was not found."),
             (10, "Job query or IPC failed."),
-        ],
-    },
-    HelpSpec {
-        command: "job watch",
-        summary: "Read ordered job events after a resume sequence until terminal state or timeout.",
-        usage: "arkforge job watch --job <job-id> [--after-sequence <u64>] [--timeout-ms <u64>]",
-        effect: "Read-only polling of durable events and point-in-time status. Timeout ends only this observation; it never cancels or changes the job.",
-        requires: &[
-            "One exact job id and a resume sequence no greater than the durable last_sequence.",
-        ],
-        produces: &[
-            "arkforge.job-watch/v1, arkforge.job-event/v1, and arkforge.command-result/v1 with strictly ordered typed events, terminal/timed-out status, and an exact resume command.",
-        ],
-        options: &[
-            ("--job <job-id>", "Exact durable job id; required."),
-            (
-                "--after-sequence <u64>",
-                "Return events strictly after this cursor; optional, default 0.",
-            ),
-            (
-                "--timeout-ms <u64>",
-                "Bounded observation; optional, default 30000.",
-            ),
-        ],
-        examples: &[
-            "arkforge --output json job watch --job <job-id> --after-sequence 0 --timeout-ms 30000",
-        ],
-        next: &[
-            "If non-terminal, repeat next_commands[0]; stopping the watch never cancels the job.",
-        ],
-        exits: &[
-            (0, "Terminal state or bounded observation result produced."),
-            (2, "Job id, sequence, or timeout is invalid."),
-            (5, "The runtime or job was not found."),
-            (6, "The supplied resume sequence is ahead of durable state."),
-            (10, "Event decoding or IPC failed."),
-        ],
-    },
-    HelpSpec {
-        command: "job cancel",
-        summary: "Request cancellation against one exact observed journal sequence.",
-        usage: "arkforge job cancel --job <job-id> --expect-sequence <u64>",
-        effect: "Mutating job control. It cancels only at the daemon's declared safe boundary and never kills an in-flight device action.",
-        requires: &[
-            "A live paired supervisor and the exact last_sequence returned by job show/watch.",
-        ],
-        produces: &[
-            "arkforge.job-cancellation/v1 with cancelled-safe, queued-at-safe-boundary, already-terminal, or outcome-unknown disposition.",
-        ],
-        options: &[
-            ("--job <job-id>", "Exact durable job; required."),
-            (
-                "--expect-sequence <u64>",
-                "Optimistic journal sequence; required.",
-            ),
-        ],
-        examples: &["arkforge --output json job cancel --job JOB-EXAMPLE --expect-sequence 4"],
-        next: &["arkforge job watch --job <job-id> --after-sequence <u64>"],
-        exits: &[
-            (0, "Cancellation reached a confirmed safe terminal state."),
-            (2, "Inputs are invalid."),
-            (5, "Runtime or job was not found."),
-            (6, "Expected sequence is stale."),
-            (8, "Outcome is unknown."),
-            (9, "Cancellation is queued at a safe boundary."),
-            (10, "Controller or supervisor failed."),
         ],
     },
     HelpSpec {
@@ -5567,7 +5680,7 @@ static HELP: &[HelpSpec] = &[
             "arkforge --output json job recovery plan --job JOB-EXAMPLE --artifact <artifact-id> --profile org.openharmony.dayu200@1.0.0 --device OBS-PREFLIGHT",
         ],
         next: &[
-            "Use the returned flash apply command only after reviewing the new plan and superseding token.",
+            "Use the returned apply command only after reviewing the new plan and superseding token.",
         ],
         exits: &[
             (0, "Distinct superseding plan sealed."),
@@ -5997,7 +6110,7 @@ static HELP: &[HelpSpec] = &[
         ],
         examples: &[
             "arkforge help --all --format json",
-            "arkforge help flash apply --format json",
+            "arkforge help apply --format json",
         ],
         next: &["Follow one returned next_commands entry with exact identifiers."],
         exits: &[
@@ -6093,11 +6206,11 @@ mod tests {
             "artifact list",
             "artifact show",
             "flash plan",
-            "flash apply",
+            "apply",
+            "watch",
+            "cancel",
             "job list",
             "job show",
-            "job watch",
-            "job cancel",
             "job reconcile",
             "job recovery plan",
             "rescue list",
@@ -6131,6 +6244,9 @@ mod tests {
                 "device",
                 "artifact",
                 "flash",
+                "apply",
+                "watch",
+                "cancel",
                 "job",
                 "rescue",
                 "daemon",
@@ -6144,14 +6260,7 @@ mod tests {
                 .iter()
                 .map(|spec| spec.command)
                 .collect::<Vec<_>>(),
-            vec![
-                "job list",
-                "job show",
-                "job watch",
-                "job cancel",
-                "job reconcile",
-                "job recovery"
-            ]
+            vec!["job list", "job show", "job reconcile", "job recovery"]
         );
         assert_eq!(
             child_specs("job recovery")
