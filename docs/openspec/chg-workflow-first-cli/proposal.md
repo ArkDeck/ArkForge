@@ -1,6 +1,6 @@
 ---
 id: CHG-2026-CLI-arkforge-workflow-first-cli
-revision: 1
+revision: 2
 status: draft
 class: capability
 core_change_level: major
@@ -11,9 +11,11 @@ platforms: [macos, windows]
 # ArkForge Workflow-first CLI：一步刷机与复合查询面
 
 > 本 change 修订 CHG-2026-CLI-arkforge-agent-native-cli 的**工作流包装**，
-> 不修改其 authority supervisor、StepPermit、journal、no-replay、rescue 域分离、
-> mechanics/authority 双执行门中的任何一条语义。所有变化都发生在 `arkforge`
-> 前端的命令切分、信息推断与输出契约层。
+> 不修改其 authority supervisor、StepPermit、`arkforged` execution journal、
+> no-replay、rescue 域分离、mechanics/authority 双执行门中的任何一条语义。
+> 所有变化都发生在 `arkforge` 前端的命令切分、信息推断与输出契约层；
+> 为审计交互确认，CLI authority 新增独立的 approval record，不改写
+> mechanics journal/receipt codec。
 
 ## Why
 
@@ -31,23 +33,27 @@ assessment、plan、job）各占一条命令，操作者和 Agent 充当各阶�
   身份都能约束的情况下仍必填；单台在场设备仍要求人工抄 observation-id；
   daemon 必须手动 start。
 
-而检视安全模型后可确认：**上述步骤中只有一个动作真正必须由操作者完成——对
-具名数据影响表示同意**。其余全部可由 CLI 代劳而不弱化任何不变量，因为
-plan 之前的每一步都是只读或仅写主机存储，plan 最终封入的是精确 observation、
-精确 content hash 与精确 effect 集，与这些输入如何被收集无关。
+而检视安全模型后可确认：**唯一个在每次破坏性执行中都不可被推断的动作，
+是对具名数据影响表示同意**。内容尚未给出、设备/型号存在真歧义、或当次
+campaign 需具名时，操作者仍必须提供对应必要信息。除这些决策点外，
+plan 前各阶段可由 CLI 代劳：它们只读或仅写主机存储，plan 最终仍封入精确
+observation、content hash 与 effect 集。
 
 ## Decision
 
 按三条原则重切整个命令面：
 
 1. **必要信息学说**：只有四类信息允许要求操作者提供——
-   (a) 刷写内容（固件文件/artifact）；(b) 真歧义下的设备选择；
-   (c) 对破坏性 effect 的具名同意；(d) 一次性授权物（HDC 绑定、campaign）。
+   (a) 刷写内容（固件文件/artifact）；(b) 真歧义下的目标身份决策
+   （多设备选择，或弱物理身份下的 profile/型号断言）；
+   (c) 对破坏性 effect 的具名同意；(d) 授权输入（可复用的 exact HDC 绑定、
+   每次受控验收显式给出的 campaign）。
    其余一切必须推断；推断失败输出列出候选与消歧参数的 typed refusal，
    而不是要求输入。
 2. **复合输出**：每条命令一次返回该决策点所需的全部信息（内嵌被引用资源的
    摘要而非仅 ID），错误信封携带失败前已完成阶段的事实。Agent 的主任务路径
-   从 ~10 次调用降到 2 次。
+   在强身份或调用方已持有精确目标事实时从 ~10 次降到 2 次；
+   弱 Loader 身份下额外保留 1 次显式身份决策，不为凑路径数而自动猜型号。
 3. **按决策边界切颗粒**：只有真实的决策/effect 边界保留独立命令
    （破坏性执行、任务取消、救援域、daemon 生命周期）；仅为搬运数据而存在的
    命令并入复合命令或富化查询。
@@ -58,17 +64,21 @@ plan 之前的每一步都是只读或仅写主机存储，plan 最终封入的�
 |---|---|---|---|
 | 固件内容 | 必要 | 无参时列表选择（CAS 已导入 + cwd 已知格式文件） | `--file` / `--artifact` |
 | 设备（多台候选） | 必要（真歧义） | 编号选择器 | `--target <选择器>` / `--device <observation-id>` |
+| 弱物理身份下的 profile/型号 | 必要（开放世界歧义） | 输入 profile 声明的型号全称；身份强度不因人工输入升级 | 显式 `--profile` + 精确 `--device`，否则 `IDENTITY_CONFIRMATION_REQUIRED` |
 | 破坏性同意 | 必要 | plan 摘要确认屏 | `--ack <token>...` 精确覆盖 |
-| HDC / campaign | 必要（一次性） | `arkforge config set` | 同左 |
-| profile | 推断：固件格式 ∩ USB 模式身份 ∩ probe 确认，交集恰一 | `--profile` 仅作覆盖 | 同左 |
+| HDC | 必要（一次性配置） | `arkforge config set` | 同左 |
+| campaign | 必要（每次受控验收显式开启） | 当次命令给 `--hardware-campaign` | 同左；永不持久化为默认值 |
+| profile（强身份） | 推断：固件格式 ∩ USB 模式身份 ∩ 可证明型号的 probe 事实，交集恰一 | `--profile` 可显式覆盖 | 同左 |
 | intent | 推断：组合合法 intent 恰一时默认 | `--intent` 仅作覆盖 | 同左 |
 | 设备（单台候选） | 推断：唯一匹配即绑定 | — | — |
 | runtime-dir | 推断：平台默认目录 | `--runtime-dir` 仅作覆盖 | 同左 |
 | daemon 生命周期 | 推断：需要时自动拉起（`--no-auto-start` 退出） | — | — |
 | plan/apply 间一切搬运 | 推断：run 同进程闭合；plan 输出内嵌完整 apply 命令行 | — | — |
 
-推断永不放宽歧义拒绝：零台、多台、交集为空或多于一个，一律 typed refusal
-（交互模式下等价物是"问一次选择"，且仅限 (a)(b)(c) 三类必要信息）。
+推断永不放宽歧义拒绝：零台、多台、交集为空或多于一个，以及
+“已注册 profile 中恰一”但物理型号仍无法证明的开放世界歧义，一律不得
+静默升级为强身份。交互模式可就 (a)(b)(c) 三类当次必要信息询问；
+结构化模式必须通过显式参数消歧。
 
 ## Command surface
 
@@ -94,11 +104,12 @@ arkforge                      # = arkforge status
 │   ├── reconcile
 │   └── recover               # 复合恢复计划（原 recovery plan），产物经顶层 apply 执行
 ├── rescue                    # 救援域保持显式与细颗粒，刻意不流线化
-│   ├── list / inspect / read / plan / apply
+│   └── list / inspect / read / plan / apply
 ├── daemon
-│   ├── run / start / stop    # status 并入顶层 status
+│   └── run / start / stop    # status 并入顶层 status
 ├── config
-│   ├── show / set            # HDC 绑定、campaign、附加 profile-file 等一次性项
+│   ├── show / set / unset    # HDC 原子绑定/清除
+│   └── add / remove          # 附加 profile-file（绝对路径 + digest）
 ├── signing verify
 ├── completion
 └── help [PATH...] [--all]    # --all 或 JSON 无路径时一次输出整棵树
@@ -124,8 +135,9 @@ arkforge                      # = arkforge status
 | 角色 | 现行 | 本 change 后 |
 |---|---:|---:|
 | 人类（TTY） | 5–7 条命令 + 4 次 ID 搬运 | **1 条**（`arkforge flash fw.tar.gz` → 确认屏） |
-| Agent | 最多 10 次调用 | **2 次**（`flash plan --file … --output json` → `apply … --ack …`；可选 +1 `status`） |
-| CI 脚本 | 同 Agent | 2 次（`--ack` 显式，永不提示） |
+| Agent（强身份/已知精确目标） | 最多 10 次调用 | **2 次**（`flash plan --file … --output json` → `apply … --ack …`） |
+| Agent（弱 Loader 身份） | 最多 10 次调用 | **3 次**（`device list` → 显式 profile/device 的 plan → apply） |
+| CI 脚本（profile/device/ack 已钉死） | 同 Agent | **1 次** `flash run`；需分阶段 review 时为 2 次 plan → apply |
 
 ## Required semantic boundaries（保持不变）
 
@@ -133,10 +145,17 @@ arkforge                      # = arkforge status
   `--expect-plan-sha256`（run 同进程内部闭合）与 required_acknowledgements
   的精确覆盖；`UNEXPECTED_ACKNOWLEDGEMENT` 与 effect 漂移拒绝原样保留。
   宽泛 `--yes` / `--force` 仍不存在。
-- 交互确认屏是 acknowledgement 的**交互式签发**而非豁免：journal 记录 token
-  与来源（`interactive-tty` / `argv`）。
+- 交互确认屏是 acknowledgement 的**交互式接受**而非豁免：
+  独立 CLI authority approval record 记录 exact plan/token 与来源
+  （`interactive-tty` / `argv`）；`arkforged` journal/receipt 不改。
 - 设备自动绑定是"歧义必须拒绝"原则的接续：唯一匹配才绑定，plan 仍封精确
   observation，mutation 前身份复验不变。
+- 唯一的已注册 profile 不等于唯一物理型号：Loader/Maskrom 下若仅有
+  VID/PID、mode 与 `DEVICE_INFO Mode=...`，交互路径每次要求输入型号全称，
+  非交互路径必须显式给 `--profile` 与精确 `--device`。人工断言不提升
+  `identification.strength`。
+- HardwareCampaign 仍按 AFD-0004 每次具名开启；`config` 不接受 campaign 键。
+  已运行 runtime 的 campaign 与当次显式值不一致时 typed refusal，不自动重启。
 - rescue 仍为显式域、独立 plan/receipt/evidence，永不被 normal flash 自动选择，
   且本 change 刻意不为其做推断与交互流线化——处于救援场景时，显式与细颗粒
   本身就是功能。
@@ -146,7 +165,8 @@ arkforge                      # = arkforge status
 
 ## 对 CHG-2026-CLI-arkforge-agent-native-cli 的条款修订
 
-1. "No command prompts for input" → 收窄为：**非 TTY、`--output json|jsonl`、
+1. "No command prompts for input" → 收窄为：**stdin/stdout/stderr 任一不是 TTY、
+   `--output json|jsonl`、
    `--no-input` 下永不提示**；human TTY 模式对三类必要信息允许一次性询问。
    同一调用在 CI/Agent 中的确定性承诺不变且更精确。
 2. "`flash plan` never accepts a firmware path" → 保留于该条款原意（禁止跳过
@@ -157,13 +177,18 @@ arkforge                      # = arkforge status
    `flash run` 按构造满足（同进程 plan+apply+确认屏/`--ack`）。
 4. "`device list` never chooses a default / `flash plan` requires `--device`" →
    重述为：**歧义永不默认**；唯一匹配可自动绑定，绑定结果必须在确认屏/输出
-   中披露识别依据与身份强度。
-5. help 契约新增 `--all` 全树输出；`arkforge.command-help/v1` 逐 leaf 结构不变。
+   中披露识别依据与身份强度；弱物理身份不得因“在已知 profile 集合中唯一”
+   而静默当作已识别型号。
+5. help 契约新增 `arkforge.command-help-index/v1`，其 `commands` 按 path 字典序
+   内嵌 `arkforge.command-help/v1` leaf；leaf 现有字段含义不变，加性新增
+   `runtime_effect` 与 `facts_projections`。
 
 ## Out of scope
 
 - 不开放 DAYU600 execute；不触碰 18 条证据门。
-- 不修改 IPC 协议、supervisor 配对、permit codec、journal 格式。
+- 不修改 IPC 协议、supervisor 配对、permit codec、`arkforged` execution journal/
+  receipt 格式。CLI authority approval record 是本 change 新增的前端审计域，
+  不输入 mechanics evidence。
 - 不引入第三方 Rust 运行时依赖：交互层 v1 为编号列表 + 行提示
   （无 raw-mode 全屏 TUI）；全屏 TUI 若做，是后续独立 change 且须自研终端层。
 - 不提供远程 daemon、多租户、任意 argv 透传。
@@ -172,5 +197,7 @@ arkforge                      # = arkforge status
 
 - 本 change 为前端重组：回滚即恢复旧命令树，不影响 `arkforged` journal、
   已 sealed plan 与 ArkDeck authority。
+- 若回滚时已存在 CLI authority approval record，它们仅作审计证据保留；
+  旧版不读取也不将其解释为 permit/receipt。
 - 每阶段交付沿用 unreleased migration 规矩：canonical handler、human/JSON
   help、测试与仓内调用方同车，旧 leaf 同提交删除，无新旧并存期。

@@ -11,6 +11,7 @@
 |---|---|---|
 | `chg-arkdeck-arkforge-authority/` | ArkDeck 保留 authority，把 Rockchip lowering 交给 ArkForge | **已复制进 ArkDeck**（2026-08-15），落在 `openspec/changes/chg-2026-059-arkdeck-arkforge-authority/`；四份稿件 2026-08-19 起带 **NRU-004 超越声明**——fixed-tool 执行面已退役，照抄启动契约会失败 |
 | `chg-agent-native-cli/` | ArkForge 统一 Agent-native CLI、独立 CLI authority 与原生 RockUSB 救援面 | **software-complete / hardware-gated**（2026-08-20）；typed tree、direct authority、normal plan/apply、managed HDC、no-replay、JSONL 与原生救援已落地，三个旧 CLI 均已移除；CLI-AC-28..32 等待受控真机证据与 exact support-key review |
+| `chg-workflow-first-cli/` | 在 agent-native CLI 安全不变量上重切 workflow-first 命令、推断与复合输出 | **draft / amends `chg-agent-native-cli` workflow surface**（2026-08-22）；不改 authority/permit/no-replay/rescue 语义；弱 Loader 身份不自动冒充物理型号，HardwareCampaign 每次显式具名开启 |
 
 > 本目录留的是**草稿正本**；ArkDeck 里那份是按它的约定改过的落地版。
 > 两处若要再改，改 ArkDeck 那份——它已经进了那个仓的治理流程，
