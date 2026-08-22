@@ -6004,6 +6004,20 @@ fn optional_u64(value: Option<u64>) -> String {
         .unwrap_or_else(|| "null".into())
 }
 
+/// The `config set` binding example, written for the host this binary serves.
+///
+/// Absoluteness is a host judgement, and `validate_operand_value` applies the
+/// host's: `/usr/local/bin/hdc` names a binding on macOS and a rootless guess
+/// on Windows, where an absolute path carries a drive. One hardcoded literal
+/// would therefore publish, on one of the two supported platforms, advice that
+/// this same binary refuses.
+#[cfg(target_os = "windows")]
+const HDC_BINDING_EXAMPLE: &str =
+    r"arkforge config set hdc.path=C:\controlled-tools\hdc.exe hdc.sha256=<64-lowercase-hex>";
+#[cfg(not(target_os = "windows"))]
+const HDC_BINDING_EXAMPLE: &str =
+    "arkforge config set hdc.path=/usr/local/bin/hdc hdc.sha256=<64-lowercase-hex>";
+
 static HELP: &[HelpSpec] = &[
     HelpSpec {
         command: "",
@@ -7105,7 +7119,7 @@ static HELP: &[HelpSpec] = &[
         options: &[],
         examples: &[
             "arkforge config set daemon.require-release-signing=true",
-            "arkforge config set hdc.path=/usr/local/bin/hdc hdc.sha256=<64-lowercase-hex>",
+            HDC_BINDING_EXAMPLE,
         ],
         next: &["arkforge config show"],
         exits: &[
@@ -7452,6 +7466,10 @@ mod tests {
 
     #[test]
     fn every_example_parses_from_the_same_typed_tree_without_io() {
+        // Every refusal is collected rather than the first one panicking: a
+        // host-sensitive example is rarely alone, and one CI round on the other
+        // platform should name all of them at once.
+        let mut refused = Vec::new();
         for spec in HELP {
             for example in spec.examples {
                 let words = example
@@ -7459,14 +7477,20 @@ mod tests {
                     .map(example_fixture)
                     .collect::<Vec<_>>();
                 assert_eq!(words.first().map(String::as_str), Some("arkforge"));
-                parse_only(&words[1..]).unwrap_or_else(|error| {
-                    panic!(
+                if let Err(error) = parse_only(&words[1..]) {
+                    refused.push(format!(
                         "example for {:?} did not parse: {example:?}: {}: {}",
                         spec.command, error.code, error.message
-                    )
-                });
+                    ));
+                }
             }
         }
+        assert!(
+            refused.is_empty(),
+            "{} published example(s) do not parse on this host:\n{}",
+            refused.len(),
+            refused.join("\n")
+        );
     }
 
     #[test]
@@ -7748,7 +7772,13 @@ mod tests {
             return "org.openharmony.dayu200@1.0.0".into();
         }
         if word.contains("file") || word.contains("mach-o") || word.contains("absolute-path") {
-            return "/tmp/arkforge-fixture".into();
+            // A fixture rooted at `/` stands in for a binding on macOS and for a
+            // refusal on Windows, so the stand-in follows the host too.
+            return if cfg!(target_os = "windows") {
+                r"C:\arkforge-fixture".into()
+            } else {
+                "/tmp/arkforge-fixture".into()
+            };
         }
         match word {
             "<artifact-id>" => "0".repeat(64),
