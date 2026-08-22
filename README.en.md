@@ -77,21 +77,39 @@ target/debug/arkforge --runtime-dir /tmp/arkforge artifact show \
   --profile-file profiles/dayu200.yaml
 ```
 
-Normal flashing always follows `assess → plan → apply`:
+Normal flashing is two commands, `plan` then `apply`. One `flash plan` call
+imports, identifies, assesses, and seals:
 
 ```bash
-target/debug/arkforge --runtime-dir /tmp/arkforge flash assess \
-  --artifact <artifact-id> \
-  --profile org.openharmony.dayu200@1.0.0 \
-  --device <observation-id> \
-  --intent full-restore
-
 target/debug/arkforge --runtime-dir /tmp/arkforge flash plan \
-  --artifact <artifact-id> \
+  --file ./firmware.tar.gz \
   --profile org.openharmony.dayu200@1.0.0 \
-  --device <observation-id> \
-  --intent full-restore
+  --device <observation-id>
 ```
+
+`--file` is an **implicit import**: the bytes enter the content store first, the
+hash is sealed into the plan, and the result reports the artifact id — a caller
+path never appears in a plan. `--profile` and `--intent` may be omitted when they
+can be inferred: the profile is the intersection of the formats the firmware
+declares and the USB identities the device matches, adopted only when that
+intersection has exactly one member; the intent is defaulted when the combination
+admits exactly one. Several candidate devices are narrowed with `--device`
+(exact) or `--target` (serial digest, unique prefix of at least four characters,
+or a proven model name); the two are mutually exclusive, and ambiguity is always a
+typed refusal rather than a default pick.
+
+**Inference never crosses the identity gate.** When this build cannot prove which
+board the target is — in Loader or Maskrom there is only a VID/PID and a mode —
+sealing a plan requires both an explicit `--profile` and an exact `--device`, or
+the call returns `IDENTITY_CONFIRMATION_REQUIRED`. A human assertion does not
+raise `strength` to `strong`. `--assess-only` produces the assessment without
+materializing a plan and exits 0 even when `executable` is false.
+
+The result is one `arkforge.flash-plan/v2` document: `resolved` (each part with
+how it was decided and the evidence behind it), `assessment`, `plan`, and a
+directly executable `apply_command`. When a gate does not pass the call exits 3
+and the same document appears under `error.facts.flash_plan` with `plan: null` —
+the failure path carries what the success path would have.
 
 `plan` does not mutate the device. Execution requires the returned plan ID, SHA-256 digest, and every acknowledgement token to be supplied unchanged. Direct CLI flashing also requires a runtime bound to an HDC binary with the exact expected digest. Until production support is published, execution is available only inside an explicitly authorized hardware campaign.
 
@@ -112,7 +130,7 @@ target/debug/arkforge completion --shell zsh
 status      aggregate host / runtime / device / artifact / job / blocker snapshot
 device      list [--device] [--deep] / wait
 artifact    import / list / show
-flash       assess / plan / apply
+flash       plan [--assess-only] / apply
 job         list / show / watch / cancel / reconcile / recovery
 rescue      list / inspect / read / plan / apply
 daemon      run / start / stop

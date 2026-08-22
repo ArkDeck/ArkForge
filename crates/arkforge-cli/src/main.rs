@@ -248,11 +248,21 @@ impl HelpSpec {
                         }
                     }
                 }
-                let conflicts = match name.as_str() {
+                let mut conflicts = match name.as_str() {
                     "quiet" => vec!["verbose".into()],
                     "verbose" => vec!["quiet".into()],
                     _ => Vec::new(),
                 };
+                if prose.contains("conflicts with") {
+                    for token in description.split_whitespace() {
+                        if let Some(conflict) = token.strip_prefix("--") {
+                            let conflict = conflict.trim_end_matches(['.', ',', ';']);
+                            if conflict != name {
+                                conflicts.push(conflict.to_string());
+                            }
+                        }
+                    }
+                }
                 let effect_relevant = !matches!(
                     name.as_str(),
                     "output"
@@ -302,7 +312,13 @@ impl HelpSpec {
     /// as `(name, schema, max_items)`. No command carries composite refusal
     /// facts yet; each composite surface declares its own as it lands.
     fn facts_projections(&self) -> &'static [(&'static str, &'static str, u64)] {
-        &[]
+        match self.command {
+            "flash plan" => &[
+                ("flash_plan", "arkforge.flash-plan/v2", 1),
+                ("device_candidates", "arkforge.resolved-device/v1", 32),
+            ],
+            _ => &[],
+        }
     }
 
     fn effect_class(&self) -> &'static str {
@@ -340,8 +356,7 @@ impl HelpSpec {
     fn requires_controller(&self) -> bool {
         matches!(
             self.command,
-            "flash assess"
-                | "flash plan"
+            "flash plan"
                 | "flash apply"
                 | "job cancel"
                 | "job reconcile"
@@ -1614,66 +1629,17 @@ fn run_flash(arguments: &[String], globals: Globals) -> Result<i32, CliError> {
     };
     let options = Options::parse(&arguments[1..])?;
     match subcommand.as_str() {
-        "assess" => {
-            let intent = options.one("intent")?;
-            if intent != "full-restore" {
-                return Err(CliError::invalid(format!(
-                    "--intent accepts exactly 'full-restore', not {intent:?}."
-                )));
-            }
-            let artifact = options.one("artifact")?;
-            let profile = options.one("profile")?;
-            let device = options.one("device")?;
-            let runtime_dir = command_runtime_dir(&globals)?;
-            let assessment = supervisor::assess_plan(&runtime_dir, artifact, profile, device)?;
-            print_flash_assessment(
-                globals.output,
-                artifact,
-                profile,
-                device,
-                intent,
-                &assessment,
-            );
-            Ok(0)
-        }
-        "plan" => {
-            let intent = options.one("intent")?;
-            if intent != "full-restore" {
-                return Err(CliError::invalid(format!(
-                    "--intent accepts exactly 'full-restore', not {intent:?}."
-                )));
-            }
-            let artifact = options.one("artifact")?;
-            let profile = options.one("profile")?;
-            let device = options.one("device")?;
-            let runtime_dir = command_runtime_dir(&globals)?;
-            match supervisor::materialize_plan(&runtime_dir, artifact, profile, device)? {
-                MaterializePlanResponse::Plan(plan) => {
-                    print_flash_plan(globals.output, &plan, &[]);
-                    Ok(0)
-                }
-                MaterializePlanResponse::Assessment(assessment) => Err(CliError::new(
-                    "PLAN_UNAVAILABLE",
-                    format!(
-                        "No executable plan was created: {}",
-                        if assessment.unavailable_reason.is_empty() {
-                            assessment.availability
-                        } else {
-                            assessment.unavailable_reason
-                        }
-                    ),
-                    3,
-                    false,
-                )),
-            }
-        }
+        "plan" => run_flash_plan(&options, globals),
         "apply" => {
             let plan_id = options.one("plan")?;
             let expected = options.one("expect-plan-sha256")?;
             parse_digest("--expect-plan-sha256", expected)?;
             let acknowledgements = options.many_required("ack")?.to_vec();
-            let detach = options.optional_one("detach")?.is_some();
+            let detach = options.flag("detach");
             let runtime_dir = command_runtime_dir(&globals)?;
+            if let Some(campaign) = options.optional_one("hardware-campaign")? {
+                require_runtime_campaign(&runtime_dir, campaign)?;
+            }
             let job_id =
                 supervisor::apply_plan(&runtime_dir, plan_id, expected, &acknowledgements, detach)?;
             if detach {
@@ -1712,6 +1678,794 @@ fn run_flash(arguments: &[String], globals: Globals) -> Result<i32, CliError> {
         other => Err(CliError::invalid(format!(
             "Unknown flash command {other:?}. Run 'arkforge help flash'."
         ))),
+    }
+}
+
+/// One staging call: import, identify, assess, and seal.
+///
+/// The stages are joined here rather than left to the caller because every one
+/// of them only reads, or only writes host storage. The single step that cannot
+/// be inferred — consent to a named destructive effect — stays where it was.
+fn run_flash_plan(options: &Options, globals: Globals) -> Result<i32, CliError> {
+    let assess_only = options.flag("assess-only");
+    let registry = profile_registry()?;
+    let runtime_dir = command_runtime_dir(&globals)?;
+    if let Some(campaign) = options.optional_one("hardware-campaign")? {
+        require_runtime_campaign(&runtime_dir, campaign)?;
+    }
+    let resolved = resolve_plan_inputs(&globals, &registry, options, !assess_only)?;
+    let mut partial = PartialResolution::from_resolved(&resolved);
+
+    let assessment = supervisor::assess_plan(
+        &runtime_dir,
+        &resolved.artifact.artifact_id,
+        &resolved.profile.reference,
+        &resolved.device.observation.observation_id,
+    )
+    .map_err(|error| {
+        partial.refuse(&error.code, error.message, error.exit_code, error.retryable)
+    })?;
+    let executable = assessment_is_executable(&assessment);
+
+    if assess_only {
+        // The assessment is the answer, so producing one is success even when
+        // it says the device cannot be flashed by this build.
+        print_flash_plan_v2(globals.output, &resolved, &partial, Some(&assessment), None);
+        return Ok(0);
+    }
+
+    if !executable {
+        return Err(plan_unavailable(&partial, &assessment));
+    }
+    let materialized = supervisor::materialize_plan(
+        &runtime_dir,
+        &resolved.artifact.artifact_id,
+        &resolved.profile.reference,
+        &resolved.device.observation.observation_id,
+    )
+    .map_err(|error| {
+        partial.refuse(&error.code, error.message, error.exit_code, error.retryable)
+    })?;
+    match materialized {
+        MaterializePlanResponse::Plan(plan) => {
+            partial.sealed_campaign = sealed_campaign(&plan);
+            print_flash_plan_v2(
+                globals.output,
+                &resolved,
+                &partial,
+                Some(&assessment),
+                Some(&plan),
+            );
+            Ok(0)
+        }
+        // The gate closed between assessing and sealing. The second assessment
+        // is the current truth, so it is the one reported.
+        MaterializePlanResponse::Assessment(assessment) => {
+            Err(plan_unavailable(&partial, &assessment))
+        }
+    }
+}
+
+fn assessment_is_executable(assessment: &Assessment) -> bool {
+    assessment.availability == "available"
+        && execution_support_state_permits(&assessment.mechanics_maturity_state)
+        && execution_support_state_permits(&assessment.authority_support_state)
+}
+
+/// The campaign a sealed plan carries, if any.
+fn sealed_campaign(plan: &ExecutablePlan) -> Option<String> {
+    [
+        plan.mechanics_maturity_campaign.as_str(),
+        plan.authority_support_campaign.as_str(),
+    ]
+    .into_iter()
+    .find(|campaign| !campaign.is_empty())
+    .map(str::to_string)
+}
+
+/// Refuses a plan while keeping every fact the failed call already established.
+fn plan_unavailable(partial: &PartialResolution, assessment: &Assessment) -> CliError {
+    CliError::new(
+        "PLAN_UNAVAILABLE",
+        format!(
+            "No executable plan was created: {}",
+            if assessment.unavailable_reason.is_empty() {
+                assessment.availability.clone()
+            } else {
+                assessment.unavailable_reason.clone()
+            }
+        ),
+        3,
+        false,
+    )
+    .with_facts(format!(
+        "{{\"flash_plan\":{}}}",
+        flash_plan_v2_json(partial, Some(assessment), None)
+    ))
+}
+
+/// A running runtime must already be the named campaign.
+///
+/// It is never restarted to become one: a campaign is a named, reviewed
+/// acceptance run, and silently reconfiguring the runtime to match an argument
+/// would make the name meaningless.
+fn require_runtime_campaign(runtime_dir: &Path, campaign: &str) -> Result<(), CliError> {
+    let Ok(status) = supervisor::status(runtime_dir) else {
+        return Ok(());
+    };
+    if status.hardware_campaign == campaign {
+        return Ok(());
+    }
+    Err(CliError::new(
+        "RUNTIME_CAMPAIGN_MISMATCH",
+        if status.hardware_campaign.is_empty() {
+            format!(
+                "The running runtime has no hardware campaign, so it cannot serve campaign {campaign}."
+            )
+        } else {
+            format!(
+                "The running runtime serves hardware campaign {}, not {campaign}.",
+                status.hardware_campaign
+            )
+        },
+        6,
+        false,
+    ))
+}
+
+/// The declared upper bound on the `device_candidates` refusal projection,
+/// matching what `flash plan` publishes in its help.
+const MAX_DEVICE_CANDIDATE_FACTS: usize = 32;
+
+struct ResolvedArtifact {
+    artifact_id: String,
+    manifest: InspectArtifactResponse,
+    imported: bool,
+    compatible_profiles: Vec<String>,
+}
+
+struct ResolvedProfile {
+    reference: String,
+    resolution: &'static str,
+}
+
+struct ResolvedIntent {
+    value: String,
+    resolution: &'static str,
+}
+
+struct Resolved {
+    artifact: ResolvedArtifact,
+    device: inference::Candidate,
+    profile: ResolvedProfile,
+    intent: ResolvedIntent,
+}
+
+/// What resolution had established when it finished — or when it gave up.
+///
+/// A refusal carries this so the failure path returns the same facts the
+/// success path would have, and the caller does not have to re-query to learn
+/// how far the command got.
+#[derive(Default)]
+struct PartialResolution {
+    artifact: Option<String>,
+    device: Option<String>,
+    profile: Option<String>,
+    intent: Option<String>,
+    candidates: Vec<String>,
+    sealed_campaign: Option<String>,
+}
+
+impl PartialResolution {
+    fn from_resolved(resolved: &Resolved) -> Self {
+        Self {
+            artifact: Some(resolved_artifact_json(&resolved.artifact)),
+            device: Some(resolved_device_json(&resolved.device)),
+            profile: Some(format!(
+                "{{\"reference\":{},\"resolution\":{}}}",
+                json(&resolved.profile.reference),
+                json(resolved.profile.resolution)
+            )),
+            intent: Some(format!(
+                "{{\"value\":{},\"resolution\":{}}}",
+                json(&resolved.intent.value),
+                json(resolved.intent.resolution)
+            )),
+            candidates: Vec::new(),
+            sealed_campaign: None,
+        }
+    }
+
+    fn refuse(
+        &self,
+        code: &str,
+        message: impl Into<String>,
+        exit_code: i32,
+        retryable: bool,
+    ) -> CliError {
+        // The candidate list is bounded to what this command's help declares.
+        // The full count travels with it, so a truncated list is never mistaken
+        // for the whole field of candidates.
+        let listed = self
+            .candidates
+            .iter()
+            .take(MAX_DEVICE_CANDIDATE_FACTS)
+            .cloned()
+            .collect::<Vec<_>>();
+        CliError::new(code, message, exit_code, retryable).with_facts(format!(
+            "{{\"flash_plan\":{},\"device_candidates\":[{}],\"device_candidates_total\":{}}}",
+            flash_plan_v2_json(self, None, None),
+            listed.join(","),
+            self.candidates.len()
+        ))
+    }
+}
+
+fn resolved_artifact_json(artifact: &ResolvedArtifact) -> String {
+    format!(
+        "{{\"artifact_id\":{},\"sha256\":{},\"format\":{},\"imported\":{},\"manifest_summary\":{},\"compatible_profiles\":{}}}",
+        json(&artifact.artifact_id),
+        json(&artifact.manifest.content_sha256),
+        json(&artifact.manifest.format_id),
+        artifact.imported,
+        manifest_summary_json(&artifact.manifest),
+        json_strings(&artifact.compatible_profiles),
+    )
+}
+
+fn resolved_device_json(candidate: &inference::Candidate) -> String {
+    format!(
+        "{{\"observation_id\":{},\"mode\":{},\"identity_strength\":{},\"identification\":{}}}",
+        json(&candidate.observation.observation_id),
+        json(&candidate.observation.mode),
+        json(&candidate.observation.identity_strength),
+        candidate.identification.to_json(json),
+    )
+}
+
+/// Resolves everything a plan needs, refusing rather than guessing.
+///
+/// `materializing` gates the identity rule: sealing a plan against a board this
+/// build cannot name requires the caller to name it, while a read-only
+/// assessment may proceed and say plainly that the model is unproven.
+fn resolve_plan_inputs(
+    globals: &Globals,
+    registry: &inference::ProfileRegistry,
+    options: &Options,
+    materializing: bool,
+) -> Result<Resolved, CliError> {
+    let mut partial = PartialResolution::default();
+
+    // 1. Content. Bytes always enter the content store before anything binds
+    //    to them, whether the caller passed a path or an artifact id.
+    let artifact = resolve_artifact(globals, registry, options)?;
+    partial.artifact = Some(resolved_artifact_json(&artifact));
+    if artifact.compatible_profiles.is_empty() {
+        return Err(partial.refuse(
+            "PROFILE_AMBIGUOUS",
+            format!(
+                "No loaded profile declares artifact format {}.",
+                artifact.manifest.format_id
+            ),
+            6,
+            false,
+        ));
+    }
+
+    // 2. Device.
+    let explicit_device = options.optional_one("device")?;
+    let target = options.optional_one("target")?;
+    if explicit_device.is_some() && target.is_some() {
+        return Err(CliError::invalid(
+            "--device names one exact observation and --target searches for one; supply at most one.",
+        ));
+    }
+    let wait_device_ms = options
+        .optional_one("wait-device")?
+        .map(|value| parse_u64("--wait-device", value))
+        .transpose()?
+        .unwrap_or(0);
+    let device = resolve_device(
+        globals,
+        registry,
+        &artifact,
+        explicit_device,
+        target,
+        wait_device_ms,
+        &mut partial,
+    )?;
+    partial.device = Some(resolved_device_json(&device));
+
+    // 3. Profile: the intersection of what the firmware fits and what the
+    //    device could be.
+    let compatible = device
+        .identification
+        .compatible_profiles
+        .iter()
+        .filter(|profile| artifact.compatible_profiles.contains(profile))
+        .cloned()
+        .collect::<Vec<_>>();
+    let profile = match options.optional_one("profile")? {
+        Some(explicit) => {
+            if !compatible.iter().any(|profile| profile == explicit) {
+                return Err(partial.refuse(
+                    "PROFILE_INCOMPATIBLE",
+                    format!(
+                        "Profile {explicit} is not in the compatible set for this firmware and device: [{}].",
+                        compatible.join(", ")
+                    ),
+                    3,
+                    false,
+                ));
+            }
+            ResolvedProfile {
+                reference: explicit.to_string(),
+                resolution: "explicit",
+            }
+        }
+        None => match compatible.len() {
+            1 => ResolvedProfile {
+                reference: compatible[0].clone(),
+                resolution: "inferred",
+            },
+            _ => {
+                return Err(partial.refuse(
+                    "PROFILE_AMBIGUOUS",
+                    format!(
+                        "The firmware declares [{}] and the device matches [{}]; their intersection is [{}], which is not exactly one profile.",
+                        artifact.compatible_profiles.join(", "),
+                        device.identification.compatible_profiles.join(", "),
+                        compatible.join(", ")
+                    ),
+                    6,
+                    false,
+                ));
+            }
+        },
+    };
+    partial.profile = Some(format!(
+        "{{\"reference\":{},\"resolution\":{}}}",
+        json(&profile.reference),
+        json(profile.resolution)
+    ));
+
+    // 4. Identity gate. A compatible profile is not a proven board, and a
+    //    caller asserting one does not make the evidence stronger — it only
+    //    makes the assertion theirs.
+    if materializing
+        && device.identification.strength != inference::Strength::Strong
+        && !(explicit_device.is_some() && options.optional_one("profile")?.is_some())
+    {
+        return Err(partial.refuse(
+            "IDENTITY_CONFIRMATION_REQUIRED",
+            format!(
+                "This build cannot prove which board {} is (strength {}, model unproven). Sealing a destructive plan against it requires an explicit --profile and an exact --device.",
+                device.observation.observation_id,
+                device.identification.strength.as_str()
+            ),
+            3,
+            false,
+        ));
+    }
+
+    // 5. Intent.
+    let profile_document = registry.find(&profile.reference).ok_or_else(|| {
+        CliError::new(
+            "PROFILE_NOT_FOUND",
+            format!("This build has no profile {}.", profile.reference),
+            5,
+            false,
+        )
+    })?;
+    let legal = inference::legal_intents(profile_document, &artifact.manifest.format_id);
+    let intent = match options.optional_one("intent")? {
+        Some(explicit) => {
+            if !legal.contains(&explicit) {
+                return Err(partial.refuse(
+                    "INTENT_UNAVAILABLE",
+                    format!(
+                        "Profile {} and format {} admit [{}], not {explicit:?}.",
+                        profile.reference,
+                        artifact.manifest.format_id,
+                        legal.join(", ")
+                    ),
+                    3,
+                    false,
+                ));
+            }
+            ResolvedIntent {
+                value: explicit.to_string(),
+                resolution: "explicit",
+            }
+        }
+        None => match legal.as_slice() {
+            [only] => ResolvedIntent {
+                value: (*only).to_string(),
+                resolution: "defaulted",
+            },
+            _ => {
+                return Err(partial.refuse(
+                    "INTENT_REQUIRED",
+                    format!(
+                        "Profile {} and format {} admit [{}]; supply --intent.",
+                        profile.reference,
+                        artifact.manifest.format_id,
+                        legal.join(", ")
+                    ),
+                    3,
+                    false,
+                ));
+            }
+        },
+    };
+
+    Ok(Resolved {
+        artifact,
+        device,
+        profile,
+        intent,
+    })
+}
+
+/// Brings the firmware into the content store and reports what it is.
+fn resolve_artifact(
+    globals: &Globals,
+    registry: &inference::ProfileRegistry,
+    options: &Options,
+) -> Result<ResolvedArtifact, CliError> {
+    let file = options.optional_one("file")?;
+    let artifact = options.optional_one("artifact")?;
+    if file.is_some() && artifact.is_some() {
+        return Err(CliError::invalid(
+            "--file imports bytes and --artifact names bytes already imported; supply at most one.",
+        ));
+    }
+    let (digest, imported, store) = match (file, artifact) {
+        (Some(path), _) => {
+            let path = Path::new(path);
+            let metadata = std::fs::metadata(path).map_err(|error| {
+                CliError::new(
+                    "ARTIFACT_FILE_NOT_FOUND",
+                    format!("Cannot read firmware input {}: {error}", path.display()),
+                    5,
+                    false,
+                )
+            })?;
+            if !metadata.is_file() {
+                return Err(CliError::invalid(format!(
+                    "--file must name one regular file, not {}.",
+                    path.display()
+                )));
+            }
+            let store = open_artifact_store(globals)?;
+            let input = File::open(path).map_err(|error| {
+                CliError::new(
+                    "ARTIFACT_FILE_NOT_FOUND",
+                    format!("Cannot open firmware input {}: {error}", path.display()),
+                    5,
+                    false,
+                )
+            })?;
+            // The bytes are addressed before the plan can name them: --file is
+            // an implicit import, never a path the plan carries.
+            let object = store
+                .import(input, metadata.len(), None)
+                .map_err(artifact_store_error)?;
+            (object.digest, !object.deduplicated, store)
+        }
+        (None, Some(artifact)) => {
+            let digest = parse_digest("--artifact", artifact)?;
+            (digest, false, open_existing_artifact_store(globals)?)
+        }
+        (None, None) => {
+            return Err(CliError::new(
+                "CONTENT_REQUIRED",
+                "Supply the firmware as --file <path> or --artifact <artifact-id>.",
+                2,
+                false,
+            ));
+        }
+    };
+    let manifest = manifest_response(&stored_manifest(&store, &digest)?);
+    let compatible_profiles = registry.compatible_with_format(&manifest.format_id);
+    Ok(ResolvedArtifact {
+        artifact_id: digest.to_hex(),
+        manifest,
+        imported,
+        compatible_profiles,
+    })
+}
+
+/// Binds exactly one observation, or refuses with every candidate it saw.
+#[allow(clippy::too_many_arguments)]
+fn resolve_device(
+    globals: &Globals,
+    registry: &inference::ProfileRegistry,
+    artifact: &ResolvedArtifact,
+    explicit_device: Option<&str>,
+    target: Option<&str>,
+    wait_device_ms: u64,
+    partial: &mut PartialResolution,
+) -> Result<inference::Candidate, CliError> {
+    // Every refusal from here on carries what resolution already established:
+    // the caller should never have to re-import or re-query to learn how far
+    // the command got.
+    let mut client = public_client(globals).map_err(|error| {
+        partial.refuse(&error.code, error.message, error.exit_code, error.retryable)
+    })?;
+    let deadline = std::time::Instant::now() + std::time::Duration::from_millis(wait_device_ms);
+    loop {
+        let observations = client.device_list().map_err(|error| {
+            partial.refuse(&error.code, error.message, error.exit_code, error.retryable)
+        })?;
+        let mut candidates = observations
+            .into_iter()
+            .map(|observation| {
+                let identification = inference::identify(registry, &observation, None);
+                inference::Candidate {
+                    observation,
+                    identification,
+                }
+            })
+            .collect::<Vec<_>>();
+        if let Some(device) = explicit_device {
+            candidates.retain(|candidate| candidate.observation.observation_id == device);
+        } else {
+            // Only devices this firmware could actually be written to are
+            // candidates; a board of a different family is not an ambiguity.
+            candidates.retain(|candidate| {
+                candidate
+                    .identification
+                    .compatible_profiles
+                    .iter()
+                    .any(|profile| artifact.compatible_profiles.contains(profile))
+            });
+            if let Some(selector) = target {
+                let selected = inference::select_by_target(&candidates, selector)
+                    .into_iter()
+                    .map(|candidate| candidate.observation.observation_id.clone())
+                    .collect::<Vec<_>>();
+                candidates
+                    .retain(|candidate| selected.contains(&candidate.observation.observation_id));
+            }
+        }
+        partial.candidates = candidates.iter().map(resolved_device_json).collect();
+
+        match candidates.len() {
+            1 => return Ok(candidates.remove(0)),
+            0 if std::time::Instant::now() < deadline => {
+                std::thread::sleep(std::time::Duration::from_millis(200));
+            }
+            0 => {
+                return Err(partial.refuse(
+                    "DEVICE_NOT_FOUND",
+                    match (explicit_device, target) {
+                        (Some(device), _) => {
+                            format!("No current observation has id {device}.")
+                        }
+                        (None, Some(selector)) => format!(
+                            "No connected device matching {selector:?} declares a profile compatible with format {}.",
+                            artifact.manifest.format_id
+                        ),
+                        (None, None) => format!(
+                            "No connected device declares a profile compatible with format {}.",
+                            artifact.manifest.format_id
+                        ),
+                    },
+                    5,
+                    true,
+                ));
+            }
+            count => {
+                return Err(partial.refuse(
+                    "DEVICE_AMBIGUOUS",
+                    format!(
+                        "{count} connected devices could take this firmware; name one with --device <observation-id> or --target <selector>. Candidates: {}.",
+                        candidates
+                            .iter()
+                            .map(inference::Candidate::summary)
+                            .collect::<Vec<_>>()
+                            .join("; ")
+                    ),
+                    6,
+                    false,
+                ));
+            }
+        }
+    }
+}
+
+/// The one composite staging document, for every outcome.
+///
+/// The same shape carries a sealed plan, an assessment-only answer, and the
+/// refusal facts, so a caller parses one document rather than three.
+fn flash_plan_v2_json(
+    partial: &PartialResolution,
+    assessment: Option<&Assessment>,
+    plan: Option<&ExecutablePlan>,
+) -> String {
+    let assessment_json = match assessment {
+        None => "null".to_string(),
+        Some(assessment) => format!(
+            "{{\"executable\":{},\"availability\":{},\"unavailable_reason\":{},\"mechanics_maturity\":{{\"key_sha256\":{},\"state\":{}}},\"authority_support\":{{\"key_sha256\":{},\"state\":{}}},\"would_be_steps\":{},\"known_persistent_effects\":{},\"data_impact\":{},\"unknowns\":{},\"evidence_requirements\":{},\"blockers\":[{}]}}",
+            assessment_is_executable(assessment),
+            json(&assessment.availability),
+            optional_json(
+                (!assessment.unavailable_reason.is_empty())
+                    .then_some(assessment.unavailable_reason.as_str())
+            ),
+            json(&assessment.mechanics_maturity_key_sha256),
+            json(&assessment.mechanics_maturity_state),
+            json(&assessment.authority_support_key_sha256),
+            json(&assessment.authority_support_state),
+            steps_json(&assessment.would_be_steps),
+            effects_json(&assessment.known_persistent_effects),
+            key_values_json(&assessment.data_impact),
+            key_values_json(&assessment.unknowns),
+            key_values_json(&assessment.evidence_requirements),
+            assessment_blockers(assessment).join(","),
+        ),
+    };
+    let plan_json = match plan {
+        None => "null".to_string(),
+        Some(plan) => {
+            let acknowledgements = plan_acknowledgements(plan);
+            format!(
+                "{{\"plan_id\":{},\"plan_sha256\":{},\"provider_execution_plan_sha256\":{},\"public_projection_sha256\":{},\"execution_purpose\":{},\"expires_at_epoch_ms\":{},\"ordered_steps\":{},\"persistent_effects\":{},\"required_acknowledgements\":{},\"execution_context\":{{\"mechanics_maturity\":{},\"authority_support\":{},\"hardware_campaign\":{}}}}}",
+                json(&plan.plan_id),
+                json(&plan.plan_sha256),
+                json(&plan.provider_execution_plan_sha256),
+                json(&plan.public_projection_sha256),
+                json(&plan.execution_purpose),
+                plan.expires_at_epoch_ms,
+                steps_json(&plan.public_steps),
+                effects_json(&plan.persistent_effects),
+                json_strings(&acknowledgements),
+                json(&plan.mechanics_maturity_state),
+                json(&plan.authority_support_state),
+                optional_json(sealed_campaign(plan).as_deref()),
+            )
+        }
+    };
+    format!(
+        "{{\"schema\":\"arkforge.flash-plan/v2\",\"resolved\":{{\"artifact\":{},\"device\":{},\"profile\":{},\"intent\":{}}},\"assessment\":{},\"plan\":{},\"apply_command\":{},\"next_commands\":{}}}",
+        partial.artifact.as_deref().unwrap_or("null"),
+        partial.device.as_deref().unwrap_or("null"),
+        partial.profile.as_deref().unwrap_or("null"),
+        partial.intent.as_deref().unwrap_or("null"),
+        assessment_json,
+        plan_json,
+        optional_json(
+            plan.map(|plan| apply_command(plan, partial.sealed_campaign.as_deref()))
+                .as_deref()
+        ),
+        json_strings(&flash_plan_next_commands(partial, assessment, plan)),
+    )
+}
+
+fn assessment_blockers(assessment: &Assessment) -> Vec<String> {
+    let mut blockers = Vec::new();
+    if !execution_support_state_permits(&assessment.mechanics_maturity_state) {
+        blockers.push(format!(
+            "{{\"code\":\"MECHANICS_MATURITY_UNAVAILABLE\",\"state\":{},\"key_sha256\":{},\"remediation\":\"Run only a named reviewed hardware campaign or wait for production mechanics support.\"}}",
+            json(&assessment.mechanics_maturity_state),
+            json(&assessment.mechanics_maturity_key_sha256),
+        ));
+    }
+    if !execution_support_state_permits(&assessment.authority_support_state) {
+        blockers.push(format!(
+            "{{\"code\":\"AUTHORITY_SUPPORT_UNAVAILABLE\",\"state\":{},\"key_sha256\":{},\"remediation\":\"Bind exact HDC and use a named acceptance campaign, or wait for exact-key production support.\"}}",
+            json(&assessment.authority_support_state),
+            json(&assessment.authority_support_key_sha256),
+        ));
+    }
+    if blockers.is_empty() && !assessment_is_executable(assessment) {
+        blockers.push(format!(
+            "{{\"code\":\"PLAN_PRECONDITION_UNAVAILABLE\",\"state\":{},\"key_sha256\":null,\"remediation\":\"Inspect unavailable_reason and repeat only after the named precondition changes.\"}}",
+            json(&assessment.availability),
+        ));
+    }
+    blockers
+}
+
+/// The exact command that executes this sealed plan, with nothing to look up.
+fn apply_command(plan: &ExecutablePlan, campaign: Option<&str>) -> String {
+    format!(
+        "arkforge flash apply --plan {} --expect-plan-sha256 {}{}{}",
+        plan.plan_id,
+        plan.plan_sha256,
+        campaign
+            .map(|campaign| format!(" --hardware-campaign {campaign}"))
+            .unwrap_or_default(),
+        plan_acknowledgements(plan)
+            .iter()
+            .map(|token| format!(" --ack {token}"))
+            .collect::<String>(),
+    )
+}
+
+fn flash_plan_next_commands(
+    partial: &PartialResolution,
+    assessment: Option<&Assessment>,
+    plan: Option<&ExecutablePlan>,
+) -> Vec<String> {
+    if let Some(plan) = plan {
+        return vec![apply_command(plan, partial.sealed_campaign.as_deref())];
+    }
+    match assessment {
+        Some(assessment) if assessment_is_executable(assessment) => {
+            vec!["arkforge flash plan --file <firmware-file>".to_string()]
+        }
+        Some(_) => vec!["arkforge status".to_string()],
+        None => vec!["arkforge device list --deep".to_string()],
+    }
+}
+
+fn print_flash_plan_v2(
+    output: Output,
+    resolved: &Resolved,
+    partial: &PartialResolution,
+    assessment: Option<&Assessment>,
+    plan: Option<&ExecutablePlan>,
+) {
+    match output {
+        Output::Human => {
+            let next = flash_plan_next_commands(partial, assessment, plan);
+            match plan {
+                Some(plan) => println!("Normal flash plan {}", plan.plan_id),
+                None => println!("Flash assessment (no plan materialized)"),
+            }
+            println!("  artifact   {}", resolved.artifact.artifact_id);
+            println!(
+                "  format     {}  imported={}",
+                resolved.artifact.manifest.format_id, resolved.artifact.imported
+            );
+            println!(
+                "  device     {}  mode={}",
+                resolved.device.observation.observation_id, resolved.device.observation.mode
+            );
+            println!(
+                "  model      {}  strength={}",
+                resolved
+                    .device
+                    .identification
+                    .model
+                    .as_deref()
+                    .unwrap_or("unproven"),
+                resolved.device.identification.strength.as_str()
+            );
+            println!(
+                "  profile    {} ({})",
+                resolved.profile.reference, resolved.profile.resolution
+            );
+            println!(
+                "  intent     {} ({})",
+                resolved.intent.value, resolved.intent.resolution
+            );
+            if let Some(assessment) = assessment {
+                println!("  executable {}", assessment_is_executable(assessment));
+                println!("  steps      {}", assessment.would_be_steps.len());
+                print_effects_human(
+                    "known persistent effects",
+                    &assessment.known_persistent_effects,
+                );
+                print_key_values_human("data impact", &assessment.data_impact);
+                print_key_values_human("unknowns", &assessment.unknowns);
+                if !assessment.unavailable_reason.is_empty() {
+                    println!("  reason     {}", assessment.unavailable_reason);
+                }
+            }
+            if let Some(plan) = plan {
+                println!("  plan SHA-256 {}", plan.plan_sha256);
+                println!("  expires      {}", plan.expires_at_epoch_ms);
+                println!("Required acknowledgements:");
+                for token in plan_acknowledgements(plan) {
+                    println!("  {token}");
+                }
+            }
+            println!("Next: {}", next[0]);
+        }
+        Output::Json => println!("{}", flash_plan_v2_json(partial, assessment, plan)),
     }
 }
 
@@ -2411,7 +3165,7 @@ fn print_device_wait(
     probe: &DeviceProbeView,
 ) {
     let next = format!(
-        "arkforge flash assess --artifact <artifact-id> --profile {} --device {} --intent full-restore",
+        "arkforge flash plan --file <firmware-file> --profile {} --device {}",
         probe.profile_id, probe.observation.observation_id
     );
     match output {
@@ -2752,115 +3506,6 @@ fn profile_coverage_json(coverage: &ProfileCoverage) -> String {
         coverage.complete,
         targets
     )
-}
-
-fn print_flash_assessment(
-    output: Output,
-    artifact: &str,
-    profile: &str,
-    device: &str,
-    intent: &str,
-    assessment: &Assessment,
-) {
-    let mechanics_permits = execution_support_state_permits(&assessment.mechanics_maturity_state);
-    let authority_permits = execution_support_state_permits(&assessment.authority_support_state);
-    let executable =
-        assessment.availability == "available" && mechanics_permits && authority_permits;
-    let next = if executable {
-        vec![format!(
-            "arkforge flash plan --artifact {artifact} --profile {profile} --device {device} --intent {intent}"
-        )]
-    } else {
-        vec!["arkforge status".to_string()]
-    };
-    let mut blockers = Vec::new();
-    let mut blocker_codes = Vec::new();
-    if !mechanics_permits {
-        blocker_codes.push("MECHANICS_MATURITY_UNAVAILABLE");
-        blockers.push(format!(
-            "{{\"code\":\"MECHANICS_MATURITY_UNAVAILABLE\",\"state\":{},\"key_sha256\":{},\"remediation\":\"Run only a named reviewed hardware campaign or wait for production mechanics support.\"}}",
-            json(&assessment.mechanics_maturity_state),
-            json(&assessment.mechanics_maturity_key_sha256),
-        ));
-    }
-    if !authority_permits {
-        blocker_codes.push("AUTHORITY_SUPPORT_UNAVAILABLE");
-        blockers.push(format!(
-            "{{\"code\":\"AUTHORITY_SUPPORT_UNAVAILABLE\",\"state\":{},\"key_sha256\":{},\"remediation\":\"Bind exact HDC and use a named acceptance campaign, or wait for exact-key production support.\"}}",
-            json(&assessment.authority_support_state),
-            json(&assessment.authority_support_key_sha256),
-        ));
-    }
-    if blockers.is_empty() && !executable {
-        blocker_codes.push("PLAN_PRECONDITION_UNAVAILABLE");
-        blockers.push(format!(
-            "{{\"code\":\"PLAN_PRECONDITION_UNAVAILABLE\",\"state\":{},\"key_sha256\":null,\"remediation\":\"Inspect unavailable_reason and repeat assessment only after the named precondition changes.\"}}",
-            json(&assessment.availability),
-        ));
-    }
-    match output {
-        Output::Human => {
-            println!("Flash assessment (executable: {executable})");
-            println!("artifact      {artifact}");
-            println!("profile       {profile}");
-            println!("device        {device}");
-            println!("intent        {intent}");
-            println!("availability  {}", assessment.availability);
-            println!(
-                "mechanics      {} ({})",
-                assessment.mechanics_maturity_state, assessment.mechanics_maturity_key_sha256
-            );
-            println!(
-                "authority      {} ({})",
-                assessment.authority_support_state, assessment.authority_support_key_sha256
-            );
-            if !assessment.unavailable_reason.is_empty() {
-                println!("reason        {}", assessment.unavailable_reason);
-            }
-            println!("would-be steps ({})", assessment.would_be_steps.len());
-            for step in &assessment.would_be_steps {
-                println!(
-                    "  {}  kind={}  effect={}  target={}  cancellation={}",
-                    step.step_id, step.kind, step.effect, step.semantic_target, step.cancellation
-                );
-            }
-            print_effects_human(
-                "known persistent effects",
-                &assessment.known_persistent_effects,
-            );
-            print_key_values_human("data impact", &assessment.data_impact);
-            print_key_values_human("unknowns", &assessment.unknowns);
-            print_key_values_human("evidence requirements", &assessment.evidence_requirements);
-            for blocker in &blocker_codes {
-                println!("blocker       {blocker}");
-            }
-            println!("Next: {}", next[0]);
-        }
-        Output::Json => println!(
-            "{{\"schema\":\"arkforge.flash-assessment/v1\",\"executable\":{},\"artifact_id\":{},\"profile_id\":{},\"device_id\":{},\"intent\":{},\"availability\":{},\"unavailable_reason\":{},\"mechanics_maturity\":{{\"key_sha256\":{},\"state\":{}}},\"authority_support\":{{\"key_sha256\":{},\"state\":{}}},\"blockers\":[{}],\"would_be_steps\":{},\"known_persistent_effects\":{},\"data_impact\":{},\"unknowns\":{},\"evidence_requirements\":{},\"next_commands\":{}}}",
-            executable,
-            json(artifact),
-            json(profile),
-            json(device),
-            json(intent),
-            json(&assessment.availability),
-            optional_json(
-                (!assessment.unavailable_reason.is_empty())
-                    .then_some(assessment.unavailable_reason.as_str())
-            ),
-            json(&assessment.mechanics_maturity_key_sha256),
-            json(&assessment.mechanics_maturity_state),
-            json(&assessment.authority_support_key_sha256),
-            json(&assessment.authority_support_state),
-            blockers.join(","),
-            steps_json(&assessment.would_be_steps),
-            effects_json(&assessment.known_persistent_effects),
-            key_values_json(&assessment.data_impact),
-            key_values_json(&assessment.unknowns),
-            key_values_json(&assessment.evidence_requirements),
-            json_array(&next)
-        ),
-    }
 }
 
 fn execution_support_state_permits(state: &str) -> bool {
@@ -3986,6 +4631,13 @@ fn remediation(code: &str) -> Option<&'static str> {
             Some("arkforge help artifact show --format json")
         }
         "OBSERVATION_NOT_FOUND" => Some("arkforge device list"),
+        "CONTENT_REQUIRED" => Some("arkforge artifact list"),
+        "DEVICE_AMBIGUOUS" | "IDENTITY_CONFIRMATION_REQUIRED" => {
+            Some("arkforge device list --deep")
+        }
+        "PROFILE_AMBIGUOUS" | "PROFILE_INCOMPATIBLE" => Some("arkforge device list --deep"),
+        "INTENT_REQUIRED" | "INTENT_UNAVAILABLE" => Some("arkforge help flash plan --format json"),
+        "RUNTIME_CAMPAIGN_MISMATCH" => Some("arkforge status"),
         "DEVICE_WAIT_TIMEOUT" | "AMBIGUOUS_DEVICE" => Some("arkforge device list"),
         "PROFILE_NOT_FOUND" | "NO_PROVIDER_FOR_PROFILE" => Some("arkforge device list --deep"),
         "PLAN_UNAVAILABLE"
@@ -4444,7 +5096,7 @@ static HELP: &[HelpSpec] = &[
             "arkforge --output json device wait --profile org.openharmony.dayu200@1.0.0 --mode loader --timeout-ms 30000",
         ],
         next: &[
-            "arkforge flash assess --artifact <artifact-id> --profile <profile-id> --device <observation-id> --intent full-restore",
+            "arkforge flash plan --file <firmware-file> --profile <profile-id> --device <observation-id>",
         ],
         exits: &[
             (0, "Exactly one matching probed observation was produced."),
@@ -4572,129 +5224,108 @@ static HELP: &[HelpSpec] = &[
     },
     HelpSpec {
         command: "flash",
-        summary: "Assess and seal normal firmware work against exact resources.",
-        usage: "arkforge flash <assess|plan|apply> [options]",
-        effect: "Assessment is read-only; plan stores a sealed host object; apply is the only destructive normal-flash command.",
-        requires: &["Explicit artifact, profile, device observation, and semantic intent."],
-        produces: &["Projected steps, effects, data impact, unknowns, and evidence requirements."],
-        options: &[],
-        examples: &["arkforge help flash assess --format json"],
-        next: &[
-            "arkforge flash assess --artifact <artifact-id> --profile <profile-id> --device <observation-id> --intent full-restore",
+        summary: "Stage and seal normal firmware work against exact resources.",
+        usage: "arkforge flash <plan|apply> [options]",
+        effect: "Plan reads the device and stores a sealed host object; apply is the only destructive normal-flash command.",
+        requires: &[
+            "Firmware content, and enough evidence to name exactly one device and profile.",
         ],
+        produces: &["One composite staging document, or a durable job."],
+        options: &[],
+        examples: &["arkforge help flash plan --format json"],
+        next: &["arkforge flash plan --file <firmware-file>"],
         exits: &[
-            (0, "Assessment produced, including unavailable assessments."),
+            (0, "Staging document produced."),
             (2, "Command or option is invalid."),
             (3, "Materialization was refused."),
             (5, "A required runtime object was not found."),
+            (
+                6,
+                "The device or profile could not be narrowed to exactly one.",
+            ),
             (10, "Assessment or IPC failed."),
         ],
     },
     HelpSpec {
-        command: "flash assess",
-        summary: "Project the full-restore steps and effects for one exact semantic target.",
-        usage: "arkforge flash assess --artifact <artifact-id> --profile <profile-id> --device <observation-id> --intent full-restore",
-        effect: "Read-only assessment through the paired runtime. The result is structurally non-executable; no binding or plan is stored and no device is mutated.",
+        command: "flash plan",
+        summary: "Import, identify, assess, and seal one normal-flash plan in one call.",
+        usage: "arkforge flash plan (--file <firmware-file> | --artifact <artifact-id>) [--device <observation-id> | --target <selector>] [--profile <id@version>] [--intent <full-restore>] [--hardware-campaign <campaign-id>] [--wait-device <u64>] [--assess-only]",
+        effect: "Imports bytes into the content store, reads the exact device through the paired runtime, and stores a sealed plan. It does not mutate the device. --assess-only stops before sealing and materializes nothing.",
         requires: &[
-            "An inspected artifact id.",
-            "A loaded profile id.",
-            "An exact current device observation id.",
-            "The explicit intent full-restore.",
+            "A running paired CLI authority supervisor.",
+            "Exact mechanics maturity and independent authority support, for a sealed plan.",
+            "An explicit --profile and exact --device when this build cannot prove which physical board the target is.",
         ],
         produces: &[
-            "arkforge.flash-assessment/v1 with executable, exact mechanics/authority keys, projected steps, effects, data impact, blockers, and evidence requirements.",
+            "arkforge.flash-plan/v2 carrying the resolved artifact, device identification, profile and intent with how each was decided, the assessment, the sealed plan, and the exact apply command. A refused plan returns the same document under error.facts.flash_plan with plan null.",
         ],
         options: &[
             (
-                "--artifact <artifact-id>",
-                "Exact inspected artifact; required.",
+                "--file <firmware-file>",
+                "Firmware container imported into the content store before the plan binds it.",
             ),
             (
-                "--profile <profile-id>",
-                "Explicit loaded profile; required.",
+                "--artifact <artifact-id>",
+                "Exact already-imported content id; conflicts with --file.",
             ),
             (
                 "--device <observation-id>",
-                "Exact current observation; required.",
+                "Exact current observation; conflicts with --target.",
+            ),
+            (
+                "--target <selector>",
+                "Serial digest, unique identifier prefix of at least four characters, or proven product model; conflicts with --device.",
+            ),
+            (
+                "--profile <id@version>",
+                "Exact loaded profile identity; inferred when the compatible set has exactly one member.",
             ),
             (
                 "--intent <full-restore>",
-                "Only supported semantic intent; required.",
+                "Semantic intent; defaulted when the profile and format admit exactly one.",
+            ),
+            (
+                "--hardware-campaign <campaign-id>",
+                "Named acceptance campaign the running runtime must already serve; it is never restarted to match.",
+            ),
+            (
+                "--wait-device <u64>",
+                "Bounded wait in milliseconds for a matching device to appear.",
+            ),
+            (
+                "--assess-only",
+                "Produce the assessment and stop; no plan is materialized.",
             ),
         ],
         examples: &[
-            "arkforge --output json flash assess --artifact <artifact-id> --profile org.openharmony.dayu200@1.0.0 --device OBS-PREFLIGHT --intent full-restore",
+            "arkforge --output json flash plan --file <firmware-file> --profile org.openharmony.dayu200@1.0.0 --device OBS-PREFLIGHT",
+            "arkforge --output json flash plan --artifact <artifact-id> --assess-only",
         ],
         next: &[
-            "Resolve every unknowns[] and evidence_requirements[] item, then repeat the exact assessment.",
+            "Use the returned apply_command verbatim after reviewing required_acknowledgements.",
         ],
         exits: &[
             (
                 0,
-                "Assessment produced; availability may still be unavailable.",
+                "Plan sealed, or assessment produced under --assess-only.",
             ),
-            (2, "Required inputs are missing or invalid."),
-            (3, "Materialization was refused."),
+            (2, "Inputs are invalid, or no firmware was named."),
             (
-                5,
-                "The artifact, profile, observation, provider, or runtime was not found.",
+                3,
+                "Mechanics or authority support is unavailable, or the physical identity was not established.",
             ),
+            (5, "A named resource, device, or runtime is unavailable."),
             (
-                10,
-                "The response violated the public assessment contract or IPC failed.",
+                6,
+                "The device or profile could not be narrowed to exactly one, or the runtime serves another campaign.",
             ),
-        ],
-    },
-    HelpSpec {
-        command: "flash plan",
-        summary: "Seal one executable normal-flash plan for exact artifact, profile, and device facts.",
-        usage: "arkforge flash plan --artifact <artifact-id> --profile <id@version> --device <observation-id> --intent full-restore",
-        effect: "Reads the exact device through the paired runtime and stores a sealed plan. It does not mutate the device.",
-        requires: &[
-            "A running paired CLI authority supervisor.",
-            "Exact mechanics maturity and independent authority support.",
-            "An imported artifact, canonical profile id@version, and exact current observation.",
-        ],
-        produces: &[
-            "arkforge.flash-plan/v1 with plan digest, ordered steps, sealed effects, expiry, and exact acknowledgement tokens.",
-        ],
-        options: &[
-            (
-                "--artifact <artifact-id>",
-                "Exact imported content id; required.",
-            ),
-            (
-                "--profile <id@version>",
-                "Exact loaded profile identity; required.",
-            ),
-            (
-                "--device <observation-id>",
-                "Exact current observation; required.",
-            ),
-            (
-                "--intent <full-restore>",
-                "Only supported semantic intent; required.",
-            ),
-        ],
-        examples: &[
-            "arkforge --output json flash plan --artifact <artifact-id> --profile org.openharmony.dayu200@1.0.0 --device OBS-PREFLIGHT --intent full-restore",
-        ],
-        next: &[
-            "Use the returned next_commands entry verbatim after reviewing required_acknowledgements.",
-        ],
-        exits: &[
-            (0, "Executable plan sealed; the device was not mutated."),
-            (2, "Inputs are invalid."),
-            (3, "Mechanics or authority support is unavailable."),
-            (5, "A named resource or runtime is unavailable."),
-            (6, "Target binding conflicts with durable state."),
             (10, "Controller, store, or supervisor failed."),
         ],
     },
     HelpSpec {
         command: "flash apply",
         summary: "Apply one sealed normal-flash plan under persistent per-step authority.",
-        usage: "arkforge flash apply --plan <plan-id> --expect-plan-sha256 <sha256> --ack <token> [--ack <token>...] [--detach]",
+        usage: "arkforge flash apply --plan <plan-id> --expect-plan-sha256 <sha256> --ack <token> [--ack <token>...] [--hardware-campaign <campaign-id>] [--detach]",
         effect: "Destructive. Starts only the exact sealed plan after digest and acknowledgement equality; the supervisor mints one durable single-use permit per admitted step.",
         requires: &[
             "A live paired authority supervisor and fresh exact target continuity.",
@@ -4715,6 +5346,10 @@ static HELP: &[HelpSpec] = &[
             (
                 "--ack <token>",
                 "Exact required effect token; repeat exactly as returned.",
+            ),
+            (
+                "--hardware-campaign <campaign-id>",
+                "Named acceptance campaign the running runtime must already serve; required when the sealed plan carries one.",
             ),
             (
                 "--detach",
@@ -5457,7 +6092,6 @@ mod tests {
             "artifact import",
             "artifact list",
             "artifact show",
-            "flash assess",
             "flash plan",
             "flash apply",
             "job list",

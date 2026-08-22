@@ -231,6 +231,100 @@ pub fn identify(
     }
 }
 
+/// The intents a `(profile, artifact format)` combination admits.
+///
+/// Exactly one today: the measured archive path restores the whole device and
+/// declares nothing else. It is a function rather than a constant so that the
+/// day a combination admits two, the caller starts asking instead of quietly
+/// defaulting to the first.
+pub fn legal_intents(profile: &DeviceProfile, format_id: &str) -> Vec<&'static str> {
+    if profile
+        .artifact_formats
+        .iter()
+        .any(|format| format.as_str() == format_id)
+    {
+        vec!["full-restore"]
+    } else {
+        Vec::new()
+    }
+}
+
+/// One current observation together with what this build concluded about it.
+pub struct Candidate {
+    pub observation: DeviceObservationView,
+    pub identification: Identification,
+}
+
+impl Candidate {
+    /// A short line naming this candidate for a selection or refusal listing.
+    pub fn summary(&self) -> String {
+        format!(
+            "{}  mode={}  model={}  profiles={}  strength={}",
+            self.observation.observation_id,
+            self.observation.mode,
+            self.identification.model.as_deref().unwrap_or("unproven"),
+            if self.identification.compatible_profiles.is_empty() {
+                "none".to_string()
+            } else {
+                self.identification.compatible_profiles.join(",")
+            },
+            self.identification.strength.as_str()
+        )
+    }
+}
+
+/// The shortest `--target` prefix that may select a device.
+///
+/// Three characters of a digest collide often enough to pick the wrong board,
+/// and picking the wrong board here is the failure this whole surface exists to
+/// prevent.
+pub const MIN_TARGET_PREFIX: usize = 4;
+
+/// Candidates a porcelain `--target` selector names.
+///
+/// Tried in order of how exactly the caller identified the device, and the
+/// first form that matches anything wins — so a full identifier is never
+/// widened into a prefix sweep. A raw USB serial is never available here: the
+/// public socket exposes only its domain-separated digest, so a caller
+/// selecting by serial selects by that digest.
+pub fn select_by_target<'a>(candidates: &'a [Candidate], selector: &str) -> Vec<&'a Candidate> {
+    let exact = candidates
+        .iter()
+        .filter(|candidate| {
+            candidate.observation.observation_id == selector
+                || candidate.observation.serial_sha256 == selector
+        })
+        .collect::<Vec<_>>();
+    if !exact.is_empty() {
+        return exact;
+    }
+    // A proven product model, never a merely compatible profile: "the only
+    // profile this build ships that matches" is not the name of a board.
+    let by_model = candidates
+        .iter()
+        .filter(|candidate| {
+            candidate
+                .identification
+                .model
+                .as_deref()
+                .is_some_and(|model| model.eq_ignore_ascii_case(selector))
+        })
+        .collect::<Vec<_>>();
+    if !by_model.is_empty() {
+        return by_model;
+    }
+    if selector.len() < MIN_TARGET_PREFIX {
+        return Vec::new();
+    }
+    candidates
+        .iter()
+        .filter(|candidate| {
+            candidate.observation.observation_id.starts_with(selector)
+                || candidate.observation.serial_sha256.starts_with(selector)
+        })
+        .collect()
+}
+
 /// Parses the `0xVVVV:0xPPPP` identity the transport reports.
 fn parse_usb_identity(value: &str) -> Option<(u16, u16)> {
     let (vendor, product) = value.split_once(':')?;
@@ -339,6 +433,77 @@ mod tests {
         assert_eq!(identified.profile, None);
         assert_eq!(identified.profile_resolution, "unrecognized");
         assert_eq!(identified.strength, Strength::None);
+    }
+
+    fn candidate(id: &str, serial: &str, model: Option<&str>) -> Candidate {
+        let mut observation = observation("rockusb-loader", "0x2207:0x350a");
+        observation.observation_id = id.into();
+        observation.serial_sha256 = serial.into();
+        let mut identification = identify(&ProfileRegistry::load().unwrap(), &observation, None);
+        identification.model = model.map(str::to_string);
+        Candidate {
+            observation,
+            identification,
+        }
+    }
+
+    #[test]
+    fn a_target_selector_prefers_exact_identifiers_over_prefixes() {
+        let candidates = [
+            candidate("USB-2207-350a-01120000", "aabbccdd", None),
+            candidate("USB-2207-350a-01200000", "aabbeeff", None),
+        ];
+        // A full identifier selects one even though it is also a prefix of
+        // itself: an exact answer is never widened into a sweep.
+        let selected = select_by_target(&candidates, "USB-2207-350a-01120000");
+        assert_eq!(selected.len(), 1);
+        assert_eq!(
+            selected[0].observation.observation_id,
+            "USB-2207-350a-01120000"
+        );
+
+        // The serial digest is selectable; the raw serial never reaches here.
+        assert_eq!(select_by_target(&candidates, "aabbeeff").len(), 1);
+
+        // A prefix that fits both is an ambiguity, reported as two.
+        assert_eq!(select_by_target(&candidates, "USB-2207").len(), 2);
+        assert_eq!(select_by_target(&candidates, "aabb").len(), 2);
+    }
+
+    #[test]
+    fn a_target_prefix_below_the_minimum_selects_nothing() {
+        let candidates = [candidate("USB-2207-350a-01120000", "aabbccdd", None)];
+        assert!(select_by_target(&candidates, "USB").is_empty());
+        assert_eq!(select_by_target(&candidates, "USB-").len(), 1);
+        assert_eq!(MIN_TARGET_PREFIX, 4);
+    }
+
+    #[test]
+    fn a_target_model_matches_only_a_proven_model() {
+        // Compatible with the dayu200 profile, but with no proof of the board.
+        let unproven = [candidate("USB-2207-350a-01120000", "aabbccdd", None)];
+        assert!(
+            select_by_target(&unproven, "DAYU200").is_empty(),
+            "a compatible profile must not answer to the model name"
+        );
+
+        let proven = [candidate(
+            "USB-2207-350a-01120000",
+            "aabbccdd",
+            Some("DAYU200"),
+        )];
+        assert_eq!(select_by_target(&proven, "dayu200").len(), 1);
+    }
+
+    #[test]
+    fn intents_default_only_while_the_combination_admits_exactly_one() {
+        let registry = ProfileRegistry::load().unwrap();
+        let dayu200 = registry.find("org.openharmony.dayu200@1.0.0").unwrap();
+        assert_eq!(
+            legal_intents(dayu200, "rockchip-images-targz"),
+            vec!["full-restore"]
+        );
+        assert!(legal_intents(dayu200, "sprd-pac").is_empty());
     }
 
     #[test]

@@ -73,21 +73,29 @@ target/debug/arkforge --runtime-dir /tmp/arkforge artifact show \
   --profile-file profiles/dayu200.yaml
 ```
 
-正常刷写遵循固定的 `assess → plan → apply` 流程：
+正常刷写是 `plan → apply` 两条命令。`flash plan` 一次完成导入、识别、评估与封 plan：
 
 ```bash
-target/debug/arkforge --runtime-dir /tmp/arkforge flash assess \
-  --artifact <artifact-id> \
-  --profile org.openharmony.dayu200@1.0.0 \
-  --device <observation-id> \
-  --intent full-restore
-
 target/debug/arkforge --runtime-dir /tmp/arkforge flash plan \
-  --artifact <artifact-id> \
+  --file ./firmware.tar.gz \
   --profile org.openharmony.dayu200@1.0.0 \
-  --device <observation-id> \
-  --intent full-restore
+  --device <observation-id>
 ```
+
+`--file` 是**隐式 import**：字节先进 CAS，hash 封入 plan，输出回报 artifact_id——plan 里
+从不出现调用方路径。`--profile` 与 `--intent` 在能被推断时可省略：profile 取「固件声明的
+格式 ∩ 设备匹配的 usbIdentities」，恰一才采用；intent 在该组合只有一个合法值时默认。
+多台候选设备用 `--device <observation-id>`（精确）或 `--target <选择器>`（序列号摘要、
+≥4 字符唯一前缀、已证明的型号名）消歧，两者互斥；歧义永远是 typed refusal，不会默认选一台。
+
+**但推断永不越过身份门**：本构建无法证明目标是哪块板子时（Loader/Maskrom 下只有
+VID/PID 与 mode），封 plan 必须同时显式给 `--profile` 与精确 `--device`，否则返回
+`IDENTITY_CONFIRMATION_REQUIRED`。人工断言不会把 `strength` 提升为 `strong`。
+`--assess-only` 只出评估、不物化 plan，即使 `executable:false` 也 exit 0。
+
+输出是单份 `arkforge.flash-plan/v2`：`resolved`（含每项的 resolution 与识别证据）、
+`assessment`、`plan` 与可直接执行的 `apply_command`。门未通过时 exit 3，同一份文档出现在
+`error.facts.flash_plan` 里且 `plan:null`——失败路径与成功路径信息等价。
 
 `plan` 不会修改设备。真正执行时，必须原样带回结果中的 plan ID、SHA-256 和全部 acknowledgement token。直接 CLI 刷写还要求 runtime 绑定摘要完全匹配的 HDC；在生产支持发布前，只能在明确授权的硬件 campaign 中执行。
 
@@ -108,7 +116,7 @@ target/debug/arkforge completion --shell zsh
 status      主机 / runtime / 设备 / artifact / 任务 / blocker 聚合快照
 device      list [--device] [--deep] / wait
 artifact    import / list / show
-flash       assess / plan / apply
+flash       plan [--assess-only] / apply
 job         list / show / watch / cancel / reconcile / recovery
 rescue      list / inspect / read / plan / apply
 daemon      run / start / stop

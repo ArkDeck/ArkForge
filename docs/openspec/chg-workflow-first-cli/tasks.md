@@ -29,7 +29,7 @@
 
 ## TASK-WF-003 — 推断引擎与复合 `flash plan`
 
-- Status: pending
+- Status: done
 - 设备解析（0/1/N 规则）、profile 兼容与物理型号分层推断、intent 默认、
   `--target` 选择器；弱 Loader 身份在非交互下必须显式 `--profile` + 精确
   `--device`，人工断言不提升 strength。
