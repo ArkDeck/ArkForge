@@ -1,0 +1,32 @@
+{
+  "id": "AF-CONF-TRANSCRIPT-DISPATCH-001",
+  "suite": "transcript-dispatch",
+  "title": "replay one recorded destructive step into a semantic receipt",
+  "kind": "replay",
+  "requirements": ["AF-TRN-020", "AF-TRN-023", "AF-DIG-012"],
+  "description": "Parse the committed transcript, select occurrence 0 of the semantic action flash-partitions, require status=ok and responseDigest, copy its ordered semantic facts into the receipt, and compute the canonical ActionReceipt digest. This is contract replay only; a replay toolchain never permits an executable plan.",
+  "input": {
+    "transcriptFile": "transcript.yaml",
+    "transcriptSha256": "2bb4cff47ac57ef3bc64222e1b1dcfe22ffd4279e2f01c9f5d992e915d8649ab",
+    "action": "flash-partitions",
+    "occurrence": 0
+  },
+  "expected": {
+    "recordSequence": 8,
+    "recordStatus": "ok",
+    "evidenceSha256": "50bdc0f0cbd41d26f245a129fb1a140e61fc1ab4bab317cc65bbc66ce3101f2b",
+    "receiptDigest": "71cacdc4082f088b07ae374ce7257bc00f68685d8df88cc0bf29e61fda6c5a55",
+    "receiptDiag": "{\"facts\": {\"step\": \"flash-partitions\", \"writeFace\": \"wlx\", \"dataImpact\": \"userdata-overwritten\", \"partitionCount\": \"9\"}, \"jobId\": \"JOB-CONF-REPLAY\", \"planId\": \"PLAN-CONF-REPLAY\", \"stepId\": \"STEP-FLASH-PARTITIONS\", \"actionId\": \"ACT-FLASH-PARTITIONS\", \"permitId\": \"PERMIT-CONF-REPLAY\", \"attemptId\": \"ATTEMPT-1\", \"disposition\": \"semanticSuccess\", \"schemaVersion\": 1, \"verifiedRange\": null, \"evidenceSha256\": h'50bdc0f0cbd41d26f245a129fb1a140e61fc1ab4bab317cc65bbc66ce3101f2b', \"typedSkipReason\": null, \"verificationOutcome\": null, \"verificationStrength\": null, \"failureClassification\": null}",
+    "hardwareExecutionPermitted": false
+  },
+  "files": {
+    "transcript.yaml": {
+      "bytes": 8893,
+      "sha256": "2bb4cff47ac57ef3bc64222e1b1dcfe22ffd4279e2f01c9f5d992e915d8649ab"
+    },
+    "receipt.cbor": {
+      "bytes": 436,
+      "sha256": "ff9f6783b5cfdd8e01c8d530fbdac24855fe2192867c6624c6fee3ecb3407d2c"
+    }
+  }
+}

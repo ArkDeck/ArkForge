@@ -188,6 +188,10 @@ fn durable_outcome(
             ("code", Json::str("JOURNAL_RECORD_TOO_LARGE")),
             ("size", Json::Unsigned(*size as u64)),
         ]),
+        Err(DurableJournalError::Poisoned { .. }) => Json::object(vec![
+            ("result", Json::str("reject")),
+            ("code", Json::str("JOURNAL_POISONED")),
+        ]),
         Err(DurableJournalError::Journal(error)) => journal_error_code(error),
         Err(DurableJournalError::Io { .. }) => Json::object(vec![
             ("result", Json::str("reject")),

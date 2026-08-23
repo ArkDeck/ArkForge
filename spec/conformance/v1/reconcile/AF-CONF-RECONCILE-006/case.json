@@ -1,0 +1,16 @@
+{
+  "id": "AF-CONF-RECONCILE-006",
+  "suite": "reconcile",
+  "title": "no observations never proves no effect",
+  "kind": "derive",
+  "requirements": ["AF-REC-002"],
+  "description": "Reduce read-only observations only. No verdict authorizes replay, and an indeterminate or empty observation set remains stillUnknown.",
+  "input": {
+    "observations": []
+  },
+  "expected": {
+    "verdict": "stillUnknown",
+    "reason": "no declared effect was observed"
+  },
+  "files": {}
+}

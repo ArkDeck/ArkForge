@@ -1,0 +1,22 @@
+{
+  "id": "AF-CONF-CLI-002",
+  "suite": "cli",
+  "title": "machine help describes cancel without contacting a daemon",
+  "kind": "process",
+  "requirements": ["AF-CLI-001", "AF-CLI-002"],
+  "description": "Run the ArkForge CLI as a subprocess with exactly this argv, no daemon and a clean temporary runtime directory. Compare exit status and stdout/stderr byte-for-byte.",
+  "input": {
+    "argv": ["help", "cancel", "--format", "json"]
+  },
+  "expected": {
+    "exitCode": 0,
+    "stdoutFile": "stdout.txt",
+    "stderrFile": null
+  },
+  "files": {
+    "stdout.txt": {
+      "bytes": 1791,
+      "sha256": "9ef9981f8e9bfbd02ceaff59cf17cf1eaa95648990210c06a5ba682cf5be43c7"
+    }
+  }
+}

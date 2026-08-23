@@ -10,7 +10,7 @@
 //! 14.1). Nothing here ever concludes "try that step again".
 
 use crate::JobState;
-use crate::journal::{Journal, JournalRecordKind};
+use crate::journal::{Journal, JournalRecord, JournalRecordKind};
 use arkforge_core::ids::OpaqueId;
 use core::fmt;
 use std::collections::BTreeMap;
@@ -65,8 +65,12 @@ pub struct PermitLedger {
 impl PermitLedger {
     /// Replays the journal into per-permit dispositions.
     pub fn from_journal(journal: &Journal) -> Self {
+        Self::from_records(journal.records().iter())
+    }
+
+    fn from_records<'a>(records: impl IntoIterator<Item = &'a JournalRecord>) -> Self {
         let mut permits: BTreeMap<String, PermitDisposition> = BTreeMap::new();
-        for record in journal.records() {
+        for record in records {
             let Some(permit_id) = fact_value(record.facts.as_slice(), fact::PERMIT_ID) else {
                 continue;
             };
@@ -75,21 +79,46 @@ impl PermitLedger {
                 .or_insert(PermitDisposition::Unseen);
             match record.kind {
                 JournalRecordKind::StepPermitAccepted => {
-                    *entry = PermitDisposition::AcceptedIntentNotDurable;
+                    if matches!(entry, PermitDisposition::Unseen) {
+                        *entry = PermitDisposition::AcceptedIntentNotDurable;
+                    }
                 }
                 JournalRecordKind::StepIntentRecorded => {
-                    *entry = PermitDisposition::IntentDurable;
+                    if matches!(
+                        entry,
+                        PermitDisposition::Unseen
+                            | PermitDisposition::AcceptedIntentNotDurable
+                            | PermitDisposition::IntentDurable
+                    ) {
+                        *entry = PermitDisposition::IntentDurable;
+                    }
                 }
                 JournalRecordKind::PermitConsuming | JournalRecordKind::ExternalDispatchStarted => {
-                    *entry = PermitDisposition::ConsumingOutcomeUnknown;
+                    if !matches!(entry, PermitDisposition::Consumed { .. }) {
+                        *entry = PermitDisposition::ConsumingOutcomeUnknown;
+                    }
                 }
-                JournalRecordKind::PermitConsumed => {
-                    let receipt = fact_value(record.facts.as_slice(), fact::RECEIPT_DIGEST)
-                        .unwrap_or_default()
-                        .to_string();
-                    *entry = PermitDisposition::Consumed {
-                        receipt_digest: receipt,
-                    };
+                // The semantic receipt is the durable proof that settles the
+                // external effect. `permitConsumed` is the following marker,
+                // but a crash between those two durable appends must still be
+                // recovered from the receipt rather than called unknown.
+                JournalRecordKind::SemanticReceiptRecorded | JournalRecordKind::PermitConsumed
+                    if !matches!(entry, PermitDisposition::Consumed { .. }) =>
+                {
+                    match fact_value(record.facts.as_slice(), fact::RECEIPT_DIGEST)
+                        .filter(|digest| !digest.is_empty())
+                    {
+                        Some(receipt) => {
+                            *entry = PermitDisposition::Consumed {
+                                receipt_digest: receipt.to_string(),
+                            };
+                        }
+                        None => {
+                            // A record that claims a receipt but cannot
+                            // name it is not proof of a settled effect.
+                            *entry = PermitDisposition::ConsumingOutcomeUnknown;
+                        }
+                    }
                 }
                 _ => {}
             }
@@ -108,16 +137,19 @@ impl PermitLedger {
         self.permits.iter()
     }
 
-    /// Permits whose outcome the journal cannot settle. Each one is a possible
-    /// external effect that has to be reconciled, not retried.
+    /// Permits whose durable intent may have reached an external effect and
+    /// whose outcome the journal cannot settle.
+    ///
+    /// Acceptance without an intent is not an external effect. Conversely, a
+    /// durable intent is unresolved even before `permitConsuming`: recovery
+    /// cannot use process memory to prove that dispatch had not started.
     pub fn unresolved(&self) -> Vec<&String> {
         self.permits
             .iter()
             .filter(|(_, disposition)| {
                 matches!(
                     disposition,
-                    PermitDisposition::ConsumingOutcomeUnknown
-                        | PermitDisposition::AcceptedIntentNotDurable
+                    PermitDisposition::IntentDurable | PermitDisposition::ConsumingOutcomeUnknown
                 )
             })
             .map(|(id, _)| id)
@@ -139,9 +171,10 @@ pub enum CrashDisposition {
     /// An intent is durable, or a dispatch started, and no semantic receipt
     /// followed. Whether the device was touched is unknown.
     OutcomeUnknown { permit_id: String },
-    /// A receipt is durable and no checkpoint followed. Verify the exact
-    /// receipt and write the checkpoint. Do not re-execute.
-    CheckpointFromDurableReceipt { permit_id: String },
+    /// A receipt is durable and no checkpoint followed. The permit is settled,
+    /// but the job is not terminal: replay a validated receipt and reconcile;
+    /// never infer a checkpoint, continuation, or success from the marker alone.
+    ReceiptDurableCheckpointMissing { permit_id: String },
     /// Checkpointed but not concluded. Replay events to the authority and carry
     /// on with read-only postflight. Do not re-execute.
     ReplayFromCheckpoint,
@@ -160,13 +193,31 @@ impl CrashDisposition {
 
     /// Derives the row for `job_id` from the journal.
     pub fn derive(journal: &Journal, job_id: &str) -> CrashDisposition {
+        // Current daemon journals are one file per job, but older records did
+        // not all carry a jobId fact. In a single-job journal those untagged
+        // records belong to that job. In a combined journal an explicit jobId
+        // is authoritative and must never be overridden by a coincidentally
+        // matching subject (the subject of a step-scoped record is often the
+        // step id, not the job id).
+        let created_records: Vec<_> = journal
+            .records()
+            .iter()
+            .filter(|record| record.kind == JournalRecordKind::JobCreated)
+            .collect();
+        let is_single_job_journal = created_records.len() == 1
+            && match fact_value(created_records[0].facts.as_slice(), fact::JOB_ID) {
+                Some(created_job_id) => created_job_id == job_id,
+                None => created_records[0].subject.as_str() == job_id,
+            };
         let records: Vec<_> = journal
             .records()
             .iter()
-            .filter(|record| {
-                record.subject.as_str() == job_id
-                    || fact_value(record.facts.as_slice(), fact::JOB_ID) == Some(job_id)
-            })
+            .filter(
+                |record| match fact_value(record.facts.as_slice(), fact::JOB_ID) {
+                    Some(record_job_id) => record_job_id == job_id,
+                    None => record.subject.as_str() == job_id || is_single_job_journal,
+                },
+            )
             .collect();
 
         if !records
@@ -176,7 +227,10 @@ impl CrashDisposition {
             return CrashDisposition::NoJob;
         }
 
-        if let Some(state) = records.iter().rev().find_map(|record| match record.kind {
+        // A terminal classification is immutable. If an older buggy build
+        // appended a second opinion, replay keeps the first durable terminal
+        // fact rather than allowing history to be rewritten.
+        if let Some(state) = records.iter().find_map(|record| match record.kind {
             JournalRecordKind::OutcomeClassified => {
                 fact_value(record.facts.as_slice(), "outcome").and_then(terminal_state)
             }
@@ -186,9 +240,10 @@ impl CrashDisposition {
             return CrashDisposition::Concluded(state);
         }
 
-        // Per-permit, newest first: the first permit that is not settled decides
-        // the row, because an unsettled effect outranks any later bookkeeping.
-        let ledger = PermitLedger::from_journal(journal);
+        // Jobs admit steps serially, so the permit named by the newest record
+        // is the current step and decides the row. Earlier permits must already
+        // have checkpointed before a later permit can exist.
+        let ledger = PermitLedger::from_records(records.iter().copied());
         let mut newest_permit: Option<&str> = None;
         for record in records.iter().rev() {
             if let Some(permit_id) = fact_value(record.facts.as_slice(), fact::PERMIT_ID) {
@@ -224,9 +279,11 @@ impl CrashDisposition {
             PermitDisposition::Consumed { .. } if checkpointed => {
                 CrashDisposition::ReplayFromCheckpoint
             }
-            PermitDisposition::Consumed { .. } => CrashDisposition::CheckpointFromDurableReceipt {
-                permit_id: permit_id.to_string(),
-            },
+            PermitDisposition::Consumed { .. } => {
+                CrashDisposition::ReceiptDurableCheckpointMissing {
+                    permit_id: permit_id.to_string(),
+                }
+            }
         }
     }
 }
@@ -248,10 +305,10 @@ impl fmt::Display for CrashDisposition {
                 "permit {permit_id} has a durable intent and no semantic receipt; the outcome is \
                  unknown and must be reconciled, never replayed"
             ),
-            CrashDisposition::CheckpointFromDurableReceipt { permit_id } => write!(
+            CrashDisposition::ReceiptDurableCheckpointMissing { permit_id } => write!(
                 f,
-                "permit {permit_id} has a durable receipt and no checkpoint; verify the exact \
-                 receipt and write the checkpoint without re-executing"
+                "permit {permit_id} has a durable receipt and no checkpoint; replay only a \
+                 validated receipt and reconcile without re-executing or inferring success"
             ),
             CrashDisposition::ReplayFromCheckpoint => f.write_str(
                 "the step is checkpointed; replay events to the authority without re-executing",
@@ -338,6 +395,16 @@ mod tests {
             )
         }
 
+        fn receipt(self) -> Self {
+            self.record(
+                JournalRecordKind::SemanticReceiptRecorded,
+                &[
+                    (fact::PERMIT_ID, "PERMIT-1"),
+                    (fact::RECEIPT_DIGEST, "abc123"),
+                ],
+            )
+        }
+
         fn consumed(self) -> Self {
             self.record(
                 JournalRecordKind::PermitConsumed,
@@ -406,19 +473,29 @@ mod tests {
     }
 
     #[test]
-    fn a_durable_receipt_without_a_checkpoint_completes_the_checkpoint() {
-        let builder = Builder::new()
-            .created()
-            .accepted()
-            .intent()
-            .consuming()
-            .consumed();
-        assert_eq!(
-            builder.disposition(),
-            CrashDisposition::CheckpointFromDurableReceipt {
-                permit_id: "PERMIT-1".into()
-            }
-        );
+    fn a_durable_receipt_without_a_checkpoint_is_settled_but_not_terminal() {
+        for builder in [
+            Builder::new()
+                .created()
+                .accepted()
+                .intent()
+                .consuming()
+                .receipt(),
+            Builder::new()
+                .created()
+                .accepted()
+                .intent()
+                .consuming()
+                .receipt()
+                .consumed(),
+        ] {
+            assert_eq!(
+                builder.disposition(),
+                CrashDisposition::ReceiptDurableCheckpointMissing {
+                    permit_id: "PERMIT-1".into()
+                }
+            );
+        }
     }
 
     #[test]
@@ -428,11 +505,30 @@ mod tests {
             .accepted()
             .intent()
             .consuming()
+            .receipt()
             .consumed()
             .checkpointed();
         assert_eq!(
             builder.disposition(),
             CrashDisposition::ReplayFromCheckpoint
+        );
+    }
+
+    #[test]
+    fn the_first_durable_terminal_classification_is_immutable() {
+        let builder = Builder::new()
+            .created()
+            .record(
+                JournalRecordKind::OutcomeClassified,
+                &[("outcome", "succeeded")],
+            )
+            .record(
+                JournalRecordKind::OutcomeClassified,
+                &[("outcome", "cancelledSafe")],
+            );
+        assert_eq!(
+            builder.disposition(),
+            CrashDisposition::Concluded(JobState::Succeeded)
         );
     }
 
@@ -447,7 +543,7 @@ mod tests {
             CrashDisposition::OutcomeUnknown {
                 permit_id: "PERMIT-1".into(),
             },
-            CrashDisposition::CheckpointFromDurableReceipt {
+            CrashDisposition::ReceiptDurableCheckpointMissing {
                 permit_id: "PERMIT-1".into(),
             },
             CrashDisposition::ReplayFromCheckpoint,
@@ -464,6 +560,7 @@ mod tests {
             .accepted()
             .intent()
             .consuming()
+            .receipt()
             .consumed();
         let ledger = PermitLedger::from_journal(&builder.journal);
         assert_eq!(
@@ -486,6 +583,148 @@ mod tests {
         );
         assert!(!ledger.disposition("PERMIT-1").permits_dispatch());
         assert_eq!(ledger.unresolved(), vec![&"PERMIT-1".to_string()]);
+    }
+
+    #[test]
+    fn acceptance_without_intent_is_not_an_unresolved_external_effect() {
+        let builder = Builder::new().created().accepted();
+        let ledger = PermitLedger::from_journal(&builder.journal);
+        assert_eq!(
+            ledger.disposition("PERMIT-1"),
+            PermitDisposition::AcceptedIntentNotDurable
+        );
+        assert!(ledger.unresolved().is_empty());
+    }
+
+    #[test]
+    fn durable_intent_is_unresolved_before_consumption_is_recorded() {
+        let builder = Builder::new().created().accepted().intent();
+        let ledger = PermitLedger::from_journal(&builder.journal);
+        assert_eq!(
+            ledger.disposition("PERMIT-1"),
+            PermitDisposition::IntentDurable
+        );
+        assert_eq!(ledger.unresolved(), vec![&"PERMIT-1".to_string()]);
+    }
+
+    #[test]
+    fn a_semantic_receipt_settles_the_ledger_before_permit_consumed() {
+        let builder = Builder::new()
+            .created()
+            .accepted()
+            .intent()
+            .consuming()
+            .receipt();
+        let ledger = PermitLedger::from_journal(&builder.journal);
+        assert_eq!(
+            ledger.disposition("PERMIT-1"),
+            PermitDisposition::Consumed {
+                receipt_digest: "abc123".into()
+            }
+        );
+        assert!(ledger.unresolved().is_empty());
+    }
+
+    #[test]
+    fn a_receipt_marker_without_its_digest_fails_closed_as_unresolved() {
+        let builder = Builder::new()
+            .created()
+            .accepted()
+            .intent()
+            .consuming()
+            .record(
+                JournalRecordKind::SemanticReceiptRecorded,
+                &[(fact::PERMIT_ID, "PERMIT-1")],
+            );
+        let ledger = PermitLedger::from_journal(&builder.journal);
+        assert_eq!(
+            ledger.disposition("PERMIT-1"),
+            PermitDisposition::ConsumingOutcomeUnknown
+        );
+        assert_eq!(ledger.unresolved(), vec![&"PERMIT-1".to_string()]);
+    }
+
+    #[test]
+    fn a_consumed_permit_cannot_be_downgraded_by_later_records() {
+        let builder = Builder::new()
+            .created()
+            .accepted()
+            .intent()
+            .consuming()
+            .receipt()
+            .consumed()
+            .record(
+                JournalRecordKind::StepIntentRecorded,
+                &[(fact::PERMIT_ID, "PERMIT-1")],
+            );
+        let ledger = PermitLedger::from_journal(&builder.journal);
+        assert_eq!(
+            ledger.disposition("PERMIT-1"),
+            PermitDisposition::Consumed {
+                receipt_digest: "abc123".into()
+            }
+        );
+    }
+
+    #[test]
+    fn explicit_job_id_overrides_a_matching_subject() {
+        let mut journal = Journal::new();
+        journal
+            .append(
+                JournalRecordKind::JobCreated,
+                1_010,
+                1,
+                id("JOB-1"),
+                vec![(id(fact::JOB_ID), "JOB-1".into())],
+            )
+            .unwrap();
+        journal
+            .append(
+                JournalRecordKind::StepPermitAccepted,
+                1_020,
+                1,
+                id("JOB-1"),
+                vec![
+                    (id(fact::JOB_ID), "JOB-2".into()),
+                    (id(fact::PERMIT_ID), "PERMIT-OTHER".into()),
+                ],
+            )
+            .unwrap();
+
+        assert_eq!(
+            CrashDisposition::derive(&journal, "JOB-1"),
+            CrashDisposition::SafeToCancel
+        );
+    }
+
+    #[test]
+    fn untagged_legacy_step_records_belong_to_the_sole_job_file() {
+        let mut journal = Journal::new();
+        journal
+            .append(
+                JournalRecordKind::JobCreated,
+                1_010,
+                1,
+                id("JOB-1"),
+                vec![(id(fact::JOB_ID), "JOB-1".into())],
+            )
+            .unwrap();
+        journal
+            .append(
+                JournalRecordKind::StepPermitAccepted,
+                1_020,
+                1,
+                id("STEP-1"),
+                vec![(id(fact::PERMIT_ID), "PERMIT-1".into())],
+            )
+            .unwrap();
+
+        assert_eq!(
+            CrashDisposition::derive(&journal, "JOB-1"),
+            CrashDisposition::DispatchForbiddenUntilIntentDurable {
+                permit_id: "PERMIT-1".into()
+            }
+        );
     }
 
     #[test]

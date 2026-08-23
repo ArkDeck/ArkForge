@@ -1,0 +1,22 @@
+{
+  "id": "AF-CONF-CLI-004",
+  "suite": "cli",
+  "title": "an unknown command is a structured error before side effects",
+  "kind": "process",
+  "requirements": ["AF-CLI-003"],
+  "description": "Run the ArkForge CLI as a subprocess with exactly this argv, no daemon and a clean temporary runtime directory. Compare exit status and stdout/stderr byte-for-byte.",
+  "input": {
+    "argv": ["--output", "json", "frobnicate"]
+  },
+  "expected": {
+    "exitCode": 2,
+    "stdoutFile": "stdout.txt",
+    "stderrFile": null
+  },
+  "files": {
+    "stdout.txt": {
+      "bytes": 463,
+      "sha256": "7d3af88108c1ddb9726ede72c0603ee64acc35c5ef6a296e986d38ea0a907aed"
+    }
+  }
+}

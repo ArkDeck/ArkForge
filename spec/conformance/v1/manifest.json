@@ -1,9 +1,25 @@
 {
   "schema": "arkforge.conformance-manifest/v1",
-  "specVersion": "1.0.0-draft.1",
+  "specVersion": "1.0.0-draft.3",
   "generator": "crates/arkforge-conformance (Rust reference implementation as oracle)",
   "authority": "These bytes are normative. If a fixture and the prose in spec/ disagree, that is a spec defect to be resolved by a spec revision, never by an implementation choosing one side silently.",
   "suites": {
+    "action-receipt": {
+      "cases": ["AF-CONF-RECEIPT-001", "AF-CONF-RECEIPT-002", "AF-CONF-RECEIPT-003", "AF-CONF-RECEIPT-004", "AF-CONF-RECEIPT-005"],
+      "files": {
+        "action-receipt/AF-CONF-RECEIPT-001/case.json": "b33103c946cb446840b552d39ed71b47d7596fd320f04546bcb9623df2412806",
+        "action-receipt/AF-CONF-RECEIPT-001/receipt.cbor": "213799e155cb8b845f7cfb354c77ad11680394e92806685aebd40cc98bc1015f",
+        "action-receipt/AF-CONF-RECEIPT-001/receipt.cbor.hex": "1cabf176619df362961c53f58491761c6c5a6272073237466f046debcd245f5b",
+        "action-receipt/AF-CONF-RECEIPT-002/case.json": "1ffbcf257620c7cb64fa922f8f1d49cfe65970b34f9b5248c98f267647fa1e49",
+        "action-receipt/AF-CONF-RECEIPT-002/receipt.cbor": "3a8dff8c2dac4b2dd620f406b3c37af8625e1a946742ca89df06f83696882a3f",
+        "action-receipt/AF-CONF-RECEIPT-002/receipt.cbor.hex": "ee5d6bc8bd3a129ce3f44051674a71b7b03c57c7b6675fe45867189f5ebbcfc9",
+        "action-receipt/AF-CONF-RECEIPT-003/case.json": "3fdf1d1da489954b9910172cb6ffdf98dcdff9e9367447ed04b169fbc9485b4d",
+        "action-receipt/AF-CONF-RECEIPT-003/receipt.cbor": "1a26ef53f5fa78cd38397dc68f067f9569d85c32a910758ca1be4174a9325461",
+        "action-receipt/AF-CONF-RECEIPT-003/receipt.cbor.hex": "b96f78fc8778249e32c75e684901e8697891abddc3dd355d4b5fe206571f0983",
+        "action-receipt/AF-CONF-RECEIPT-004/case.json": "ff8f4aaed1634b5d1e00d112f6ee20b8fa25b66d51bb303da09ec8cfd46f839a",
+        "action-receipt/AF-CONF-RECEIPT-005/case.json": "abfff170f8303017a1df7070897f808b2f31fa41104657ccd44f3772cea7b365"
+      }
+    },
     "admission": {
       "cases": [
         "AF-CONF-ADMISSION-001",
@@ -274,6 +290,19 @@
         "canonical-cbor/AF-CONF-CBOR-069/case.json": "29c59539c3c2d659ab7485accb25a33d5374931bf0d938a405bbce61a638427a"
       }
     },
+    "cli": {
+      "cases": ["AF-CONF-CLI-001", "AF-CONF-CLI-002", "AF-CONF-CLI-003", "AF-CONF-CLI-004"],
+      "files": {
+        "cli/AF-CONF-CLI-001/case.json": "54aff8f30bb7f0b4414d04cb4c27fbc53cd5a5c4a84bd60c91d5ceba8966c75b",
+        "cli/AF-CONF-CLI-001/stdout.txt": "a06c95bfaa61cfd468163f1a43fdf1c1c96fe425efd14c4c0f1e9b5ffb8a7a67",
+        "cli/AF-CONF-CLI-002/case.json": "4806ccbca2205079e25ee526c7058bb416af4430e39617a5c1f96f1ab2aacde7",
+        "cli/AF-CONF-CLI-002/stdout.txt": "9ef9981f8e9bfbd02ceaff59cf17cf1eaa95648990210c06a5ba682cf5be43c7",
+        "cli/AF-CONF-CLI-003/case.json": "b7c536a849706ab819f8b86815b09e97ee857e504d17b57ab4e303eb39d788e6",
+        "cli/AF-CONF-CLI-003/stderr.txt": "b5154ef0c97b6b2bd206b5948ecb081763df9c243cc15b3b27b2ab8443cb8145",
+        "cli/AF-CONF-CLI-004/case.json": "f635bb21d399d45d662832b9b37879f8edb18b80f6bacd34d425d7a0a1a220d2",
+        "cli/AF-CONF-CLI-004/stdout.txt": "7d3af88108c1ddb9726ede72c0603ee64acc35c5ef6a296e986d38ea0a907aed"
+      }
+    },
     "crash": {
       "cases": [
         "AF-CONF-CRASH-001",
@@ -299,64 +328,64 @@
         "AF-CONF-CRASH-021"
       ],
       "files": {
-        "crash/AF-CONF-CRASH-001/case.json": "7d3d42be3787cc98988a1e48f933c3ba03712aeba15694d94810a1fc8f21954c",
+        "crash/AF-CONF-CRASH-001/case.json": "ced6822d6ed4b52a4d27fa55d1183585a4e71b3936b60be4d0446ecf13918a1b",
         "crash/AF-CONF-CRASH-001/journal-frames.bin": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
         "crash/AF-CONF-CRASH-001/journal-frames.bin.hex": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
-        "crash/AF-CONF-CRASH-002/case.json": "e7168dd823992834ddef182aa9dc156eedc1a7353add87b35686f17322a85197",
-        "crash/AF-CONF-CRASH-002/journal-frames.bin": "bf171a89fe8f01d4192faec9aba01553106d6c0d9f3cb4a3c36e830f0893cecc",
-        "crash/AF-CONF-CRASH-002/journal-frames.bin.hex": "102732a0059cb014e9627e12a1f2bdb19f42bf3a3c8a69444bc0d33af3c5d692",
-        "crash/AF-CONF-CRASH-003/case.json": "36d0836eacd90feb8cb8c2fc20d39c2f13e7181c7c3906a9488434050b55a9a6",
+        "crash/AF-CONF-CRASH-002/case.json": "c985f9d0ac8617bdb3ea70271d386453a930c9e8cd4b90efb99be96178877a06",
+        "crash/AF-CONF-CRASH-002/journal-frames.bin": "efdcdc58e9dc24a22999311e3cde6e90792111caf9ad424f01e979a294a3e53a",
+        "crash/AF-CONF-CRASH-002/journal-frames.bin.hex": "c374d0304236184cc72644aa0f189d7550b444a73581a6382425a5f7208bc51c",
+        "crash/AF-CONF-CRASH-003/case.json": "9ac54052a3f3e94d8efccae82b30cd8f1119d4bd4b02ff65c74829dc5aec31d3",
         "crash/AF-CONF-CRASH-003/journal-frames.bin": "4aaeed0cfac84cb502535fe521b21db7dcdc992bcb4643f02dc139c883aec78c",
         "crash/AF-CONF-CRASH-003/journal-frames.bin.hex": "f7841abcd5b5aa612d2f43d43d139d8a33ea93638880983c7dabdf0fd10410f6",
-        "crash/AF-CONF-CRASH-004/case.json": "77cbe0892b86caf56946cbe798ad8880ed4b077207bfb0bbcf7cc667d44df928",
+        "crash/AF-CONF-CRASH-004/case.json": "e8bf99ae256dd91ab198898b42647b67f97c570f0bcd68718c3a36003e783b48",
         "crash/AF-CONF-CRASH-004/journal-frames.bin": "95baf2d7186b0e3bdc949adac636f7c6608336176f54c18a14ebbc0fdb203ac8",
         "crash/AF-CONF-CRASH-004/journal-frames.bin.hex": "8b308293494a8dd2e7905a8ba4445723b79f9f5e343c56339a2472d56af1d735",
-        "crash/AF-CONF-CRASH-005/case.json": "d7ee9eb7885b88fc00683d4810e948eea0605a883b5c86415e66c40258dbe848",
+        "crash/AF-CONF-CRASH-005/case.json": "80f05b14777b62fc96509e1c9dadf07e39c26d302db245b947a6e7bc2e248d58",
         "crash/AF-CONF-CRASH-005/journal-frames.bin": "9e98c6e5f2e49dc3e5b930800a7e052150977bdd10362da829aac41b82a27c87",
         "crash/AF-CONF-CRASH-005/journal-frames.bin.hex": "4acf5564e8eb309f52e0302a1c8c550349d6a5ad41477294bc0e2e80eb9f8fcb",
-        "crash/AF-CONF-CRASH-006/case.json": "894e2a991e6f8fbf3a398140b23c18c5a5a7f02181e39851e3dd84476b2e0344",
+        "crash/AF-CONF-CRASH-006/case.json": "806a19d8dc20d2da6aeb909e2578fefb592cfc15cebec2df61cb64e54a791c5f",
         "crash/AF-CONF-CRASH-006/journal-frames.bin": "669f2412aa5f47a8f4610b024ba98d72c8af28b643ed90b979b6342993673bac",
         "crash/AF-CONF-CRASH-006/journal-frames.bin.hex": "2b5e4ed4c55e4e169b9adc5a815bf3513095589c83ff59dcdcbebf292bc3015a",
-        "crash/AF-CONF-CRASH-007/case.json": "4c83221dfc2566bbb6d799b77817b80a68ecfbe112d96ce259ae4d07937df327",
+        "crash/AF-CONF-CRASH-007/case.json": "b9ce5522147e13b3f2550c6ff3f9bbea003804eae040a4ce5b037fb2fa1ad91a",
         "crash/AF-CONF-CRASH-007/journal-frames.bin": "47c0dba7f3efb964464f5a6193faec057d6fbdb3053bd23b29b2f1d959311d5b",
         "crash/AF-CONF-CRASH-007/journal-frames.bin.hex": "23cc0c4fa967430e74c2b669a57d7a21857a1d51811cf8929528ce40594feccd",
-        "crash/AF-CONF-CRASH-008/case.json": "938675a4b3d198bbeb93ab241c6082b39ccd69fe7199719d4ea6e3c4065c0ea1",
+        "crash/AF-CONF-CRASH-008/case.json": "189604ab8d9ca219dbe01c3e3225ffcecc0362bf240fa9a11d003d6c3a0eb1d7",
         "crash/AF-CONF-CRASH-008/journal-frames.bin": "2fb837dc8adeaca2b0855497b477c93eba4a479ee851d2c19172c357156dfa72",
         "crash/AF-CONF-CRASH-008/journal-frames.bin.hex": "4d6165f2fca8a27867b893ed566ee01f82dbee0d82193d13cf7051148581c6d9",
-        "crash/AF-CONF-CRASH-009/case.json": "250f77f88bc878209261f07c38791918fa70d00b137a697b01ce013a7de2b3d9",
+        "crash/AF-CONF-CRASH-009/case.json": "488d2fe009a21d1d894e7edcbf27bead87856d1a0ae8fac898d06f6775287afa",
         "crash/AF-CONF-CRASH-009/journal-frames.bin": "f464df0a74159f87a216000a169f9a51b566861bd16012eeded5438a390d5b31",
         "crash/AF-CONF-CRASH-009/journal-frames.bin.hex": "fb1f652ccdf3f6ecb636f83795f0a4f09e98bbeb1a60f8cd10a2dc87f0ddebf1",
-        "crash/AF-CONF-CRASH-010/case.json": "c2e58347113d0ba95eecbc6dcb092b351550664a3938d2276e74639a2126d31b",
+        "crash/AF-CONF-CRASH-010/case.json": "37fc964c8db33b3e7c38bfc8f4c1dd53e78886cd25bc97aa1981809a17d16bda",
         "crash/AF-CONF-CRASH-010/journal-frames.bin": "ebbb0f44af15626a362381e5bf4b905f3ade0b185ac18f6ce98b477eb62a73c9",
         "crash/AF-CONF-CRASH-010/journal-frames.bin.hex": "0a6710ab2c4c7582c11b1b297576ec92ab8b26c3478d45287346587ae1325d19",
-        "crash/AF-CONF-CRASH-011/case.json": "8d2fa93f27b42fe558c19efdb05971c3542e5c6fd15cecce7115f4d0977dc02a",
+        "crash/AF-CONF-CRASH-011/case.json": "95a5b49873eceb2789b35b81a7e023772b1d0a0b8a295ac8bb8ce73b489f9bfd",
         "crash/AF-CONF-CRASH-011/journal-frames.bin": "4151efd40ebc36e4e702ec27f1b3da3fcfa0678be9f09529198e87af45ec3fa0",
         "crash/AF-CONF-CRASH-011/journal-frames.bin.hex": "7d46729af4d84f2df82f2356fac9d5f13909aa1d8b1bb8984ee1ea771eccaccc",
-        "crash/AF-CONF-CRASH-012/case.json": "7bf2865e1ff0f3bc069dd7c103049aa7f3c6de2abf4f8f8ebb391e8902863d26",
-        "crash/AF-CONF-CRASH-012/journal-frames.bin": "a724cd3022e1832202d6f824787aea7e466e583f25774579ab1ccff1b74ad89f",
-        "crash/AF-CONF-CRASH-012/journal-frames.bin.hex": "4dcd3583570d3f8cef2622868ed6df9802d8fc9a2c5569e6bf15f50233cb0113",
-        "crash/AF-CONF-CRASH-013/case.json": "4f0c583427c7e6ab9d3a4cabba4d14c161439ea0e0355ac4c7b4e2f75c6d2850",
+        "crash/AF-CONF-CRASH-012/case.json": "3c4c4afb900d0fc5641ab1bd0d67c13fc5cc915de4b0b08bad30892fab233788",
+        "crash/AF-CONF-CRASH-012/journal-frames.bin": "e1ff9811697c96c6623b1aba7e574e0e7b0ad941cac9282a740944d11f89c28d",
+        "crash/AF-CONF-CRASH-012/journal-frames.bin.hex": "78aae88f21db0b2c2bbcc642d78138e4365c4a08ef77e5cfb06765030666cb04",
+        "crash/AF-CONF-CRASH-013/case.json": "c4561922fe0e34b78718f3593753b36da39b85989fa3f0d9e567cbb6a5983c56",
         "crash/AF-CONF-CRASH-013/journal-frames.bin": "b4c3ba5d653a33da819737ad875fb84e96df6020f2246f9b7b9aa886c31d8cba",
         "crash/AF-CONF-CRASH-013/journal-frames.bin.hex": "70f698d8c3f94a5c4e8cdf9aa61f0f00540cd6d3b851f96eca0063f78d2eb99e",
-        "crash/AF-CONF-CRASH-014/case.json": "8a5040d5d4b24dcc3c370010e9ac7d3163debe29deb38872e129f9702df7fdc4",
+        "crash/AF-CONF-CRASH-014/case.json": "ddce380e6b7fb99173bd4577ac0088d77b4d720122dcc7d6828febfcd389d99b",
         "crash/AF-CONF-CRASH-014/journal-frames.bin": "fbb5e3fa8980c28617150501cee9524eb49191792fbe8f4fa9eea06d2b4106dd",
         "crash/AF-CONF-CRASH-014/journal-frames.bin.hex": "792c47bdb4421db48721ce74b5ad3a8f3fe21cf77e9ecd58ef37e0e21e2faca5",
-        "crash/AF-CONF-CRASH-015/case.json": "1c8dd78fa112d7f2cd9354f57acf1a12cd8ea64a36ace2d8b336180ed12d98a7",
+        "crash/AF-CONF-CRASH-015/case.json": "382e5e74036bb53279d286886237e75519d25d69e1067ed40765fffad176276c",
         "crash/AF-CONF-CRASH-015/journal-frames.bin": "3d89f84769a9aca516945fc14a7355e246b1a1ded5ad87c06fac9567f7d43810",
         "crash/AF-CONF-CRASH-015/journal-frames.bin.hex": "3fd9428d7637eed0f201e7beb3ad08e5d4adeae4ab901b73811441532a3788a8",
-        "crash/AF-CONF-CRASH-016/case.json": "fc4b8388a2d1726f10a69c51600b344cf013737411b1b549ab167ca170b32316",
+        "crash/AF-CONF-CRASH-016/case.json": "580102da1dfb5fe4360487fd67b5ce2fe5aad6458f0680df7207ebd7aa94f155",
         "crash/AF-CONF-CRASH-016/journal-frames.bin": "79c5c632b210858fcc83cddf1afad5cd5b283f73ca721afbf09b96bcc5d83a42",
         "crash/AF-CONF-CRASH-016/journal-frames.bin.hex": "fbcd7cc52a508ad58982e6115c7455ecbc0b519437eb873944f832fa0cd6f99a",
-        "crash/AF-CONF-CRASH-017/case.json": "b468840c861ca1e59236bc21315534d299e785cff5389bce7cc51ef0123daef4",
+        "crash/AF-CONF-CRASH-017/case.json": "9df5b42e434d83e379a19d21295d76f0d7bbdaa6959f14a05126441c82c1fe74",
         "crash/AF-CONF-CRASH-017/journal-frames.bin": "10d31639412a0d9aab05fa3f16db12c679e34bae900efdc2f46f865635a4b1e7",
         "crash/AF-CONF-CRASH-017/journal-frames.bin.hex": "ccd3afe73b42706bb256ae09e0f3949c2337f2c0afd41c474ec455b73d5ccad9",
-        "crash/AF-CONF-CRASH-018/case.json": "358c441215ce146eb076533ffc2d8fa0793d1279ceaa6ad41c5a719332e540a2",
+        "crash/AF-CONF-CRASH-018/case.json": "0f29f48e23b2dfbd9813cc059e9c85928e00e2ff92cc3b55fe7be4a0b197fe54",
         "crash/AF-CONF-CRASH-018/journal-frames.bin": "4c2e9058206bb2935805d2e47009ce79545d32197bcd3a41d25368e8aba4392d",
         "crash/AF-CONF-CRASH-018/journal-frames.bin.hex": "4e1870087d3c915f1203a3e391215ce49fcc5f0e57baeb3ba8a64352d4071f23",
-        "crash/AF-CONF-CRASH-019/case.json": "8e21ac3bded4144586f3cfea440b2d044cddb40b217e09d9357905644c11b1c2",
+        "crash/AF-CONF-CRASH-019/case.json": "91721554ee60494f82779338c3b6ac23b14dced7c060678b1eb4f08553d735a5",
         "crash/AF-CONF-CRASH-019/journal-frames.bin": "c026ab809e9e6978d3615c97c3477a54be1e311079fa2dbb253520faa02d3f68",
         "crash/AF-CONF-CRASH-019/journal-frames.bin.hex": "b5d8d1da07efc86a284e2a95cbcc230a51d7986eccc0b3b9f708a1fe9953e0ba",
-        "crash/AF-CONF-CRASH-020/case.json": "41ddbb32b1619a98e236f3a38cd386a29199c3c95c404c1704c591130b3a8a78",
+        "crash/AF-CONF-CRASH-020/case.json": "feb8d7ac552407d1b19c156d990d9fe2325da7c014a51734c46dbeacd8b82450",
         "crash/AF-CONF-CRASH-020/journal-frames.bin": "906ddaa354c9a13edb703b1afc13ec11d1c2fd155731d18a7ed456dcd645e736",
         "crash/AF-CONF-CRASH-020/journal-frames.bin.hex": "0097e1e1539e2dcc4c776ef0ea3b76541d73bebc287ae1dfe7245b07e723487c",
         "crash/AF-CONF-CRASH-021/case.json": "16e2b13a762a016f0454eae2367fa019b823f1c67f3ba5af7920e2744caa6b7d"
@@ -662,7 +691,7 @@
         "plan/AF-CONF-PLAN-002/case.json": "b1edb74daacd9767180255fd0d5fb27331bbca2f60326aa447adf95e3e606553",
         "plan/AF-CONF-PLAN-002/profile.cbor": "d136a5540d08c06914b79ed295c2731fc385d5c40315a5bcae209b8fe4604a26",
         "plan/AF-CONF-PLAN-002/profile.cbor.hex": "0102f5618c0da53a480944852d42a3161747e3a19af8e910a749c742f199af44",
-        "plan/AF-CONF-PLAN-003/case.json": "1fc4435b96fe41b350d4c7c69f8d81a686b94eba673e0820e451759d06259b00",
+        "plan/AF-CONF-PLAN-003/case.json": "33c56b4c905ca451792414cf854d0c907ac648f861daa69d1338184e6248bfde",
         "plan/AF-CONF-PLAN-003/observation.cbor": "ab23830ecd90ffe5f7917593266396d33cc809637a7f3efbb4b450dc39ac6a79",
         "plan/AF-CONF-PLAN-003/observation.cbor.hex": "c33fcaeeb351c9749b3bb31d7601910d5f1352754edd9e7caa8b20745fdb0c4f",
         "plan/AF-CONF-PLAN-004/case.json": "4c2434488235477f02faff0edefe4ffd05bffc2139a55cf641823fa424c16fd4",
@@ -937,6 +966,19 @@
         "rebind/AF-CONF-REBIND-018/case.json": "76ce2b6ccbdb00fdcd1d23d86e150c589096e6f9b92f040b083dee9f1e3b1a4e"
       }
     },
+    "reconcile": {
+      "cases": ["AF-CONF-RECONCILE-001", "AF-CONF-RECONCILE-002", "AF-CONF-RECONCILE-003", "AF-CONF-RECONCILE-004", "AF-CONF-RECONCILE-005", "AF-CONF-RECONCILE-006"],
+      "files": {
+        "reconcile/AF-CONF-RECONCILE-001/case.json": "248f54c8fb3a3feaa8f97fc5ac87386b017ed68a06c5dee8c6fc523ebcbf19fd",
+        "reconcile/AF-CONF-RECONCILE-001/possible-effect-set.cbor": "807d911405c2ce6cd83257d2d3445818d4e890275251c98778c43135b4e8c7db",
+        "reconcile/AF-CONF-RECONCILE-001/possible-effect-set.cbor.hex": "99a3dc08b01cdbf611ade696a48bae896282bc5bc072a2e0269b6ff6cc684a56",
+        "reconcile/AF-CONF-RECONCILE-002/case.json": "05624721c090dbdda055f72d7e56ecb468cd58e9d8581054626f9fb84fb70d1a",
+        "reconcile/AF-CONF-RECONCILE-003/case.json": "06cab97a9b3bebfb6cc621a6e636125966c06fd623f3f7dde513a43f3222c5e3",
+        "reconcile/AF-CONF-RECONCILE-004/case.json": "94f444102e3abd362b47b7117dd857e8aec211ae7c83f337c2a3ee5a34bca9d4",
+        "reconcile/AF-CONF-RECONCILE-005/case.json": "010a23f6a1058fec89acdb994c0225532300a7491642e1d4ac59b40119537913",
+        "reconcile/AF-CONF-RECONCILE-006/case.json": "ca56f70a32b62e9afc41abaf0fb021c801350ca210883787def0d158b3750745"
+      }
+    },
     "sha256": {
       "cases": ["AF-CONF-SHA256-001", "AF-CONF-SHA256-002", "AF-CONF-SHA256-003", "AF-CONF-SHA256-004", "AF-CONF-SHA256-005", "AF-CONF-SHA256-006", "AF-CONF-SHA256-007"],
       "files": {
@@ -960,11 +1002,11 @@
     "state-machine": {
       "cases": ["AF-CONF-STATEMACHINE-001", "AF-CONF-STATEMACHINE-002", "AF-CONF-STATEMACHINE-003", "AF-CONF-STATEMACHINE-004", "AF-CONF-STATEMACHINE-005"],
       "files": {
-        "state-machine/AF-CONF-STATEMACHINE-001/case.json": "5bbaaf152f96596e5adb125be02aec2f13ec5e61ab30bed121d0a965298d27bd",
+        "state-machine/AF-CONF-STATEMACHINE-001/case.json": "0faee5dd32a3c9cd0db5597f96f5003fb6b97738ba888b4f1ceda9a421e02a0e",
         "state-machine/AF-CONF-STATEMACHINE-002/case.json": "cce90e256afddbde0909f2f396c3e4a37a92a81715884bd74041000db98e42e6",
         "state-machine/AF-CONF-STATEMACHINE-003/case.json": "e3f0d1df84751608a6ebe61ce524ce4fe333efb686cba8bc41b6d5cc15dfadc4",
         "state-machine/AF-CONF-STATEMACHINE-004/case.json": "b50a54c51df902b7339dbe514e1fd8bbd368fa62be4b6615b5d289d7813d2161",
-        "state-machine/AF-CONF-STATEMACHINE-005/case.json": "ba81697ae58bd3b0db562f112e2ab0324d2ff8854c6c53299f439513a90df020"
+        "state-machine/AF-CONF-STATEMACHINE-005/case.json": "4224e5f45084d5893605a15406c548062debac017e9686650f69dbc5e4b21dab"
       }
     },
     "strict-yaml": {
@@ -1046,11 +1088,11 @@
         "strict-yaml/AF-CONF-YAML-020/input.yaml": "9c0af02588065ca0a8a2b070132455d3fad0472cb7e1878df1fbb4cc97bb1fa2",
         "strict-yaml/AF-CONF-YAML-021/case.json": "270861771f3a1745ed5cfeb696a5b1d9d41859c3fce2d7cdf9e679740aa613d6",
         "strict-yaml/AF-CONF-YAML-021/input.yaml": "b1f9840f49c43e04a460ac97827800bbd29b67d4de455e42e67cd8bd26602bb9",
-        "strict-yaml/AF-CONF-YAML-022/case.json": "dab51adfd03d24ec376738124314f4d6cdba3b12c59bdfbf2e70ac964808d52e",
+        "strict-yaml/AF-CONF-YAML-022/case.json": "c67b4278d02744658af4ca8b11da1ba47b6c9452ab69ae98a1bb879675d4d4c5",
         "strict-yaml/AF-CONF-YAML-022/input.yaml": "71f905b0fd529e8e87e4ed0c25d084dcde63ab95dc3ec246b3dac0280668b387",
-        "strict-yaml/AF-CONF-YAML-023/case.json": "f5bfbe3b7ebc9d58cb4ea4ecd10bc0a9d58b6bbd7c7fc58c41420d5865c6067d",
+        "strict-yaml/AF-CONF-YAML-023/case.json": "6b599c65565f9aacc9247b1c7413d7c4a68e4830b2cabdd471477da1bcf73ae8",
         "strict-yaml/AF-CONF-YAML-023/input.yaml": "4850f564cb7366400d48c31f56d58df9b2d39ddf9b37713426fca682e5e81ccf",
-        "strict-yaml/AF-CONF-YAML-024/case.json": "eaa11b9746a36679b6b939c8f394372615c2ea5f50a1ce2d9d169c3214f4bdb1",
+        "strict-yaml/AF-CONF-YAML-024/case.json": "0816ff3ef60452501d0cd6d74a6d836b494bf8c4554eecbb12c514f44e4d37cd",
         "strict-yaml/AF-CONF-YAML-024/input.yaml": "5760f0b3f574d73fdaefdc34f2faf31071029c35d517ed69d5bed02378b3af3a",
         "strict-yaml/AF-CONF-YAML-025/case.json": "ecb35523577afc631ea9a1ae1acfbe70a01e0d328f9e67608f51e01ba71e3bdd",
         "strict-yaml/AF-CONF-YAML-025/input.yaml": "4091a98457d9ba73c08cfb846b1ba0bd8a3b33185925271febf3cd15763aca7d",
@@ -1070,6 +1112,17 @@
         "strict-yaml/AF-CONF-YAML-032/input.yaml": "0331e7d6d9c12148f13eec945593903946997e53ff356dcc1630d0764131e498",
         "strict-yaml/AF-CONF-YAML-033/case.json": "327478c58312fab485339a73d6734f394fa37453f465bca08378391cde3fa80c",
         "strict-yaml/AF-CONF-YAML-033/input.yaml": "d6176f2b4731bac8634b34e57fa7a2c66bfcdea1a24e64347ea139851ce1ae3c"
+      }
+    },
+    "transcript-dispatch": {
+      "cases": ["AF-CONF-TRANSCRIPT-DISPATCH-001", "AF-CONF-TRANSCRIPT-DISPATCH-002"],
+      "files": {
+        "transcript-dispatch/AF-CONF-TRANSCRIPT-DISPATCH-001/case.json": "592f38f19ecce7fa204daa454a5fa46364c10694adf8a36cabec0a577d3b6308",
+        "transcript-dispatch/AF-CONF-TRANSCRIPT-DISPATCH-001/receipt.cbor": "ff9f6783b5cfdd8e01c8d530fbdac24855fe2192867c6624c6fee3ecb3407d2c",
+        "transcript-dispatch/AF-CONF-TRANSCRIPT-DISPATCH-001/receipt.cbor.hex": "26238c9ffcf2d74c2cecf1ed2645111e2ac2ba1be933176f394fb6c866b28563",
+        "transcript-dispatch/AF-CONF-TRANSCRIPT-DISPATCH-001/transcript.yaml": "2bb4cff47ac57ef3bc64222e1b1dcfe22ffd4279e2f01c9f5d992e915d8649ab",
+        "transcript-dispatch/AF-CONF-TRANSCRIPT-DISPATCH-002/case.json": "530177031a548ceba6b9bc3accb19ec168005bd39aa944c0b222d2f53145b812",
+        "transcript-dispatch/AF-CONF-TRANSCRIPT-DISPATCH-002/transcript.yaml": "2bb4cff47ac57ef3bc64222e1b1dcfe22ffd4279e2f01c9f5d992e915d8649ab"
       }
     }
   }

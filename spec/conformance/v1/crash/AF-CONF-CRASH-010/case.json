@@ -1,20 +1,22 @@
 {
   "id": "AF-CONF-CRASH-010",
   "suite": "crash",
-  "title": "permit consumed with receipt, no checkpoint: checkpoint from the durable receipt",
+  "title": "permit consumed with receipt, no checkpoint: receipt settled, checkpoint missing",
   "kind": "derive",
   "requirements": ["AF-CRASH-002", "AF-AUTH-P-001", "AF-CRASH-R-005"],
-  "description": "Replay the records (subject JOB-1 unless a jobId fact says otherwise; atEpochMs 1010, 1020, …; jobRevision 1), then derive the crash disposition for job JOB-1 and the permit ledger. `journal-frames.bin` holds the same records framed as on disk, without the file magic.",
+  "description": "Replay the records with the supplied subject (atEpochMs 1010, 1020, …; jobRevision 1), then derive the crash disposition for job JOB-1 and the permit ledger. `journal-frames.bin` holds the same records framed as on disk, without the file magic.",
   "input": {
     "jobId": "JOB-1",
     "records": [
       {
+        "subject": "JOB-1",
         "kind": "jobCreated",
         "facts": {
           "jobId": "JOB-1"
         }
       },
       {
+        "subject": "JOB-1",
         "kind": "stepPermitAccepted",
         "facts": {
           "jobId": "JOB-1",
@@ -23,6 +25,7 @@
         }
       },
       {
+        "subject": "JOB-1",
         "kind": "stepIntentRecorded",
         "facts": {
           "jobId": "JOB-1",
@@ -31,6 +34,7 @@
         }
       },
       {
+        "subject": "JOB-1",
         "kind": "permitConsuming",
         "facts": {
           "jobId": "JOB-1",
@@ -38,6 +42,7 @@
         }
       },
       {
+        "subject": "JOB-1",
         "kind": "externalDispatchStarted",
         "facts": {
           "jobId": "JOB-1",
@@ -45,6 +50,7 @@
         }
       },
       {
+        "subject": "JOB-1",
         "kind": "semanticReceiptRecorded",
         "facts": {
           "jobId": "JOB-1",
@@ -53,6 +59,7 @@
         }
       },
       {
+        "subject": "JOB-1",
         "kind": "permitConsumed",
         "facts": {
           "jobId": "JOB-1",
@@ -64,7 +71,7 @@
   },
   "expected": {
     "crashDisposition": {
-      "row": "checkpointFromDurableReceipt",
+      "row": "receiptDurableCheckpointMissing",
       "permitsExternalEffect": false,
       "permitId": "PERMIT-1"
     },

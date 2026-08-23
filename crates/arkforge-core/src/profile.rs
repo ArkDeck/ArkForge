@@ -24,6 +24,7 @@ use core::fmt;
 use std::collections::BTreeSet;
 
 pub const SCHEMA_VERSION: &str = "arkforge.device-profile/v1";
+const MAX_IDENTITY_LABEL_LEN: usize = 128;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SocIdentity {
@@ -930,6 +931,35 @@ fn identifier(value: &YamlValue, key: &str, path: &str) -> Result<OpaqueId, Prof
     OpaqueId::new(text).map_err(|error| bad(path, error.to_string()))
 }
 
+/// Product-model and hardware-revision labels are vendor facts, not ArkForge
+/// identifiers: spaces and non-ASCII text can be meaningful. They still have
+/// a closed byte bound and may not contain invisible/control padding, so every
+/// port hashes exactly the visible label it reviewed.
+fn identity_label(value: &YamlValue, path: &str) -> Result<String, ProfileError> {
+    let text = value
+        .as_scalar()
+        .ok_or_else(|| bad(path, "expected a scalar identity label"))?;
+    if text.is_empty() {
+        return Err(bad(path, "must not be empty"));
+    }
+    if text.len() > MAX_IDENTITY_LABEL_LEN {
+        return Err(bad(
+            path,
+            format!(
+                "must be at most {MAX_IDENTITY_LABEL_LEN} UTF-8 bytes, found {}",
+                text.len()
+            ),
+        ));
+    }
+    if text.trim() != text || text.chars().any(char::is_control) {
+        return Err(bad(
+            path,
+            "must not have leading/trailing whitespace or control characters",
+        ));
+    }
+    Ok(text.to_string())
+}
+
 fn boolean(value: &YamlValue, key: &str, path: &str) -> Result<bool, ProfileError> {
     match value.get(key).and_then(YamlValue::as_scalar) {
         Some("true") => Ok(true),
@@ -1028,19 +1058,21 @@ pub fn load(source: &str) -> Result<DeviceProfile, ProfileError> {
     let identity_block = document
         .get("identity")
         .ok_or_else(|| missing("identity"))?;
-    let product_models = identity_block
+    let product_model_values = identity_block
         .get("productModels")
         .and_then(YamlValue::as_sequence)
-        .ok_or_else(|| missing("identity.productModels"))?
-        .iter()
-        .filter_map(|value| value.as_scalar().map(str::to_string))
-        .collect::<Vec<_>>();
-    if product_models.is_empty() {
+        .ok_or_else(|| missing("identity.productModels"))?;
+    if product_model_values.is_empty() {
         return Err(bad(
             "identity.productModels",
             "must list at least one model",
         ));
     }
+    let product_models = product_model_values
+        .iter()
+        .enumerate()
+        .map(|(index, value)| identity_label(value, &format!("identity.productModels[{index}]")))
+        .collect::<Result<Vec<_>, _>>()?;
     let soc_block = identity_block
         .get("soc")
         .ok_or_else(|| missing("identity.soc"))?;
@@ -1065,13 +1097,17 @@ pub fn load(source: &str) -> Result<DeviceProfile, ProfileError> {
             })?,
         }
     } else {
-        let allow = revisions_block
+        let allow_values = revisions_block
             .get("allow")
             .and_then(YamlValue::as_sequence)
-            .ok_or_else(|| missing("identity.hardwareRevisions.allow"))?
+            .ok_or_else(|| missing("identity.hardwareRevisions.allow"))?;
+        let allow = allow_values
             .iter()
-            .filter_map(|value| value.as_scalar().map(str::to_string))
-            .collect();
+            .enumerate()
+            .map(|(index, value)| {
+                identity_label(value, &format!("identity.hardwareRevisions.allow[{index}]"))
+            })
+            .collect::<Result<Vec<_>, _>>()?;
         HardwareRevisionPolicy::Allow(allow)
     };
 
@@ -1609,6 +1645,40 @@ dataImpact:
         assert!(matches!(
             load(&document),
             Err(ProfileError::WildcardHardwareRevision)
+        ));
+    }
+
+    #[test]
+    fn vendor_identity_labels_are_visible_bounded_text() {
+        let localized = MINIMAL.replace("[TESTBOARD]", "[\"开发板 Model 1\"]");
+        let profile = load(&localized).expect("visible vendor labels may contain Unicode/spaces");
+        assert_eq!(profile.product_models, vec!["开发板 Model 1"]);
+
+        let padded = MINIMAL.replace("[TESTBOARD]", "[\" TESTBOARD \"]");
+        assert!(matches!(
+            load(&padded),
+            Err(ProfileError::BadField { field, .. })
+                if field == "identity.productModels[0]"
+        ));
+
+        let oversized = MINIMAL.replace(
+            "[TESTBOARD]",
+            &format!("[{}]", "x".repeat(MAX_IDENTITY_LABEL_LEN + 1)),
+        );
+        assert!(matches!(
+            load(&oversized),
+            Err(ProfileError::BadField { field, .. })
+                if field == "identity.productModels[0]"
+        ));
+
+        let nonscalar = MINIMAL.replace(
+            "productModels: [TESTBOARD]",
+            "productModels:\n    - key: value",
+        );
+        assert!(matches!(
+            load(&nonscalar),
+            Err(ProfileError::BadField { field, .. })
+                if field == "identity.productModels[0]"
         ));
     }
 

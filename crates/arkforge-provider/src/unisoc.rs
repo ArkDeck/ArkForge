@@ -398,7 +398,17 @@ mod tests {
     fn the_execution_side_spi_refuses() {
         let provider = UnisocProvider::new();
         assert!(provider.execute_stored_action().is_err());
-        assert!(provider.reconcile_read_only().is_err());
+        let private_plan = arkforge_core::projection::StoredProviderPlan {
+            actions: Vec::new(),
+        };
+        assert!(
+            provider
+                .reconcile_read_only(&crate::ReconcileRequest {
+                    private_plan: &private_plan,
+                    possible_effects: &[],
+                })
+                .is_err()
+        );
         assert!(provider.materialize_superseding_recovery().is_err());
     }
 

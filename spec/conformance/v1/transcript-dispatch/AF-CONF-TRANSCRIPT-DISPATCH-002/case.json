@@ -1,0 +1,24 @@
+{
+  "id": "AF-CONF-TRANSCRIPT-DISPATCH-002",
+  "suite": "transcript-dispatch",
+  "title": "replay refuses an action the transcript never recorded",
+  "kind": "replay",
+  "requirements": ["AF-TRN-023"],
+  "description": "A replay implementation may select only the named occurrence actually present. It never invents a response or falls through to a hardware backend.",
+  "input": {
+    "transcriptFile": "transcript.yaml",
+    "action": "erase-unknown-partition",
+    "occurrence": 0
+  },
+  "expected": {
+    "result": "reject",
+    "errorClass": "TRANSPORT_UNSUPPORTED",
+    "hardwareExecutionAttempted": false
+  },
+  "files": {
+    "transcript.yaml": {
+      "bytes": 8893,
+      "sha256": "2bb4cff47ac57ef3bc64222e1b1dcfe22ffd4279e2f01c9f5d992e915d8649ab"
+    }
+  }
+}

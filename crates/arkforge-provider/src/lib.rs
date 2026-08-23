@@ -17,6 +17,7 @@ pub mod rockusb_protocol;
 pub mod unisoc;
 
 use arkforge_artifact::manifest::ArtifactManifest;
+use arkforge_core::PersistentEffect;
 use arkforge_core::identity::{
     ArtifactFormat, DeviceProfileIdentity, HostPlatform, MaturityKey, MaturityState,
     ProviderIdentity, ToolchainIdentity,
@@ -24,7 +25,7 @@ use arkforge_core::identity::{
 use arkforge_core::ids::OpaqueId;
 use arkforge_core::plan::{ExecutionPurpose, PlanMaterialization};
 use arkforge_core::profile::DeviceProfile;
-use arkforge_core::projection::StoredProviderPlan;
+use arkforge_core::projection::{PrivateActionRecord, StoredProviderPlan};
 use arkforge_core::{AuthorityBindingRef, AuthoritySupportBinding, PlanId, Sha256Digest};
 use arkforge_transport::{DeviceObservation, DeviceTransport};
 use core::fmt;
@@ -184,6 +185,22 @@ pub struct MaterializedPlan {
     pub private_plan: Option<StoredProviderPlan>,
 }
 
+/// Inputs a Provider may use to select a read-only reconciliation plan.
+///
+/// It receives no permit and no execution port. The only possible output is a
+/// list of already sealed private actions for a separate read-only runner.
+#[derive(Debug)]
+pub struct ReconcileRequest<'a> {
+    pub private_plan: &'a StoredProviderPlan,
+    pub possible_effects: &'a [PersistentEffect],
+}
+
+/// Provider-selected actions for one reconciliation attempt.
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct ReadOnlyReconcilePlan {
+    pub actions: Vec<PrivateActionRecord>,
+}
+
 /// The Provider SPI.
 ///
 /// The execute-side methods are declared so the shape is the one AF-V2 will
@@ -233,8 +250,13 @@ pub trait FlashProvider: fmt::Debug + Send + Sync {
         ))
     }
 
-    /// AF-V2. Read-only reconcile after an unknown outcome.
-    fn reconcile_read_only(&self) -> Result<(), ProviderError> {
+    /// Selects the sealed, read-only actions that can observe an unknown
+    /// outcome. Implementations must reject any plan that would include an
+    /// effectful action; execution occurs later outside the service lock.
+    fn reconcile_read_only(
+        &self,
+        _request: &ReconcileRequest<'_>,
+    ) -> Result<ReadOnlyReconcilePlan, ProviderError> {
         Err(ProviderError::ExecutionUnavailable(
             "reconcile is an AF-V2 capability".into(),
         ))

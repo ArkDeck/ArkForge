@@ -14,6 +14,7 @@ conventions:
   digests: "[32]u8 by value; hex only at JSON/YAML surfaces"
   durability: "which fsync level the port reaches (fsync / F_FULLFSYNC / FlushFileBuffers) — state it here"
   yaml: "implement the strict subset directly (model/strict-yaml.md); do not wrap a general YAML library"
+  validation: "run `arkforge-conformance validate` before consuming the committed models, then reproduce each listed suite without calling Rust"
 
 stages:
   - stage: 0
@@ -26,13 +27,13 @@ stages:
     suites: [plan (001-002)]
     symbols: []
   - stage: 3
-    suites: [journal, crash, state-machine]
+    suites: [journal, action-receipt, crash, state-machine]
     symbols: []
   - stage: 4
-    suites: [rebind]
+    suites: [rebind, reconcile, transcript-dispatch]
     symbols: []
   - stage: 5
-    suites: [protobuf (framing), cli black-box]
+    suites: [protobuf (framing), cli]
     symbols: []
   - stage: 6
     suites: []

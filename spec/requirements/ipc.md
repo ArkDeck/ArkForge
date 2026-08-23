@@ -130,3 +130,15 @@ local-only Named Pipe (`PIPE_REJECT_REMOTE_CLIENTS`, `FILE_FLAG_FIRST_PIPE_INSTA
 an explicit DACL containing only the current logon SID; clients connect with
 identification-level SQOS). Both carry the same framing and schema; a port MUST
 NOT introduce a second business API per platform. See `ports/ipc-framing.md`.
+
+### AF-IPC-019 — terminal outcome consumers fail closed
+status: normative
+tests: []
+
+An `outcomeClassified` event completes a destructive job only when its
+`outcome` fact is exactly `succeeded`. `confirmedFailed` is a known failure;
+`cancelledSafe` is a proven non-execution; `outcomeUnknown` and
+`recoveryAssessable` preserve the original unknown outcome. A missing or
+unrecognised `outcome` value MUST be handled as unknown, never as success. This
+rule applies independently of the event's `job_state` projection so that a
+newer daemon cannot make an older controller fail open through wire evolution.

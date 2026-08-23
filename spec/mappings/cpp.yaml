@@ -14,6 +14,7 @@ conventions:
   durability: "state the reached level (fsync / fdatasync / F_FULLFSYNC / FlushFileBuffers)"
   yaml: "implement the strict subset directly; do not wrap yaml-cpp"
   standard: "C++23 recommended for std::expected; C++20 minimum"
+  validation: "run `arkforge-conformance validate` before consuming the committed models, then reproduce each listed suite without calling Rust"
 
 stages:
   - stage: 0
@@ -26,13 +27,13 @@ stages:
     suites: [plan (001-002)]
     symbols: []
   - stage: 3
-    suites: [journal, crash, state-machine]
+    suites: [journal, action-receipt, crash, state-machine]
     symbols: []
   - stage: 4
-    suites: [rebind]
+    suites: [rebind, reconcile, transcript-dispatch]
     symbols: []
   - stage: 5
-    suites: [protobuf (framing), cli black-box]
+    suites: [protobuf (framing), cli]
     symbols: []
   - stage: 6
     suites: []

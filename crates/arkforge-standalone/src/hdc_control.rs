@@ -408,7 +408,7 @@ impl<R: CommandPort> HdcControlPort<R> {
             .sessions
             .get(&request.job_id)
             .filter(|connect_key| {
-                digest_in_domain(Domain::DeviceFacts, connect_key.as_bytes()).to_hex()
+                digest_in_domain(Domain::DeviceSerial, connect_key.as_bytes()).to_hex()
                     == current.serial_sha256
             })
             .cloned()
@@ -518,7 +518,7 @@ impl<R: CommandPort> HdcControlPort<R> {
             || !connect_key
                 .bytes()
                 .all(|byte| byte.is_ascii() && !byte.is_ascii_whitespace())
-            || digest_in_domain(Domain::DeviceFacts, connect_key.as_bytes()).to_hex()
+            || digest_in_domain(Domain::DeviceSerial, connect_key.as_bytes()).to_hex()
                 != serial_sha256
         {
             return None;
@@ -552,7 +552,7 @@ impl<R: CommandPort> HdcControlPort<R> {
                 .into_iter()
                 .filter(|row| row.transport == "USB" && row.state == "Connected")
                 .filter(|row| {
-                    digest_in_domain(Domain::DeviceFacts, row.connect_key.as_bytes()).to_hex()
+                    digest_in_domain(Domain::DeviceSerial, row.connect_key.as_bytes()).to_hex()
                         == serial_sha256
                 })
                 .collect::<Vec<_>>();
@@ -781,7 +781,7 @@ mod tests {
             observation_id: id.into(),
             mode: mode.into(),
             topology_sha256: topology.into(),
-            serial_sha256: digest_in_domain(Domain::DeviceFacts, serial.as_bytes()).to_hex(),
+            serial_sha256: digest_in_domain(Domain::DeviceSerial, serial.as_bytes()).to_hex(),
             serial_evidence_kind: "descriptor".into(),
             ..DeviceObservationView::default()
         }
@@ -1098,7 +1098,7 @@ mod tests {
 
     #[test]
     fn extra_or_replacement_targets_never_become_the_selected_target() {
-        let serial_digest = digest_in_domain(Domain::DeviceFacts, b"serial").to_hex();
+        let serial_digest = digest_in_domain(Domain::DeviceSerial, b"serial").to_hex();
         let runner = ScriptedRunner {
             calls: Vec::new(),
             replies: VecDeque::from([Ok(b"other\t\tUSB\tConnected\tlocalhost\n".to_vec())]),
@@ -1117,7 +1117,7 @@ mod tests {
 
     #[test]
     fn an_exact_hdc_target_may_register_after_the_usb_observation() {
-        let serial_digest = digest_in_domain(Domain::DeviceFacts, b"serial").to_hex();
+        let serial_digest = digest_in_domain(Domain::DeviceSerial, b"serial").to_hex();
         let runner = ScriptedRunner {
             calls: Vec::new(),
             replies: VecDeque::from([

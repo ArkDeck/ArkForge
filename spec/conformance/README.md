@@ -47,26 +47,27 @@ The runner is the port's own code; it MUST NOT call the Rust implementation.
 | `journal` | 13 | record bodies and chain, fsync policy table, on-disk framing, exhaustive torn-tail table, tamper refusals |
 | `crash` | 21 | journal prefix → crash disposition and permit ledger |
 | `state-machine` | 5 | states, flags, complete legal-edge set, named invariants |
+| `action-receipt` | 5 | canonical semantic receipt body/digest plus invalid and duplicate fact-key refusals |
 | `protobuf` | 31 | message bytes, enum values, decoder refusals, framing, negotiation |
 | `rebind` | 18 | rebind evaluation over observation sequences |
+| `reconcile` | 6 | possible-effect-set digest and closed read-only reconciliation reducer |
+| `transcript-dispatch` | 2 | golden transcript step → canonical receipt digest and missing-action refusal |
 | `strict-yaml` | 33 | accepted value trees and refusals |
 | `plan` | 9 | DAYU200 fixture archive → manifest → profile → observation → private actions → public steps → projection → effect set → sealed plan, every digest with its exact preimage |
+| `cli` | 4 | process-boundary stdout/stderr/status bytes for version, help and errors |
 
-## Known gaps (planned for v1.1)
+## Remaining corpus work (not a semantic gap)
 
-- transcript-replay dispatch: a full step executed against the replay
-  transport with its receipt digest;
-- reconcile and possible-effect-set vectors (needs SI-011 resolved);
-- action receipt body (needs SI-009 resolved);
-- CLI black-box vectors (`arkforge help --format json` tree, error envelopes);
-- a committed corpus of parser-rejected archives (today: seeded mutation
-  campaign in `crates/arkforge-artifact/tests/parser_fuzz.rs`);
-- an in-tree JSON Schema / CDDL validator.
+- A committed corpus of parser-rejected archives. The same rejection surface
+  is currently exercised by the seeded mutation campaign in
+  `crates/arkforge-artifact/tests/parser_fuzz.rs`.
 
 ## Regenerating
 
 ```bash
 cargo run -p arkforge-conformance -- generate
+cargo run -p arkforge-conformance -- check
+cargo run -p arkforge-conformance -- validate
 cargo test -p arkforge-conformance
 ```
 

@@ -46,7 +46,7 @@ vocabularies:
     fixture: AF-CONF-STATEMACHINE-001
     used_in: [ipc JobSummary.state, ipc JobEvent.job_state, journal outcomeClassified.outcome (terminal four), cli]
     unknown_value_policy: reject
-    values: [planned, awaitingStart, preflight, awaitingPermit, stepIntentDurable, dispatching, receiptDurable, checkpointed, rebindWait, readOnlyDispatch, postflight, succeeded, confirmedFailed, cancelledSafe, outcomeUnknown, reconciling, recoveryAssessable]
+    values: [planned, awaitingStart, preflight, awaitingPermit, stepIntentDurable, dispatching, receiptDurable, checkpointed, rebindWait, postflight, succeeded, confirmedFailed, cancelledSafe, outcomeUnknown, reconciling, recoveryAssessable]
 
   - id: journal-record-kind
     source: crates/arkforge-engine/src/journal.rs JournalRecordKind::as_str
@@ -63,7 +63,7 @@ vocabularies:
   - id: journal-fact-key
     source: crates/arkforge-engine/src/recovery.rs fact; crates/arkforged/src/jobs.rs
     note: keys recovery reads are normative; the rest are what the reference daemon writes
-    values: [jobId, planId, stepId, attemptId, permitId, receiptDigest, planDigest, totalSteps, controllerSessionId, outcome, reason, eventSequence, failureClassification, refusal, controlRequestId, controlAction, controlDeadlineEpochMs, mode]
+    values: [jobId, planId, stepId, attemptId, permitId, receiptDigest, receiptBodyHex, receiptEventSequence, planDigest, totalSteps, controllerSessionId, outcome, reason, eventSequence, failureClassification, refusal, controlRequestId, controlAction, controlDeadlineEpochMs, mode]
 
   - id: outcome-classified-outcome
     source: crates/arkforged/src/jobs.rs recover_job; crates/arkforge-engine/src/recovery.rs terminal_state
@@ -290,8 +290,8 @@ vocabularies:
 
   - id: crash-disposition
     source: crates/arkforge-engine/src/recovery.rs CrashDisposition
-    fixture: AF-CONF-CRASH-001..020
-    values: [noJob, safeToCancel, dispatchForbiddenUntilIntentDurable, outcomeUnknown, checkpointFromDurableReceipt, replayFromCheckpoint, concluded]
+    fixture: AF-CONF-CRASH-001..021
+    values: [noJob, safeToCancel, dispatchForbiddenUntilIntentDurable, outcomeUnknown, receiptDurableCheckpointMissing, replayFromCheckpoint, concluded]
 
   - id: managed-control-action
     source: crates/arkforge-ipc/src/messages.rs ManagedControlAction::as_str; proto ManagedControlAction

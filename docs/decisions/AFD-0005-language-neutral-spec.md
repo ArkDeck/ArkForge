@@ -1,6 +1,6 @@
 # AFD-0005 — 语言无关规范：`spec/` 是正本，Rust 是第一个实现
 
-- 状态：Proposed
+- 状态：Accepted
 - 日期：2026-08-23
 - 关联：architecture.md 全篇；AFD-0001；`spec/README.md`；`spec/ISSUES.md`
 
@@ -50,15 +50,16 @@ ArkForge 不是 UI 工程。它的价值是一组**语义**——不可变计划
 - `readOnlyDispatch`/`rebindWait`/`reconciling` 三个状态 daemon 从未进入（SI-005）；
 - YAML 子集对值内的 `&`/`*`/`!` 并不拒绝，与模块注释相反（SI-010）。
 
-这些都不破坏安全性质，但每一条都是"Agent 翻译 Rust"会原样带进 Zig/C++ 的歧义。
-规范以 `draft` 记录代码行为并标注，等待拍板。
+这些历史偏差已在 `1.0.0-draft.2`/`draft.3` 依次关闭。当前正本、Rust
+实现、架构状态图和 conformance fixture 对这些语义给出同一答案；逐项决定与回归入口
+保留在 `spec/ISSUES.md`。
 
 ## 不做什么
 
 - 不移动 Rust 代码、不改 crate 边界；
 - 不把 AFD-0001 的零依赖决定写进规范——那是 Rust 实现的选择，port 可用库，
   但必须通过同样的 fixture；
-- 不在本次修订里解决 ISSUES 中的任何一条（每条都需要维护者决定）。
+- 不删除历史 issue；关闭项仍保留决定、实现位置与回归证据。
 
 ## 复审条件
 

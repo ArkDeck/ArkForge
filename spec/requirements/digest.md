@@ -2,7 +2,7 @@
 status: normative
 area: DIG
 rationale: architecture.md §6.2, §15.4, AFD-0001
-conformance: sha256, hmac-sha256, canonical-cbor, permit, admission, plan, journal
+conformance: sha256, hmac-sha256, canonical-cbor, permit, admission, plan, journal, action-receipt
 
 Every security digest in ArkForge is `SHA-256(domain || payload)`. Protobuf
 carries wire compatibility; deterministic CBOR carries meaning that must hash
@@ -106,3 +106,15 @@ A digest body MUST NOT contain floats, host file-system paths, localized text,
 or identifiers outside the grammar of AF-ID-001. Free text is permitted only in
 fields the model explicitly types as text (`blocker`, `campaign`, `reason`,
 `summary`, `rationale`, fact values).
+
+### AF-DIG-012 — ActionReceipt has a canonical semantic identity
+status: normative
+tests: [AF-CONF-RECEIPT-001..005]
+
+`receiptDigest = SHA-256("arkforge/v1/action-receipt\0" ||
+deterministic_cbor(action-receipt))`, using the exact body in
+`model/digest-bodies.cddl`. It covers identity, disposition, evidence,
+verification fields and the facts map; it is never the evidence digest alone
+and never the protobuf bytes. Required IDs and fact keys use OpaqueId,
+`evidenceSha256` is exactly 32 bytes, duplicate fact keys reject the receipt,
+and verification strength is present only for `verified`.

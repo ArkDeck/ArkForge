@@ -1,0 +1,23 @@
+{
+  "id": "AF-CONF-RECEIPT-002",
+  "suite": "action-receipt",
+  "title": "typed skip has a range and reason but no verification strength",
+  "kind": "digest",
+  "requirements": ["AF-DIG-012", "AF-ENG-011"],
+  "description": "Encode the ActionReceipt semantic body as deterministic CBOR, then compute SHA-256(arkforge/v1/action-receipt\\0 || body). Protobuf bytes and transport evidence alone are not the receipt identity.",
+  "input": {
+    "bodyFile": "receipt.cbor",
+    "bodySha256": "3a8dff8c2dac4b2dd620f406b3c37af8625e1a946742ca89df06f83696882a3f"
+  },
+  "expected": {
+    "domain": "arkforge/v1/action-receipt\\0",
+    "receiptDigest": "711f220ee4bff3722c2d59106f21e904c791802d667781018b031b7b470e54ae",
+    "diag": "{\"facts\": {\"partition\": \"system\"}, \"jobId\": \"JOB-1\", \"planId\": \"PLAN-1\", \"stepId\": \"STEP-5\", \"actionId\": \"ACT-5\", \"permitId\": \"PERMIT-5\", \"attemptId\": \"ATTEMPT-1\", \"disposition\": \"semanticSuccess\", \"schemaVersion\": 1, \"verifiedRange\": {\"start\": 4096, \"length\": 8192}, \"evidenceSha256\": h'dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd', \"typedSkipReason\": \"skipped-lba-read-window\", \"verificationOutcome\": \"typedSkip\", \"verificationStrength\": null, \"failureClassification\": null}"
+  },
+  "files": {
+    "receipt.cbor": {
+      "bytes": 359,
+      "sha256": "3a8dff8c2dac4b2dd620f406b3c37af8625e1a946742ca89df06f83696882a3f"
+    }
+  }
+}

@@ -4,17 +4,19 @@
   "title": "an outcomeClassified fact that is not a terminal state does not conclude",
   "kind": "derive",
   "requirements": ["AF-CRASH-002", "AF-AUTH-P-001", "AF-CRASH-R-007"],
-  "description": "Replay the records (subject JOB-1 unless a jobId fact says otherwise; atEpochMs 1010, 1020, …; jobRevision 1), then derive the crash disposition for job JOB-1 and the permit ledger. `journal-frames.bin` holds the same records framed as on disk, without the file magic.",
+  "description": "Replay the records with the supplied subject (atEpochMs 1010, 1020, …; jobRevision 1), then derive the crash disposition for job JOB-1 and the permit ledger. `journal-frames.bin` holds the same records framed as on disk, without the file magic.",
   "input": {
     "jobId": "JOB-1",
     "records": [
       {
+        "subject": "JOB-1",
         "kind": "jobCreated",
         "facts": {
           "jobId": "JOB-1"
         }
       },
       {
+        "subject": "JOB-1",
         "kind": "stepPermitAccepted",
         "facts": {
           "jobId": "JOB-1",
@@ -23,6 +25,7 @@
         }
       },
       {
+        "subject": "JOB-1",
         "kind": "stepIntentRecorded",
         "facts": {
           "jobId": "JOB-1",
@@ -31,6 +34,7 @@
         }
       },
       {
+        "subject": "JOB-1",
         "kind": "outcomeClassified",
         "facts": {
           "jobId": "JOB-1",
@@ -52,7 +56,7 @@
         "permitsDispatch": true
       }
     ],
-    "unresolvedPermits": []
+    "unresolvedPermits": ["PERMIT-1"]
   },
   "files": {
     "journal-frames.bin": {

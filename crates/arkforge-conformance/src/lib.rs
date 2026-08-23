@@ -18,13 +18,14 @@
 
 pub mod cbor_repr;
 pub mod json;
+pub mod schema;
 pub mod suites;
 pub mod tree;
 
 pub use tree::{Case, Tree};
 
 /// The spec version these fixtures belong to. Bumped with `spec/manifest.yaml`.
-pub const SPEC_VERSION: &str = "1.0.0-draft.1";
+pub const SPEC_VERSION: &str = "1.0.0-draft.3";
 
 /// Every fixture, in memory.
 pub fn generate() -> Tree {
@@ -32,6 +33,7 @@ pub fn generate() -> Tree {
     suites::sha256::populate(&mut tree);
     suites::hmac::populate(&mut tree);
     suites::cbor::populate(&mut tree);
+    suites::cli::populate(&mut tree);
     suites::permit::populate(&mut tree);
     suites::admission::populate(&mut tree);
     suites::journal::populate(&mut tree);
@@ -39,6 +41,9 @@ pub fn generate() -> Tree {
     suites::state_machine::populate(&mut tree);
     suites::protobuf::populate(&mut tree);
     suites::rebind::populate(&mut tree);
+    suites::reconcile::populate(&mut tree);
+    suites::receipt::populate(&mut tree);
+    suites::transcript_dispatch::populate(&mut tree);
     suites::yaml::populate(&mut tree);
     suites::plan::populate(&mut tree);
     let manifest = tree.manifest(SPEC_VERSION).to_pretty();

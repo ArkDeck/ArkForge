@@ -4,7 +4,7 @@
 # Bump `version` on any normative change; list every file with its status.
 # `external` lists normative files that live outside spec/ for tooling reasons.
 schema: arkforge.spec-manifest/v1
-version: 1.0.0-draft.1
+version: 1.0.0-draft.3
 date: 2026-08-23
 reference_implementation: rust workspace at this commit (not normative)
 precedence: [conformance/v1, model and state-machines and errors, requirements, docs/architecture.md, reference implementation]
@@ -147,11 +147,19 @@ suites:
     cases: 21
   - id: state-machine
     cases: 5
+  - id: action-receipt
+    cases: 5
   - id: protobuf
     cases: 31
   - id: rebind
     cases: 18
+  - id: reconcile
+    cases: 6
+  - id: transcript-dispatch
+    cases: 2
   - id: strict-yaml
     cases: 33
   - id: plan
     cases: 9
+  - id: cli
+    cases: 4

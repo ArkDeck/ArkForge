@@ -1,0 +1,19 @@
+{
+  "id": "AF-CONF-RECEIPT-004",
+  "suite": "action-receipt",
+  "title": "duplicate fact keys have no receipt digest",
+  "kind": "verify",
+  "requirements": ["AF-DIG-006", "AF-DIG-012"],
+  "description": "Facts encode as one CBOR map. Equal fact keys MUST reject the whole receipt; a port may not keep the first or last value.",
+  "input": {
+    "facts": [
+      ["partition", "system"],
+      ["partition", "vendor"]
+    ]
+  },
+  "expected": {
+    "result": "reject",
+    "errorClass": "CBOR_DUPLICATE_MAP_KEY"
+  },
+  "files": {}
+}

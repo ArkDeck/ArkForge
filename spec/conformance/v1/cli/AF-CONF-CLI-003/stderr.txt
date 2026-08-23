@@ -1,0 +1,3 @@
+arkforge: INVALID_ARGUMENT: --format accepts exactly 'human' or 'json', not "xml".
+Remediation: Read the machine help for the exact command and option constraints.
+Next: arkforge help --format json

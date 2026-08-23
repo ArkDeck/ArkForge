@@ -423,8 +423,9 @@ enum JobEventKind {
 
 message JobEvent {
   string job_id = 1;
-  // Monotonic within one job, and equal to the journal sequence that produced
-  // it. A gap means the authority missed an event, not that none happened.
+  // Monotonic within one job. This is an event-stream cursor independent of
+  // journal sequence; journal_record_sha256 links the event to the durable
+  // record that produced it. A gap means the authority missed an event.
   uint64 sequence = 2;
   JobEventKind kind = 3;
   uint64 at_epoch_ms = 4;
@@ -437,7 +438,9 @@ message JobEvent {
   StepAdmissionSnapshot admission = 7;
   // Set for MANAGED_CONTROL_REQUESTED.
   ManagedControlRequest control_request = 8;
-  // Set for ACTION_RECEIPT.
+  // Set for ACTION_RECEIPT. Its journal link identifies the durable
+  // semanticReceiptRecorded record containing the canonical receipt body and
+  // this event cursor, so a restarted daemon can replay the same semantics.
   ActionReceiptSummary receipt = 9;
   // Set for OUTCOME_CLASSIFIED / POSSIBLE_EFFECT_SET / RECOVERY_ASSESSMENT.
   repeated KeyValue facts = 10;

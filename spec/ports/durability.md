@@ -41,12 +41,17 @@ reaches; no layer may claim power-loss safety on the strength of this port.
 
 ## Crash / retry
 `open` replays and verifies the whole chain; a torn tail is truncated and
-reported; any other inconsistency refuses the file. `append` is not retried
-after an I/O error — the job stops (the error is a refusal, not unknown
-outcome, because nothing reached the device without a durable record first).
+reported; any other inconsistency refuses the file. A frame is encoded and
+size-checked before the in-memory chain advances, then that chain commits only
+after the complete frame write. `append` is not retried on the same handle after
+an I/O or synchronization error: the handle is poisoned and must be reopened so
+the uncertain tail is verified or truncated first. If the failed append was a
+pre-dispatch boundary, no effect may follow; if it was a post-dispatch receipt,
+the already possible effect remains unknown until durable evidence or reconcile
+settles it.
 
 ## Error classes
-`JOURNAL_IO`, `JOURNAL_NOT_A_JOURNAL`, `JOURNAL_FRAME_LENGTH_INVALID`,
+`JOURNAL_IO`, `JOURNAL_POISONED`, `JOURNAL_NOT_A_JOURNAL`, `JOURNAL_FRAME_LENGTH_INVALID`,
 `JOURNAL_RECORD_TOO_LARGE`, `JOURNAL_SEQUENCE_BROKEN`, `JOURNAL_CHAIN_BROKEN`,
 `JOURNAL_RECORD_TAMPERED`, `JOURNAL_FSYNC_POLICY_MISDECLARED`,
 `JOURNAL_UNKNOWN_SCHEMA_VERSION`, `JOURNAL_RECORD_MALFORMED`, `JOURNAL_CBOR`.

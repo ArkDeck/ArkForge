@@ -209,18 +209,24 @@ The daemon MUST NOT open outbound connections to the authority.
 status: normative
 tests: [AF-CONF-CRASH-001..020]
 
-For each permit id the journal mentions, the disposition is the last of:
+For each permit id the journal mentions, replay advances monotonically through:
 `stepPermitAccepted` → `acceptedIntentNotDurable`; `stepIntentRecorded` →
 `intentDurable`; `permitConsuming` or `externalDispatchStarted` →
-`consumingOutcomeUnknown`; `permitConsumed` → `consumed{receiptDigest}`. A
-permit never mentioned is `unseen`. Only `intentDurable` permits a fresh
-dispatch; `unseen` is the only state admission may treat as new.
+`consumingOutcomeUnknown`; `semanticReceiptRecorded` (or the following
+`permitConsumed`) with a non-empty `receiptDigest` →
+`consumed{receiptDigest}`. A later earlier-stage record MUST NOT downgrade a
+permit, and the first durable receipt is immutable. A receipt marker without
+its digest remains `consumingOutcomeUnknown`.
+
+A permit never mentioned is `unseen`. Only `intentDurable` permits a fresh
+dispatch in the uninterrupted live lifecycle; recovery never dispatches from
+any crash disposition. `unseen` is the only state admission may treat as new.
 
 ### AF-AUTH-P-002 — unresolved permits
 status: normative
-tests: [AF-CONF-CRASH-005..009]
+tests: [AF-CONF-CRASH-005..010]
 
-`consumingOutcomeUnknown` and `acceptedIntentNotDurable` are *unresolved*: each
-is a possible external effect to reconcile, never to retry. `intentDurable` is
-not unresolved by the ledger's definition; see `state-machines/crash-disposition.yaml`
-and ISSUES SI-003 for how the two readers of this state differ.
+`intentDurable` and `consumingOutcomeUnknown` are *unresolved*: each is a
+possible external effect to reconcile, never to retry. An accepted permit with
+no durable intent is not an external effect and is therefore not unresolved,
+although dispatch remains forbidden until the intent is durable.

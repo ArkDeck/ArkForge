@@ -14,12 +14,22 @@ use arkforge_engine::recovery::{CrashDisposition, PermitDisposition, PermitLedge
 const SUITE: &str = "crash";
 
 struct Step {
+    subject: &'static str,
     kind: JournalRecordKind,
     facts: Vec<(&'static str, &'static str)>,
 }
 
 fn step(kind: JournalRecordKind, facts: &[(&'static str, &'static str)]) -> Step {
+    step_for("JOB-1", kind, facts)
+}
+
+fn step_for(
+    subject: &'static str,
+    kind: JournalRecordKind,
+    facts: &[(&'static str, &'static str)],
+) -> Step {
     Step {
+        subject,
         kind,
         facts: facts.to_vec(),
     }
@@ -31,7 +41,7 @@ fn build(steps: &[Step]) -> Journal {
     for step in steps {
         clock += 10;
         journal
-            .append(step.kind, clock, 1, id("JOB-1"), facts(&step.facts))
+            .append(step.kind, clock, 1, id(step.subject), facts(&step.facts))
             .unwrap();
     }
     journal
@@ -49,8 +59,8 @@ fn disposition_json(disposition: &CrashDisposition) -> Json {
         CrashDisposition::OutcomeUnknown { permit_id } => {
             ("outcomeUnknown", Some(permit_id.clone()), None)
         }
-        CrashDisposition::CheckpointFromDurableReceipt { permit_id } => (
-            "checkpointFromDurableReceipt",
+        CrashDisposition::ReceiptDurableCheckpointMissing { permit_id } => (
+            "receiptDurableCheckpointMissing",
             Some(permit_id.clone()),
             None,
         ),
@@ -131,7 +141,11 @@ pub fn populate(tree: &mut Tree) {
         (
             "only a plan stored for another subject: still no job",
             vec!["AF-CRASH-R-001"],
-            vec![step(JournalRecordKind::PlanStored, &[("planId", "PLAN-1")])],
+            vec![step_for(
+                "PLAN-1",
+                JournalRecordKind::PlanStored,
+                &[("planId", "PLAN-1")],
+            )],
         ),
         (
             "job created, no permit ever mentioned: safe to cancel",
@@ -168,8 +182,8 @@ pub fn populate(tree: &mut Tree) {
             vec![created(), accepted(), intent(), consuming(), dispatched()],
         ),
         (
-            "semantic receipt recorded but permit not yet marked consumed: still outcome unknown by the ledger",
-            vec!["AF-CRASH-R-004"],
+            "semantic receipt recorded before permitConsumed: receipt settled, checkpoint missing",
+            vec!["AF-CRASH-R-005"],
             vec![
                 created(),
                 accepted(),
@@ -180,7 +194,7 @@ pub fn populate(tree: &mut Tree) {
             ],
         ),
         (
-            "permit consumed with receipt, no checkpoint: checkpoint from the durable receipt",
+            "permit consumed with receipt, no checkpoint: receipt settled, checkpoint missing",
             vec!["AF-CRASH-R-005"],
             vec![
                 created(),
@@ -207,7 +221,7 @@ pub fn populate(tree: &mut Tree) {
             ],
         ),
         (
-            "concluded succeeded",
+            "the first terminal classification concludes succeeded and is immutable",
             vec!["AF-CRASH-R-007"],
             vec![
                 created(),
@@ -218,6 +232,7 @@ pub fn populate(tree: &mut Tree) {
                 consumed(),
                 checkpointed(),
                 concluded("succeeded"),
+                concluded("cancelledSafe"),
             ],
         ),
         (
@@ -314,7 +329,7 @@ pub fn populate(tree: &mut Tree) {
             ],
         ),
         (
-            "records for another job are ignored when deriving this job's row",
+            "an explicit other jobId overrides a coincidentally matching subject",
             vec!["AF-CRASH-R-009"],
             vec![
                 created(),
@@ -348,6 +363,7 @@ pub fn populate(tree: &mut Tree) {
             .iter()
             .map(|s| {
                 Json::object(vec![
+                    ("subject", Json::str(s.subject)),
                     ("kind", Json::str(s.kind.as_str())),
                     (
                         "facts",
@@ -383,8 +399,8 @@ pub fn populate(tree: &mut Tree) {
                     r
                 },
                 kind: "derive",
-                description: "Replay the records (subject JOB-1 unless a jobId fact says \
-                              otherwise; atEpochMs 1010, 1020, …; jobRevision 1), then \
+                description: "Replay the records with the supplied subject (atEpochMs \
+                              1010, 1020, …; jobRevision 1), then \
                               derive the crash disposition for job JOB-1 and the permit \
                               ledger. `journal-frames.bin` holds the same records framed \
                               as on disk, without the file magic."

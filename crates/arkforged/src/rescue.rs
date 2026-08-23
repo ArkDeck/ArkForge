@@ -98,7 +98,7 @@ impl RescueDevice {
         let bytes = facts
             .to_canonical_bytes()
             .map_err(|error| RescueError::io("encode rescue device facts", error))?;
-        let digest = digest_in_domain(Domain::DeviceFacts, &bytes);
+        let digest = digest_in_domain(Domain::RescueDeviceFacts, &bytes);
         let RockUsbLocation::IokitTopology(location_id) = device.location;
         Ok(Self {
             device_id: format!("rescue-device:{}", digest),

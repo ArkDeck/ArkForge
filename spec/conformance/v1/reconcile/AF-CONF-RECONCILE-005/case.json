@@ -1,0 +1,25 @@
+{
+  "id": "AF-CONF-RECONCILE-005",
+  "suite": "reconcile",
+  "title": "one indeterminate read keeps the original outcome unknown",
+  "kind": "derive",
+  "requirements": ["AF-REC-002"],
+  "description": "Reduce read-only observations only. No verdict authorizes replay, and an indeterminate or empty observation set remains stillUnknown.",
+  "input": {
+    "observations": [
+      {
+        "effect": "system",
+        "observation": "present"
+      },
+      {
+        "effect": "vendor",
+        "observation": "indeterminate"
+      }
+    ]
+  },
+  "expected": {
+    "verdict": "stillUnknown",
+    "reason": "1 of 2 declared effects could not be observed; the read face does not reach them (architecture.md 16.4)"
+  },
+  "files": {}
+}

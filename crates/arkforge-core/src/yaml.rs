@@ -101,7 +101,7 @@ pub fn parse(source: &str) -> Result<YamlValue, YamlError> {
         if content.is_empty() || content == "---" {
             continue;
         }
-        if content.starts_with('&') || content.starts_with('*') || content.starts_with('!') {
+        if contains_yaml_indirection(content) {
             return Err(error(
                 number,
                 "anchors, aliases and tags are not permitted in a profile",
@@ -125,6 +125,39 @@ pub fn parse(source: &str) -> Result<YamlValue, YamlError> {
         ));
     }
     Ok(value)
+}
+
+/// Detects YAML anchor (`&name`), alias (`*name`) and tag (`!name`) tokens
+/// wherever a plain token may begin, while leaving those bytes alone inside a
+/// quoted scalar or an ordinary word such as `a&b`.
+fn contains_yaml_indirection(text: &str) -> bool {
+    let bytes = text.as_bytes();
+    let mut in_single = false;
+    let mut in_double = false;
+    let mut escaped = false;
+    for (index, byte) in bytes.iter().copied().enumerate() {
+        if in_double && escaped {
+            escaped = false;
+            continue;
+        }
+        if in_double && byte == b'\\' {
+            escaped = true;
+            continue;
+        }
+        match byte {
+            b'\'' if !in_double => in_single = !in_single,
+            b'"' if !in_single => in_double = !in_double,
+            b'&' | b'*' | b'!' if !in_single && !in_double => {
+                let at_token_start =
+                    index == 0 || matches!(bytes[index - 1], b' ' | b'[' | b',' | b':' | b'-');
+                if at_token_start {
+                    return true;
+                }
+            }
+            _ => {}
+        }
+    }
+    false
 }
 
 /// Removes a trailing `# comment`, respecting quoted scalars.
@@ -496,9 +529,27 @@ readDomain:
 
     #[test]
     fn anchors_aliases_and_tags_are_rejected() {
-        for document in ["a: 1\n&anchor\n", "*alias\n", "!!str x\n"] {
+        for document in [
+            "a: 1\n&anchor\n",
+            "*alias\n",
+            "!!str x\n",
+            "a: &anchor 1\n",
+            "a: *alias\n",
+            "a: !!str x\n",
+            "a: [safe, &anchor value]\n",
+        ] {
             assert!(parse(document).is_err(), "{document:?} should be rejected");
         }
+    }
+
+    #[test]
+    fn indirection_markers_inside_quotes_or_words_are_literals() {
+        let value = parse("quoted: \"&anchor *alias !tag\"\nword: a&b!c*d\n").unwrap();
+        assert_eq!(
+            value.get("quoted").unwrap().as_scalar(),
+            Some("&anchor *alias !tag")
+        );
+        assert_eq!(value.get("word").unwrap().as_scalar(), Some("a&b!c*d"));
     }
 
     #[test]

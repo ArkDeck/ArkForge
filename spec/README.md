@@ -1,6 +1,6 @@
 # ArkForge Specification v1
 
-> 状态：`1.0.0-draft.1`（2026-08-23）。本目录是 ArkForge 的**语言无关规范正本**。
+> 状态：`1.0.0-draft.3`（2026-08-23）。本目录是 ArkForge 的**语言无关规范正本**。
 > Rust、Zig、C++、Swift 都只是这份规范的实现；Rust 工作区是第一个参考实现，
 > 也是生成 conformance fixture 的 oracle，但**Rust 代码不是规范**。
 >
@@ -81,14 +81,14 @@ stage's spec slice is small enough to read whole.
 | 0 | SHA-256, HMAC-SHA-256, deterministic CBOR, Protobuf wire subset, strict YAML | `requirements/digest.md`, `requirements/ipc.md` §wire, `model/strict-yaml.md` | `sha256`, `hmac-sha256`, `canonical-cbor`, `protobuf`, `strict-yaml` |
 | 1 | pure core: identifiers, effects, steps, plan, projection, permits, admission | `requirements/identifiers.md`, `requirements/plan.md`, `requirements/authority.md`, `model/digest-bodies.cddl`, `model/vocabularies.yaml` | `permit`, `admission`, `plan` |
 | 2 | DeviceProfile loader, artifact parsers, manifest | `requirements/profile.md`, `requirements/artifact.md`, `model/profile.schema.json` | `plan` (cases 001–002) |
-| 3 | journal, job state machine, every crash window | `requirements/engine.md`, `state-machines/` , `ports/durability.md` | `journal`, `crash`, `state-machine` |
-| 4 | provider SPI, verification tri-state, rebind, transcript replay | `requirements/verification.md`, `requirements/recovery.md`, `requirements/transport.md`, `model/transcript.md`, `ports/transport-identity.md` | `rebind` (transcript-replay dispatch: see `conformance/README.md` gaps) |
-| 5 | IPC framing, sessions, daemon API; CLI | `requirements/ipc.md`, `ports/ipc-framing.md`, `requirements/cli.md` | `protobuf` (framing cases) + black-box CLI contract |
+| 3 | journal, semantic action receipt, job state machine, every crash window | `requirements/engine.md`, `state-machines/` , `ports/durability.md` | `journal`, `action-receipt`, `crash`, `state-machine` |
+| 4 | provider SPI, verification tri-state, rebind, reconciliation, transcript replay | `requirements/verification.md`, `requirements/recovery.md`, `requirements/transport.md`, `model/transcript.md`, `ports/transport-identity.md` | `rebind`, `reconcile`, `transcript-dispatch` |
+| 5 | IPC framing, sessions, daemon API; CLI | `requirements/ipc.md`, `ports/ipc-framing.md`, `requirements/cli.md` | `protobuf` (framing cases), `cli` |
 | 6 | OS transports: USB, local IPC endpoint, managed device control | `ports/usb.md`, `ports/device-control.md` | hardware-in-the-loop; see `docs/evidence/` |
 | 7 | real-device campaign under a named `HardwareCampaign` | `docs/decisions/AFD-0004-hardware-campaign-maturity.md` | evidence ledger, not a fixture |
 
 A full port implements the same CLI/IPC surface so it can be verified as a
-black box across a process boundary (`arkforge … --format json`, the daemon
+black box across a process boundary (`arkforge --output json …`, the daemon
 socket). Mixing languages inside one process is only recommended for the USB
 leaf (`ports/usb.md`), through a C ABI that carries bytes and error classes and
 nothing else.

@@ -12,7 +12,7 @@
   "expected": {
     "transcriptDigest": "920f77d6e99a15d31524d1cd4200221792395aecfe946c6a2a0a7b9cc6a81e88",
     "observationDiag": "{\"mode\": \"hdc-normal\", \"observationId\": \"OBS-PREFLIGHT\", \"serialEvidence\": {\"kind\": \"descriptor\", \"digest\": h'f0016d55ee3df292573214e5c7fc5f0c273c4f975a1a3d38610c9efe0c08eaab'}, \"topologyDigest\": h'f13c39593e926e3e3949a38f3622d1f78ea2c8a35eb3e04a9b756213b844a8d8', \"descriptorDigest\": h'67d2276b1667a4c9afa40c33bc3f94db400d381af51c1a9ab8ab958f1290d8f5', \"identityStrength\": \"protocolConfirmed\", \"protocolIdentity\": [], \"observedAtEpochMs\": 1754380841500, \"providerCandidates\": [], \"malformedDescriptor\": false}",
-    "probeFactsDigest": "7eb7e69966fb3538eb1c691d20249d5a4a2f22280d3aedcb344d019e6341625a",
+    "probeFactsDigest": "e659975f7e5a74deb7d23da856fa951f98b68759284257b5bc834a2efd5330ee",
     "protocolFacts": {
       "transport": "arkforge.transport.replay"
     },

@@ -353,6 +353,21 @@ impl Journal {
         subject: OpaqueId,
         facts: Vec<(OpaqueId, String)>,
     ) -> Result<&JournalRecord, JournalError> {
+        let record = self.prepare_record(kind, at_epoch_ms, job_revision, subject, facts)?;
+        Ok(self.commit_record(record))
+    }
+
+    /// Constructs and validates the next record without advancing the chain.
+    /// The durable wrapper uses this to reject an unencodable or oversized frame
+    /// before its in-memory view can get ahead of stable storage.
+    pub(crate) fn prepare_record(
+        &self,
+        kind: JournalRecordKind,
+        at_epoch_ms: u64,
+        job_revision: u64,
+        subject: OpaqueId,
+        facts: Vec<(OpaqueId, String)>,
+    ) -> Result<JournalRecord, JournalError> {
         let mut record = JournalRecord {
             schema_version: SCHEMA_VERSION,
             sequence: self.records.len() as u64 + 1,
@@ -366,8 +381,17 @@ impl Journal {
             record_digest: Sha256Digest::from_bytes(CHAIN_ORIGIN),
         };
         record.record_digest = record.recompute_digest().map_err(JournalError::Cbor)?;
+        Ok(record)
+    }
+
+    /// Commits a record returned by `prepare_record` after its durable frame has
+    /// been written. Callers hold `&mut self`, so the prepared head cannot have
+    /// changed between the two operations.
+    pub(crate) fn commit_record(&mut self, record: JournalRecord) -> &JournalRecord {
+        debug_assert_eq!(record.sequence, self.records.len() as u64 + 1);
+        debug_assert_eq!(record.previous_digest, self.head_digest());
         self.records.push(record);
-        Ok(self.records.last().expect("just pushed"))
+        self.records.last().expect("just pushed")
     }
 
     /// Adopts a record read back from storage, after checking it belongs here.

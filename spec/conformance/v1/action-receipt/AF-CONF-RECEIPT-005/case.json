@@ -1,0 +1,16 @@
+{
+  "id": "AF-CONF-RECEIPT-005",
+  "suite": "action-receipt",
+  "title": "receipt fact keys use the OpaqueId grammar",
+  "kind": "verify",
+  "requirements": ["AF-ID-001", "AF-DIG-012"],
+  "description": "Fact values are explicit free text; fact keys are identifiers and must match [A-Za-z0-9._:-]{1,128}. Reject before hashing.",
+  "input": {
+    "factKey": "has whitespace"
+  },
+  "expected": {
+    "result": "reject",
+    "errorClass": "CBOR_MODEL_VIOLATION"
+  },
+  "files": {}
+}

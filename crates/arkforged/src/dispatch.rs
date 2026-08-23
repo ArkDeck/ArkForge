@@ -27,7 +27,12 @@ use arkforge_artifact::dayu200;
 use arkforge_artifact::staging::stage_members;
 use arkforge_core::Sha256Digest;
 use arkforge_core::digest::Sha256;
+use arkforge_core::effect::PersistentEffect;
 use arkforge_core::outcome::ActionDisposition;
+use arkforge_core::projection::PrivateActionRecord;
+use arkforge_core::step::WorkflowEffect;
+use arkforge_core::verification::VerificationOutcome;
+use arkforge_engine::superseding::EffectObservation;
 use arkforge_platform::sync_directory;
 use arkforge_provider::rockchip_execute::{
     ExecutionError, ExecutionSession, RockUsbDevice, RockUsbLocation, RockUsbMutationReceipt,
@@ -67,6 +72,27 @@ pub struct PendingPreparation {
     pub plan_actions: Vec<arkforge_core::projection::PrivateActionRecord>,
     pub profile: arkforge_core::profile::DeviceProfile,
     pub artifact_digest: Sha256Digest,
+}
+
+/// A Provider-selected reconciliation run. Every action is revalidated by the
+/// dispatcher as read-only before it can reach the native port.
+#[derive(Debug, Clone)]
+pub struct PendingReconcile {
+    pub job_id: String,
+    pub actions: Vec<PrivateActionRecord>,
+    pub profile: arkforge_core::profile::DeviceProfile,
+    pub possible_effects: Vec<PersistentEffect>,
+    /// True only when these observations cover the original plan's complete
+    /// terminal contract, not merely the interrupted effect.
+    pub terminal_scope: bool,
+}
+
+/// Read-only evidence returned to the engine's reconciliation reducer.
+#[derive(Debug, Clone)]
+pub struct ReconcileDispatchOutcome {
+    pub observations: Vec<(PersistentEffect, EffectObservation)>,
+    pub facts: Vec<(String, String)>,
+    pub evidence_digest: Sha256Digest,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -154,6 +180,124 @@ impl<'a> Dispatcher<'a> {
                 verification: None,
             },
         }
+    }
+
+    /// Performs a fresh, read-only reconciliation outside the service lock.
+    ///
+    /// This has no permit and accepts no write/reset/managed-control action.
+    /// A malformed Provider plan therefore becomes indeterminate evidence,
+    /// never a broader native operation.
+    pub fn reconcile_read_only(&mut self, work: &PendingReconcile) -> ReconcileDispatchOutcome {
+        match self.try_reconcile_read_only(work) {
+            Ok(outcome) => outcome,
+            Err(detail) => ReconcileDispatchOutcome {
+                observations: work
+                    .possible_effects
+                    .iter()
+                    .cloned()
+                    .map(|effect| (effect, EffectObservation::Indeterminate))
+                    .collect(),
+                facts: vec![
+                    ("reconcileError".into(), detail.clone()),
+                    ("readOnly".into(), "true".into()),
+                ],
+                evidence_digest: arkforge_core::digest::sha256(detail.as_bytes()),
+            },
+        }
+    }
+
+    fn try_reconcile_read_only(
+        &mut self,
+        work: &PendingReconcile,
+    ) -> Result<ReconcileDispatchOutcome, String> {
+        let scratch = self.job_root(&work.job_id).join("reconcile-scratch");
+        std::fs::create_dir_all(&scratch).map_err(|error| error.to_string())?;
+
+        // Reconciliation observations must be fresh. No table/read-domain fact
+        // retained from the interrupted execution is trusted as a new read.
+        self.sessions
+            .insert(work.job_id.clone(), ExecutionSession::new(BTreeMap::new()));
+        let session = self
+            .sessions
+            .get_mut(&work.job_id)
+            .expect("the fresh reconciliation session was inserted");
+
+        let mut verification = Vec::<(PrivateActionRecord, VerificationOutcome)>::new();
+        let mut evidence = Sha256::new();
+        evidence.update(b"arkforge-reconcile-read-only-v1\0");
+        for record in &work.actions {
+            if record.effect_class != WorkflowEffect::ReadOnly {
+                return Err(format!(
+                    "provider selected effectful reconcile action {} ({})",
+                    record.action_id,
+                    record.effect_class.as_str()
+                ));
+            }
+            let action = StoredAction::decode(record).map_err(|error| error.to_string())?;
+            if !matches!(
+                action,
+                StoredAction::ProbeLoader
+                    | StoredAction::ValidatePartitionTable { .. }
+                    | StoredAction::CharacterizeReadDomain
+                    | StoredAction::ReadbackPartition { .. }
+            ) {
+                return Err(format!(
+                    "provider selected non-read-only native action {}",
+                    record.action_id
+                ));
+            }
+            let outcome =
+                execute_action(&action, record, session, &work.profile, self.port, &scratch)
+                    .map_err(|error| error.to_string())?;
+            if outcome.disposition != ActionDisposition::SemanticSuccess {
+                return Err(format!(
+                    "read-only action {} did not report semantic success",
+                    record.action_id
+                ));
+            }
+            evidence.update(outcome.evidence_digest.as_bytes());
+            if let Some(verdict) = outcome.verification {
+                verification.push((record.clone(), verdict));
+            }
+        }
+
+        let observations = work
+            .possible_effects
+            .iter()
+            .cloned()
+            .map(|effect| {
+                let observation = verification
+                    .iter()
+                    .find(|(record, _)| readback_observes_effect(record, &effect))
+                    .map(|(_, outcome)| match outcome {
+                        VerificationOutcome::Verified { .. } => EffectObservation::Present,
+                        // A mismatch proves the desired complete content is not
+                        // present, but without a pre-write baseline it cannot
+                        // distinguish no write from a partial write.
+                        VerificationOutcome::TypedSkip { .. }
+                        | VerificationOutcome::Failed { .. } => EffectObservation::Indeterminate,
+                    })
+                    .unwrap_or(EffectObservation::Indeterminate);
+                (effect, observation)
+            })
+            .collect::<Vec<_>>();
+        let indeterminate = observations
+            .iter()
+            .filter(|(_, observation)| *observation == EffectObservation::Indeterminate)
+            .count();
+        Ok(ReconcileDispatchOutcome {
+            observations,
+            facts: vec![
+                ("readOnly".into(), "true".into()),
+                ("readOnlyActionCount".into(), work.actions.len().to_string()),
+                (
+                    "readOnlyObservationCount".into(),
+                    work.possible_effects.len().to_string(),
+                ),
+                ("indeterminateCount".into(), indeterminate.to_string()),
+            ],
+            evidence_digest: evidence.finalize(),
+        })
     }
 
     fn try_run(&mut self, work: &PendingDispatch) -> Result<DispatchOutcome, DispatchFailure> {
@@ -304,6 +448,24 @@ impl<'a> Dispatcher<'a> {
 
     pub fn work_root(&self) -> &Path {
         &self.work_root
+    }
+}
+
+fn readback_observes_effect(record: &PrivateActionRecord, effect: &PersistentEffect) -> bool {
+    match (effect, &record.declared_target) {
+        (
+            PersistentEffect::WritePartition {
+                partition,
+                range,
+                content,
+            },
+            Some(arkforge_core::step::SemanticTarget::Partition(observed_partition)),
+        ) => {
+            observed_partition == partition
+                && record.declared_range == Some(*range)
+                && record.content_digest == Some(*content)
+        }
+        _ => false,
     }
 }
 
@@ -1055,6 +1217,7 @@ pub fn executable_digest(path: &Path) -> Result<arkforge_core::Sha256Digest, Str
 mod tests {
     use super::*;
     use arkforge_artifact::fixture;
+    use std::cell::Cell;
 
     struct TempRoot(PathBuf);
 
@@ -1080,6 +1243,42 @@ mod tests {
         }
     }
 
+    #[derive(Debug, Default)]
+    struct NoMutationPort {
+        reset_calls: Cell<usize>,
+    }
+
+    impl RockUsbPort for NoMutationPort {
+        fn discover(&self) -> Result<RockUsbObservation<Vec<RockUsbDevice>>, RockUsbPortFailure> {
+            Err(RockUsbPortFailure::BeforeIo("unused".into()))
+        }
+
+        fn read_partition_table(
+            &self,
+        ) -> Result<
+            RockUsbObservation<arkforge_artifact::manifest::PartitionTableFact>,
+            RockUsbPortFailure,
+        > {
+            Err(RockUsbPortFailure::BeforeIo("unused".into()))
+        }
+
+        fn read_sectors(
+            &self,
+            _begin_sector: u64,
+            _sectors: u64,
+            _scratch: &Path,
+        ) -> Result<RockUsbObservation<Vec<u8>>, RockUsbPortFailure> {
+            Err(RockUsbPortFailure::BeforeIo("unused".into()))
+        }
+
+        fn reset_device(&self) -> Result<RockUsbMutationReceipt, RockUsbPortFailure> {
+            self.reset_calls.set(self.reset_calls.get() + 1);
+            Err(RockUsbPortFailure::AfterIo(
+                "a reconcile test reached reset".into(),
+            ))
+        }
+    }
+
     fn make_tree_removable(path: &Path) {
         if let Ok(metadata) = fs::symlink_metadata(path) {
             if metadata.is_dir() {
@@ -1093,6 +1292,44 @@ mod tests {
                 let _ = set_cache_permissions(path, 0o600);
             }
         }
+    }
+
+    #[test]
+    fn reconcile_revalidates_provider_output_before_any_mutation_port() {
+        let root = TempRoot::new("reconcile-closed-actions");
+        let port = NoMutationPort::default();
+        let mut dispatcher = Dispatcher::new(root.0.join("store"), root.0.join("work"), &port);
+        let record = PrivateActionRecord {
+            action_id: arkforge_core::ActionId::new("ACT-MALICIOUS-RESET").unwrap(),
+            step_id: arkforge_core::StepId::new("STEP-MALICIOUS-RESET").unwrap(),
+            role: arkforge_core::projection::PrivateActionRole::PrimaryEffect,
+            // Even a contradictory declaration cannot smuggle the decoded
+            // reset operation through the read-only runner.
+            effect_class: WorkflowEffect::ReadOnly,
+            declared_target: Some(arkforge_core::SemanticTarget::Device),
+            declared_range: None,
+            content_digest: None,
+            body: arkforge_core::CborValue::map(vec![(
+                "action",
+                arkforge_core::CborValue::text("reset-device"),
+            )]),
+        };
+        let work = PendingReconcile {
+            job_id: "JOB-RECONCILE-CLOSED".into(),
+            actions: vec![record],
+            profile: arkforge_core::profile::load(include_str!("../../../profiles/dayu200.yaml"))
+                .unwrap(),
+            possible_effects: Vec::new(),
+            terminal_scope: false,
+        };
+        let outcome = dispatcher.reconcile_read_only(&work);
+        assert!(
+            outcome
+                .facts
+                .iter()
+                .any(|(key, value)| key == "reconcileError" && value.contains("non-read-only"))
+        );
+        assert_eq!(port.reset_calls.get(), 0);
     }
 
     #[test]

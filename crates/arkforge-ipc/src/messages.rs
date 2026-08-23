@@ -6,6 +6,11 @@
 
 use crate::wire::{self, Reader, WireError, decode_enum};
 use crate::{Api, SessionKind, Status};
+use arkforge_core::digest::{
+    CanonicalCbor, CborError, CborValue, Domain, Sha256Digest, decode_canonical, digest_canonical,
+};
+use arkforge_core::ids::OpaqueId;
+use std::collections::BTreeMap;
 
 /// The handshake a peer opens with.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -1123,6 +1128,178 @@ pub struct ActionReceiptSummary {
 }
 
 impl ActionReceiptSummary {
+    /// The semantic receipt digest stored in the durable permit ledger.
+    ///
+    /// Protobuf is intentionally not the digest body: unknown fields and field
+    /// order are wire-compatible there. The corresponding canonical CBOR body
+    /// is fixed by [`CanonicalCbor`] below so Rust, Swift, Zig and C++ ports can
+    /// reproduce the same receipt identity.
+    pub fn receipt_digest(&self) -> Result<Sha256Digest, CborError> {
+        for (field, value) in [
+            ("jobId", self.job_id.as_str()),
+            ("planId", self.plan_id.as_str()),
+            ("stepId", self.step_id.as_str()),
+            ("attemptId", self.attempt_id.as_str()),
+            ("permitId", self.permit_id.as_str()),
+        ] {
+            OpaqueId::new(value).map_err(|error| {
+                CborError::ModelViolation(format!("{field} is not an OpaqueId: {error}"))
+            })?;
+        }
+        if !self.action_id.is_empty() {
+            OpaqueId::new(&self.action_id).map_err(|error| {
+                CborError::ModelViolation(format!("actionId is not an OpaqueId: {error}"))
+            })?;
+        }
+        if !matches!(
+            self.disposition.as_str(),
+            "semanticSuccess" | "confirmedNoEffect" | "confirmedPartialEffect" | "outcomeUnknown"
+        ) {
+            return Err(CborError::ModelViolation(format!(
+                "unknown action disposition {:?}",
+                self.disposition
+            )));
+        }
+        if self.evidence_sha256.len() != 32 {
+            return Err(CborError::ModelViolation(format!(
+                "evidenceSha256 is {} bytes, expected 32",
+                self.evidence_sha256.len()
+            )));
+        }
+        if !matches!(
+            self.verification_outcome.as_str(),
+            "" | "verified" | "typedSkip" | "failed"
+        ) {
+            return Err(CborError::ModelViolation(format!(
+                "unknown verification outcome {:?}",
+                self.verification_outcome
+            )));
+        }
+        if !self.strength_is_consistent() {
+            return Err(CborError::ModelViolation(
+                "verificationStrength is present without a verified outcome".into(),
+            ));
+        }
+        if !self.verification_strength.is_empty()
+            && !matches!(
+                self.verification_strength.as_str(),
+                "fullHash" | "sampledRanges" | "prefixHash" | "semanticOnly"
+            )
+        {
+            return Err(CborError::ModelViolation(format!(
+                "unknown verification strength {:?}",
+                self.verification_strength
+            )));
+        }
+        for fact in &self.facts {
+            OpaqueId::new(&fact.key).map_err(|error| {
+                CborError::ModelViolation(format!(
+                    "fact key {:?} is not an OpaqueId: {error}",
+                    fact.key
+                ))
+            })?;
+        }
+        digest_canonical(Domain::ActionReceipt, self)
+    }
+
+    /// Reconstructs the exact semantic receipt body stored in a durable
+    /// journal. This is deliberately separate from protobuf decoding: the
+    /// journal stores the canonical digest body so a restarted daemon can
+    /// reproduce both the receipt and its identity without trusting process
+    /// memory or protobuf field order.
+    pub fn from_canonical_bytes(input: &[u8]) -> Result<Self, CborError> {
+        let value = decode_canonical(input)?;
+        let CborValue::Map(entries) = value else {
+            return Err(receipt_model("receipt body is not a map"));
+        };
+        let mut fields = BTreeMap::new();
+        for (key, value) in entries {
+            let CborValue::Text(key) = key else {
+                return Err(receipt_model("receipt field name is not text"));
+            };
+            if fields.insert(key.clone(), value).is_some() {
+                return Err(receipt_model(format!("duplicate receipt field {key:?}")));
+            }
+        }
+        if fields.len() != 15 {
+            return Err(receipt_model(format!(
+                "receipt body has {} fields, expected 15",
+                fields.len()
+            )));
+        }
+        match take_receipt_field(&mut fields, "schemaVersion")? {
+            CborValue::Unsigned(1) => {}
+            _ => return Err(receipt_model("schemaVersion must be 1")),
+        }
+
+        let verified_range = take_receipt_field(&mut fields, "verifiedRange")?;
+        let (verified_range_start, verified_range_length) = match verified_range {
+            CborValue::Null => (0, 0),
+            CborValue::Map(entries) => {
+                let mut range = BTreeMap::new();
+                for (key, value) in entries {
+                    let CborValue::Text(key) = key else {
+                        return Err(receipt_model("verifiedRange field name is not text"));
+                    };
+                    if range.insert(key.clone(), value).is_some() {
+                        return Err(receipt_model(format!(
+                            "duplicate verifiedRange field {key:?}"
+                        )));
+                    }
+                }
+                if range.len() != 2 {
+                    return Err(receipt_model("verifiedRange must contain start and length"));
+                }
+                let start = take_unsigned_field(&mut range, "start")?;
+                let length = take_unsigned_field(&mut range, "length")?;
+                (start, length)
+            }
+            _ => return Err(receipt_model("verifiedRange must be a map or null")),
+        };
+
+        let facts_value = take_receipt_field(&mut fields, "facts")?;
+        let CborValue::Map(fact_entries) = facts_value else {
+            return Err(receipt_model("facts must be a map"));
+        };
+        let mut facts = Vec::with_capacity(fact_entries.len());
+        for (key, value) in fact_entries {
+            let (CborValue::Text(key), CborValue::Text(value)) = (key, value) else {
+                return Err(receipt_model("fact keys and values must be text"));
+            };
+            facts.push(KeyValue { key, value });
+        }
+
+        let receipt = ActionReceiptSummary {
+            job_id: take_text_field(&mut fields, "jobId")?,
+            plan_id: take_text_field(&mut fields, "planId")?,
+            step_id: take_text_field(&mut fields, "stepId")?,
+            action_id: take_optional_text_field(&mut fields, "actionId")?,
+            attempt_id: take_text_field(&mut fields, "attemptId")?,
+            permit_id: take_text_field(&mut fields, "permitId")?,
+            disposition: take_text_field(&mut fields, "disposition")?,
+            evidence_sha256: match take_receipt_field(&mut fields, "evidenceSha256")? {
+                CborValue::Bytes(value) => value,
+                _ => return Err(receipt_model("evidenceSha256 must be bytes")),
+            },
+            verification_outcome: take_optional_text_field(&mut fields, "verificationOutcome")?,
+            verification_strength: take_optional_text_field(&mut fields, "verificationStrength")?,
+            verified_range_start,
+            verified_range_length,
+            typed_skip_reason: take_optional_text_field(&mut fields, "typedSkipReason")?,
+            failure_classification: take_optional_text_field(&mut fields, "failureClassification")?,
+            facts,
+        };
+        if !fields.is_empty() {
+            return Err(receipt_model(format!(
+                "unknown receipt fields: {:?}",
+                fields.keys().collect::<Vec<_>>()
+            )));
+        }
+        // Reuse the same model validation as the hashing ingress.
+        receipt.receipt_digest()?;
+        Ok(receipt)
+    }
+
     pub fn encode(&self) -> Vec<u8> {
         let mut out = Vec::new();
         wire::write_string(&mut out, 1, &self.job_id);
@@ -1180,6 +1357,114 @@ impl ActionReceiptSummary {
             return true;
         }
         self.verification_outcome == "verified"
+    }
+}
+
+fn receipt_model(message: impl Into<String>) -> CborError {
+    CborError::ModelViolation(message.into())
+}
+
+fn take_receipt_field(
+    fields: &mut BTreeMap<String, CborValue>,
+    name: &str,
+) -> Result<CborValue, CborError> {
+    fields
+        .remove(name)
+        .ok_or_else(|| receipt_model(format!("missing receipt field {name}")))
+}
+
+fn take_text_field(
+    fields: &mut BTreeMap<String, CborValue>,
+    name: &str,
+) -> Result<String, CborError> {
+    match take_receipt_field(fields, name)? {
+        CborValue::Text(value) => Ok(value),
+        _ => Err(receipt_model(format!("{name} must be text"))),
+    }
+}
+
+fn take_optional_text_field(
+    fields: &mut BTreeMap<String, CborValue>,
+    name: &str,
+) -> Result<String, CborError> {
+    match take_receipt_field(fields, name)? {
+        CborValue::Text(value) => Ok(value),
+        CborValue::Null => Ok(String::new()),
+        _ => Err(receipt_model(format!("{name} must be text or null"))),
+    }
+}
+
+fn take_unsigned_field(
+    fields: &mut BTreeMap<String, CborValue>,
+    name: &str,
+) -> Result<u64, CborError> {
+    match fields
+        .remove(name)
+        .ok_or_else(|| receipt_model(format!("missing field {name}")))?
+    {
+        CborValue::Unsigned(value) => Ok(value),
+        _ => Err(receipt_model(format!("{name} must be unsigned"))),
+    }
+}
+
+impl CanonicalCbor for ActionReceiptSummary {
+    fn to_cbor(&self) -> CborValue {
+        let optional_text = |value: &str| {
+            if value.is_empty() {
+                CborValue::Null
+            } else {
+                CborValue::text(value)
+            }
+        };
+        let facts = CborValue::Map(
+            self.facts
+                .iter()
+                .map(|fact| {
+                    (
+                        CborValue::text(fact.key.clone()),
+                        CborValue::text(fact.value.clone()),
+                    )
+                })
+                .collect(),
+        );
+        let verified_range = if self.verification_outcome.is_empty() {
+            CborValue::Null
+        } else {
+            CborValue::map(vec![
+                ("start", CborValue::Unsigned(self.verified_range_start)),
+                ("length", CborValue::Unsigned(self.verified_range_length)),
+            ])
+        };
+
+        CborValue::map(vec![
+            ("schemaVersion", CborValue::Unsigned(1)),
+            ("jobId", CborValue::text(self.job_id.clone())),
+            ("planId", CborValue::text(self.plan_id.clone())),
+            ("stepId", CborValue::text(self.step_id.clone())),
+            ("actionId", optional_text(&self.action_id)),
+            ("attemptId", CborValue::text(self.attempt_id.clone())),
+            ("permitId", CborValue::text(self.permit_id.clone())),
+            ("disposition", CborValue::text(self.disposition.clone())),
+            (
+                "evidenceSha256",
+                CborValue::bytes(self.evidence_sha256.clone()),
+            ),
+            (
+                "verificationOutcome",
+                optional_text(&self.verification_outcome),
+            ),
+            (
+                "verificationStrength",
+                optional_text(&self.verification_strength),
+            ),
+            ("verifiedRange", verified_range),
+            ("typedSkipReason", optional_text(&self.typed_skip_reason)),
+            (
+                "failureClassification",
+                optional_text(&self.failure_classification),
+            ),
+            ("facts", facts),
+        ])
     }
 }
 
@@ -1887,6 +2172,57 @@ mod tests {
 
         let no_verification = ActionReceiptSummary::default();
         assert!(no_verification.strength_is_consistent());
+    }
+
+    #[test]
+    fn a_receipt_has_one_canonical_semantic_digest() {
+        let receipt = ActionReceiptSummary {
+            job_id: "JOB-1".into(),
+            plan_id: "PLAN-1".into(),
+            step_id: "STEP-5".into(),
+            action_id: "ACT-5".into(),
+            attempt_id: "ATTEMPT-1".into(),
+            permit_id: "PERMIT-5".into(),
+            disposition: "semanticSuccess".into(),
+            evidence_sha256: vec![0xdd; 32],
+            verification_outcome: "typedSkip".into(),
+            verified_range_start: 4096,
+            verified_range_length: 8192,
+            typed_skip_reason: "skipped-lba-read-window".into(),
+            facts: vec![KeyValue {
+                key: "partition".into(),
+                value: "system".into(),
+            }],
+            ..ActionReceiptSummary::default()
+        };
+        let digest = receipt.receipt_digest().unwrap();
+        assert_eq!(
+            digest.to_hex(),
+            "711f220ee4bff3722c2d59106f21e904c791802d667781018b031b7b470e54ae"
+        );
+        let body = receipt.to_canonical_bytes().unwrap();
+        assert_eq!(
+            ActionReceiptSummary::from_canonical_bytes(&body).unwrap(),
+            receipt
+        );
+
+        let duplicate_fact = ActionReceiptSummary {
+            facts: vec![
+                KeyValue {
+                    key: "partition".into(),
+                    value: "system".into(),
+                },
+                KeyValue {
+                    key: "partition".into(),
+                    value: "vendor".into(),
+                },
+            ],
+            ..receipt
+        };
+        assert!(matches!(
+            duplicate_fact.receipt_digest(),
+            Err(CborError::DuplicateMapKey(_))
+        ));
     }
 
     #[test]

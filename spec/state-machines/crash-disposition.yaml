@@ -4,16 +4,18 @@
 # status: normative — fixture AF-CONF-CRASH-001..021 pins every row.
 # source: crates/arkforge-engine/src/recovery.rs CrashDisposition::derive, PermitLedger
 #
-# Derivation for job J over its replayed records (subject == J or fact jobId == J):
+# Derivation for job J over its replayed records. An explicit jobId fact is
+# authoritative; otherwise subject == J counts. For a one-job journal, legacy
+# untagged step-scoped records also belong to its sole job:
 #   1. no jobCreated record            → noJob
-#   2. newest outcomeClassified whose `outcome` is a terminal state → concluded(state)
+#   2. first outcomeClassified whose `outcome` is a terminal state → concluded(state)
 #   3. newest record carrying a permitId fact names permit P; if none → safeToCancel
 #   4. ledger(P):
 #        unseen                     → safeToCancel
 #        acceptedIntentNotDurable   → dispatchForbiddenUntilIntentDurable(P)
 #        intentDurable              → outcomeUnknown(P)
 #        consumingOutcomeUnknown    → outcomeUnknown(P)
-#        consumed, no stepCheckpointed naming P → checkpointFromDurableReceipt(P)
+#        consumed, no stepCheckpointed naming P → receiptDurableCheckpointMissing(P)
 #        consumed, checkpointed     → replayFromCheckpoint
 #   No row permits a new external effect.
 schema: arkforge.state-machine/v1
@@ -21,9 +23,11 @@ machine: crash-disposition
 status: normative
 
 permit_ledger:
-  # Last matching record wins, per permit id.
+  # The lifecycle is monotonic per permit id. A later earlier-stage record may
+  # not downgrade consuming/consumed, and the first non-empty receiptDigest is
+  # immutable. A receipt marker without its digest remains unresolved.
   permits_dispatch: [intentDurable]
-  unresolved: [acceptedIntentNotDurable, consumingOutcomeUnknown]
+  unresolved: [intentDurable, consumingOutcomeUnknown]
   records:
     - record: stepPermitAccepted
       disposition: acceptedIntentNotDurable
@@ -33,6 +37,9 @@ permit_ledger:
       disposition: consumingOutcomeUnknown
     - record: externalDispatchStarted
       disposition: consumingOutcomeUnknown
+    - record: semanticReceiptRecorded
+      disposition: consumed
+      facts: [receiptDigest]
     - record: permitConsumed
       disposition: consumed
       facts: [receiptDigest]
@@ -61,24 +68,23 @@ rows:
     when: newest permit is intentDurable or consumingOutcomeUnknown
     action: reconcile (read-only); never replay
     permits_external_effect: false
-    fixtures: [AF-CONF-CRASH-006, AF-CONF-CRASH-007, AF-CONF-CRASH-008, AF-CONF-CRASH-009]
-    note: see ISSUES SI-003 for the daemon's narrower reading of intentDurable
+    fixtures: [AF-CONF-CRASH-006, AF-CONF-CRASH-007, AF-CONF-CRASH-008]
   - id: AF-CRASH-R-005
-    disposition: checkpointFromDurableReceipt
-    when: newest permit is consumed and no stepCheckpointed names it
-    action: verify the exact receipt, write the checkpoint; do not re-execute
+    disposition: receiptDurableCheckpointMissing
+    when: newest permit has a semantic receipt (with or without the following permitConsumed marker) and no stepCheckpointed names it
+    action: replay the receipt only after canonical body, identity and digest validation; classify outcomeUnknown and reconcile read-only; do not synthesize the checkpoint, infer success, or re-execute
     permits_external_effect: false
-    fixtures: [AF-CONF-CRASH-010]
+    fixtures: [AF-CONF-CRASH-009, AF-CONF-CRASH-010]
   - id: AF-CRASH-R-006
     disposition: replayFromCheckpoint
     when: newest permit is consumed and checkpointed
-    action: replay events to the authority; continue read-only; do not re-execute
+    action: replay validated receipt events to the authority; without a durable terminal outcome classify outcomeUnknown; checkpoint count alone is not success; do not re-execute
     permits_external_effect: false
     fixtures: [AF-CONF-CRASH-011, AF-CONF-CRASH-019]
   - id: AF-CRASH-R-007
     disposition: concluded
     when: an outcomeClassified record names a terminal outcome
-    action: report that state
+    action: report the first durable terminal state; a later classification cannot overwrite it
     permits_external_effect: false
     fixtures: [AF-CONF-CRASH-012, AF-CONF-CRASH-013, AF-CONF-CRASH-014, AF-CONF-CRASH-015, AF-CONF-CRASH-016, AF-CONF-CRASH-021]
   - id: AF-CRASH-R-008
@@ -89,7 +95,7 @@ rows:
   - id: AF-CRASH-R-009
     disposition: (other jobs ignored)
     when: records for another job share the journal
-    action: a record counts only if subject == jobId or fact jobId == jobId
+    action: an explicit fact jobId is authoritative; without it subject identifies the job, with a single-job compatibility fallback for legacy untagged step records
     fixtures: [AF-CONF-CRASH-020]
 
 architecture_13_3_mapping:

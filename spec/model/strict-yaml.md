@@ -29,11 +29,9 @@ a child block MUST be more indented than its parent key.
 ## Rejected (typed error, never a best-effort parse)
 
 - tabs anywhere in indentation;
-- anchors (`&`), aliases (`*`), tags (`!`) **at the start of a line**. Inside a
-  value (`a: &x 1`) the reference reader does *not* reject them: the text is kept
-  literally as the scalar `&x 1` and never resolved (AF-CONF-YAML-022..024;
-  ISSUES SI-010). A port MUST NOT resolve them either; whether to reject is an
-  open spec decision;
+- anchors (`&`), aliases (`*`) and tags (`!`) at any unquoted token boundary,
+  including inside a mapping value or flow sequence. The same bytes inside a
+  quoted scalar or an ordinary word such as `a&b` are literal text;
 - flow mappings (`{a: 1}`);
 - multi-line scalars (`|`, `>`, and continuation lines);
 - duplicate keys within one mapping;
@@ -63,9 +61,9 @@ is done by the consumer (the profile loader):
 | `a: 1\nb: [x, 'y', "z"]` | mapping a→"1", b→["x","y","z"] |
 | `a: 1\na: 2` | reject: duplicate key |
 | `a:\n\t- x` | reject: tab |
-| `a: &x 1` | accept as literal scalar `&x 1` (never resolved; see SI-010) |
-| `a: *x` | accept as literal scalar `*x` |
-| `a: !!str 1` | accept as literal scalar `!!str 1` |
+| `a: &x 1` | reject: anchor |
+| `a: *x` | reject: alias |
+| `a: !!str 1` | reject: tag |
 | `a: {b: 1}` | reject: flow mapping |
 | `a: |\n  text` | reject: multi-line scalar |
 | `a:` | mapping a→null |
@@ -128,12 +126,12 @@ tests: [AF-CONF-YAML-019, AF-CONF-YAML-020]
 status: normative
 tests: [AF-CONF-YAML-021]
 
-### AF-YAML-012 — anchors, aliases and tags are never resolved
-status: draft
+### AF-YAML-012 — anchors, aliases and tags are refused
+status: normative
 tests: [AF-CONF-YAML-017, AF-CONF-YAML-018, AF-CONF-YAML-022..024]
 
-At line start they are refused; inside a value the reference reader keeps the
-text literally (ISSUES SI-010). A port MUST NOT resolve them in either position.
+At every unquoted token boundary they are refused. Markers inside quoted text
+or inside a longer ordinary word are literal and are never resolved.
 
 ### AF-YAML-013 — flow mappings and nested/ill-formed flow sequences are refused
 status: normative

@@ -238,7 +238,7 @@ where
     std::thread::spawn(move || {
         let mut dispatcher = arkforged::dispatch::Dispatcher::new(store_root, work_root, &port);
         loop {
-            let (preparation, work) = {
+            let (preparation, reconcile, work) = {
                 let Ok(mut guard) = dispatch_service.lock() else {
                     return;
                 };
@@ -253,15 +253,33 @@ where
                 }
                 guard.refresh_pending_admissions();
                 let preparation = guard.take_pending_preparation();
-                let work = if preparation.is_none() {
+                let reconcile = if preparation.is_none() {
+                    guard.take_pending_reconcile()
+                } else {
+                    None
+                };
+                let work = if preparation.is_none() && reconcile.is_none() {
                     guard.take_pending_dispatch()
                 } else {
                     None
                 };
-                (preparation, work)
+                (preparation, reconcile, work)
             };
             if let Some(preparation) = preparation {
                 dispatcher.prepare(&preparation);
+                continue;
+            }
+            if let Some(reconcile) = reconcile {
+                let outcome = dispatcher.reconcile_read_only(&reconcile);
+                let Ok(mut guard) = dispatch_service.lock() else {
+                    return;
+                };
+                if let Err(error) = guard.complete_reconcile(&reconcile, outcome) {
+                    eprintln!(
+                        "arkforged: recording read-only reconcile for {}: {error}",
+                        reconcile.job_id
+                    );
+                }
                 continue;
             }
             let Some(work) = work else {

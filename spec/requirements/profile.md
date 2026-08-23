@@ -50,6 +50,10 @@ naming the path; `unknown` is the only way to say "not measured" for
 `logicalBlockSize` and `erasedMediumFiller`, and an omitted key is never read as
 unknown.
 
+Vendor model and hardware-revision labels follow AF-ID-006. A non-scalar,
+empty, padded, control-bearing or over-128-byte label is refused with its exact
+array path; the loader never silently drops a malformed list element.
+
 ### AF-PROF-010 — no wildcard hardware revision
 status: normative
 tests: []

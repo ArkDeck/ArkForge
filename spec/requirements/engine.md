@@ -13,9 +13,9 @@ recovery) is built on top and is forbidden from weakening it.
 
 The normative edge table is `state-machines/job.yaml` and fixture
 AF-CONF-STATEMACHINE-001. The Mermaid diagram in architecture.md §13.1 is a
-picture and is known to be incomplete (ISSUES SI-001).
+reviewed picture of the same table; any future mismatch is a spec failure.
 
-### AF-ENG-001 — seventeen states with fixed wire spellings
+### AF-ENG-001 — sixteen states with fixed wire spellings
 status: normative
 tests: [AF-CONF-STATEMACHINE-001]
 
@@ -41,10 +41,9 @@ other state an implementation MUST refuse to start a dispatch.
 status: normative
 tests: [AF-CONF-STATEMACHINE-001]
 
-Exactly the 30 edges listed in AF-CONF-STATEMACHINE-001 are legal. An
+Exactly the 29 edges listed in AF-CONF-STATEMACHINE-001 are legal. An
 implementation MUST refuse any other `(from, to)` with `ILLEGAL_TRANSITION`
-and MUST NOT assign a state without passing through that check
-(ISSUES SI-004 records one place the reference daemon does).
+and MUST NOT assign a state without passing through that check.
 
 ### AF-ENG-005 — outcomeUnknown never returns to a dispatching state
 status: normative
@@ -67,8 +66,8 @@ tests: [AF-CONF-STATEMACHINE-004]
 status: normative
 tests: [AF-CONF-STATEMACHINE-005]
 
-`cancelledSafe` is reachable only from `readOnlyDispatch`, `awaitingPermit`,
-`dispatching` and `checkpointed`. `stepIntentDurable` MUST NOT claim safety.
+`cancelledSafe` is reachable only from `preflight`, `awaitingPermit`,
+`dispatching`, `checkpointed` and `rebindWait`. `stepIntentDurable` MUST NOT claim safety.
 `dispatching → cancelledSafe` is legal only when the implementation can prove
 the work never left its queue (AF-ENG-014).
 
@@ -82,7 +81,9 @@ tests: []
 For each public step in order the daemon: takes a fresh observation; writes
 `stepAdmissionRequested` (buffered); publishes `STEP_ADMISSION_REQUESTED` with
 the snapshot; waits for `submitStepPermit`. This applies to read-only steps as
-well; the daemon does not use the `readOnlyDispatch` state (ISSUES SI-005).
+well. There is deliberately no unadmitted read-only dispatch state: uniform
+admission binds exact device, provider, toolchain and artifact facts even when
+the declared workflow effect is read-only.
 
 ### AF-ENG-011 — record order around a dispatch
 status: normative
@@ -90,10 +91,12 @@ tests: [AF-CONF-CRASH-005..011]
 
 On an accepted permit the daemon MUST append, in this order, each durable before
 the next: `stepPermitAccepted` → `stepIntentRecorded` → `permitConsuming` →
-(dispatch happens) → `transportEvidenceRecorded` (buffered) →
+`externalDispatchStarted` → (dispatch happens) → `transportEvidenceRecorded` (buffered) →
 `semanticReceiptRecorded` → `permitConsumed` → `stepCheckpointed`. No device
-access may occur before `permitConsuming` has returned from a durable append,
+access may occur before `externalDispatchStarted` has returned from a durable append,
 and every step after the dispatch MUST assume the device may have been touched.
+Every transaction record carries the same `jobId`, `planId`, `stepId`,
+`attemptId` and `permitId` context.
 
 ### AF-ENG-012 — state moves follow the records
 status: draft
@@ -101,11 +104,13 @@ source: crates/arkforged/src/jobs.rs
 tests: []
 
 `awaitingPermit` on permit verification; `stepIntentDurable` after
-`stepIntentRecorded`; `dispatching` after `permitConsuming`; `receiptDurable`
+`stepIntentRecorded`; `dispatching` after `externalDispatchStarted`; `receiptDurable`
 after `permitConsumed`; `checkpointed` after `stepCheckpointed`; then
-`preflight` for the next step, or `postflight → succeeded` after the last step.
-A non-success dispatch disposition moves to `outcomeUnknown` and writes
-`outcomeClassified{outcome: <disposition>}` (ISSUES SI-006).
+`preflight` for a same-mode next step, `rebindWait` across a sealed mode change,
+or `postflight → succeeded` after the last step. `outcomeUnknown` alone moves
+to the state of that name. `confirmedNoEffect` and `confirmedPartialEffect`
+first make their ActionReceipt and checkpoint durable, then conclude
+`confirmedFailed` while preserving the exact action disposition.
 
 ### AF-ENG-013 — a step the authority performs is a managed control request
 status: draft
@@ -144,15 +149,35 @@ A job concludes by appending `outcomeClassified` with facts `outcome` (one of
 value reads as `outcomeUnknown`.
 
 ### AF-ENG-016 — job events
-status: draft
+status: normative
 source: crates/arkforged/src/jobs.rs Job::publish
-tests: [AF-CONF-PB-017]
+tests: [AF-CONF-PB-017, crates/arkforged/tests/admission_surface.rs]
 
 Each published `JobEvent` carries the digest of the journal record it was
 published from. The reference daemon numbers events with its own per-job
-counter, not the journal sequence (ISSUES SI-007); a consumer MUST treat
+counter, not the journal sequence; a consumer MUST treat
 `sequence` as monotonic per job and MUST NOT assume it equals the journal
-sequence.
+sequence. After restart, the next event cursor MUST be greater than every
+recovered event cursor; the count of reconstructed events is not a cursor.
+
+### AF-ENG-017 — ActionReceipt events are durably replayable
+status: normative
+source: crates/arkforged/src/jobs.rs complete_dispatch, submit_control_receipt, recover_receipt_events
+tests: [crates/arkforged/tests/admission_surface.rs a_job_dispatches_every_step_and_reaches_a_verdict_on_each, ArkDeck ArkForgeFlashSessionContractTests testPassiveObservationConsumesReconciledTerminalAndRestartedReceipt]
+
+Before publishing an `ACTION_RECEIPT`, the daemon MUST put the exact canonical
+AF-DIG-012 body and the reserved event cursor in the durable
+`semanticReceiptRecorded` record as lower-case `receiptBodyHex` and decimal
+`receiptEventSequence`. The live event's `journal_record_sha256` MUST identify
+that semantic-receipt record, not a later consumption or checkpoint marker.
+
+On restart, a receipt may be reconstructed only when its body is canonical and
+model-valid, its job/plan/step/attempt/permit identities equal the surrounding
+journal facts, and its recomputed digest equals `receiptDigest`. Invalid or
+legacy metadata is not invented. Valid reconstructed receipts retain their
+original cursor and are emitted before a later terminal classification. This is
+event replay, never permission to dispatch, synthesize a missing checkpoint, or
+infer job success.
 
 ## Journal records
 
@@ -186,8 +211,12 @@ status: normative
 tests: [AF-CONF-JOURNAL-001]
 
 `facts` keys are OpaqueIds and values are text. The engine-defined keys are
-`jobId`, `planId`, `stepId`, `attemptId`, `permitId`, `receiptDigest`; a port
-MUST spell them exactly so, because recovery reads them.
+`jobId`, `planId`, `stepId`, `attemptId`, `permitId`, `receiptDigest`,
+`receiptBodyHex` and `receiptEventSequence`; a port MUST spell them exactly so,
+because recovery reads them. Every record in one admit → dispatch → receipt →
+checkpoint transaction repeats the first five keys; the final three receipt
+keys begin at `semanticReceiptRecorded` and only `receiptDigest` is repeated in
+the compact consumption/checkpoint markers.
 
 ### AF-JRN-005 — fsync policy is a function of kind
 status: normative
@@ -270,14 +299,21 @@ storage (see `ports/durability.md` for what "stable" promises). If `append` did
 not return, no external effect may follow. Buffered records are flushed behind
 the next durable one; correctness never depends on a shutdown flush.
 
+The implementation MUST encode and size-check the complete frame before it
+advances its in-memory chain, and MUST commit that chain only after the complete
+frame write succeeds. A write or synchronization error poisons the open handle:
+no later append is allowed until `open` verifies or truncates the uncertain tail.
+
 ### AF-JRN-019 — one journal per job
 status: draft
-source: crates/arkforged/src/jobs.rs JobRegistry::create
+source: crates/arkforged/src/jobs.rs JobRegistry::start
 tests: []
 
 The reference daemon keeps one file `<jobId>.journal` per job under its runtime
-directory. The engine's derivation functions nonetheless filter by `jobId`
-(subject or fact) so that a combined journal would still derive per job.
+directory. The engine's derivation functions nonetheless filter by `jobId` so
+that a combined journal would still derive per job: an explicit `jobId` fact is
+authoritative; without one, `subject` identifies the job. A one-job journal
+also accepts historical step-scoped records that have neither association.
 
 ## Crash windows
 
@@ -318,34 +354,40 @@ created; otherwise let the permit expire.
 
 ### AF-CRASH-R-004 — outcome unknown
 status: normative
-tests: [AF-CONF-CRASH-006..009]
+tests: [AF-CONF-CRASH-006..008]
 
 Newest permit is `intentDurable` or `consumingOutcomeUnknown` → whether the
 device was touched is unknown; reconcile, never replay. From the journal alone,
 "about to dispatch" and "dispatched" are indistinguishable, so the engine's
-derivation treats both as unknown. (The reference daemon's restart policy
-differs for `intentDurable`; ISSUES SI-003.)
+derivation treats both as unknown.
 
-### AF-CRASH-R-005 — checkpoint from durable receipt
+### AF-CRASH-R-005 — durable receipt with checkpoint missing
 status: normative
-tests: [AF-CONF-CRASH-010]
+tests: [AF-CONF-CRASH-009, AF-CONF-CRASH-010]
 
-Newest permit is `consumed` and no `stepCheckpointed` names it → verify the
-exact receipt and write the checkpoint; do not re-execute.
+Newest permit has a durable `semanticReceiptRecorded` (whether or not the
+following `permitConsumed` marker was appended) and no `stepCheckpointed`
+names it → the permit is settled and MUST NOT dispatch again, but the job is not
+terminal. Replay the receipt only if AF-ENG-017 validates it, classify the job
+`outcomeUnknown`, and use read-only reconcile. A restart MUST NOT synthesize the
+missing checkpoint or infer success from the receipt marker alone.
 
 ### AF-CRASH-R-006 — replay from checkpoint
 status: normative
 tests: [AF-CONF-CRASH-011, AF-CONF-CRASH-019]
 
-Newest permit is `consumed` and checkpointed → replay events to the authority;
-do not re-execute.
+Newest permit is `consumed` and checkpointed → replay validated receipt events
+to the authority; do not re-execute. In the absence of a durable terminal
+`outcomeClassified`, checkpoint count alone MUST NOT be converted to success:
+the last settled receipt could describe semantic success or confirmed failure.
 
 ### AF-CRASH-R-007 — concluded
 status: normative
 tests: [AF-CONF-CRASH-012..016, AF-CONF-CRASH-021]
 
-The newest `outcomeClassified` record whose `outcome` is a terminal state
-concludes the job in that state, regardless of later bookkeeping.
+The first `outcomeClassified` record whose `outcome` is a terminal state
+concludes the job in that state. A later terminal classification MUST NOT
+rewrite that durable result.
 
 ### AF-CRASH-R-008 — the newest permit decides
 status: normative
@@ -358,8 +400,10 @@ newest record that carries a `permitId`.
 status: normative
 tests: [AF-CONF-CRASH-020]
 
-A record counts for a job only if its `subject` is the job id or it carries a
-`jobId` fact equal to it.
+If a record carries a `jobId` fact, that fact is authoritative even when its
+`subject` happens to equal another job id. Without the fact, `subject` is used.
+In a one-job journal, legacy untagged step-scoped records belong to the sole
+`jobCreated` job.
 
 ### AF-CRASH-010 — no disposition permits a new external effect
 status: normative
@@ -373,12 +417,18 @@ status: draft
 source: crates/arkforged/src/jobs.rs recover_job
 tests: []
 
-On restart the reference daemon does not resume any job. For each journal: if an
-`outcomeClassified` with a terminal `outcome` exists, the job is reported in that
-state; else if the permit ledger has an unresolved permit, the job is concluded
-`outcomeUnknown`; else if every step is checkpointed, `succeeded`; else
-`cancelledSafe`. The conclusion is appended as an `outcomeClassified` record
-(subject = job id) so that a second restart reads the same answer. Because the
-pairing epoch rotated, no pre-restart permit can be consumed afterwards. A port
-MAY implement resumption (AF-CRASH-R-005/006) but MUST NOT do so for a job with
-an unresolved permit and MUST NOT re-dispatch under a pre-restart permit.
+On restart the reference daemon does not resume any job. It preserves the first
+durable terminal classification (or an earlier non-terminal outcome when no
+terminal classification followed); otherwise it calls the same
+`CrashDisposition::derive` reducer as the engine. `safeToCancel` and an accepted
+permit without a durable intent conclude `cancelledSafe`; `intentDurable` and
+`consumingOutcomeUnknown` conclude `outcomeUnknown`. A durable receipt without
+a checkpoint and a partial checkpoint also conclude `outcomeUnknown` until the
+daemon can reconstruct the receipt/remaining continuation; neither is ever
+called safe or replayed. Only a legacy journal with every declared step
+checkpointed is migrated to `succeeded`.
+
+The chosen result is appended once as `outcomeClassified` (subject = job id), so
+a second restart is byte-stable. `every_durable_restart_prefix_is_classified_without_replaying_dispatch`
+exercises every boundary above. A port MAY implement actual resumption for
+AF-CRASH-R-005/006, but MUST NOT re-dispatch under a pre-restart permit.

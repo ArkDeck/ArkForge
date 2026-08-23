@@ -13,23 +13,30 @@
 use arkforge_artifact::{dayu200, fixture};
 use arkforge_authority_api::authority_side::mint_integrity_tag;
 use arkforge_authority_api::{
-    ControllerPairingSecret, CurrentFacts, PairingEpoch, PermitIntegrityTag, StepPermit,
+    ControllerPairingSecret, CurrentFacts, EffectSetCompleteness, PairingEpoch, PermitIntegrityTag,
+    PossibleEffectSet, StepPermit,
 };
 use arkforge_core::digest::sha256;
+use arkforge_core::effect::ByteRange;
 use arkforge_core::identity::{
     HostPlatform, MaturityKey, MaturityState, ToolchainIdentity, ToolchainKind, Version,
 };
 use arkforge_core::ids::{
-    AttemptId, ControllerSessionId, JobId, OpaqueId, PermitId, PlanId, StepId,
+    ActionId, AttemptId, ControllerSessionId, JobId, OpaqueId, PartitionId, PermitId, PlanId,
+    StepId,
 };
 use arkforge_core::plan::{ExecutionPurpose, FlashPlanEnvelope, PlanMaterialization};
 use arkforge_core::profile::{self, DeviceProfile};
 use arkforge_core::projection::StoredProviderPlan;
 use arkforge_core::{
     AuthorityBindingRef, AuthorityNamespace, AuthoritySupportBinding, AuthoritySupportState,
-    Sha256Digest,
+    PersistentEffect, Sha256Digest,
 };
 use arkforge_engine::JobState;
+use arkforge_engine::durable::DurableJournal;
+use arkforge_engine::journal::JournalRecordKind;
+use arkforge_engine::recovery::fact as journal_fact;
+use arkforge_engine::superseding::{EffectObservation, ReconcileVerdict};
 use arkforge_ipc::messages::{
     JobEventKind, KeyValue, ManagedControlAction, SubmitManagedControlReceiptRequest,
 };
@@ -68,6 +75,54 @@ impl TempRoot {
 impl Drop for TempRoot {
     fn drop(&mut self) {
         let _ = std::fs::remove_dir_all(&self.0);
+    }
+}
+
+fn write_recovery_prefix(
+    root: &std::path::Path,
+    job_id: &str,
+    total_steps: usize,
+    kinds: &[JournalRecordKind],
+) {
+    let path = root.join(format!("{job_id}.journal"));
+    let (mut journal, _) = DurableJournal::open(path).unwrap();
+    let oid = |value: &str| OpaqueId::new(value).unwrap();
+    journal
+        .append(
+            JournalRecordKind::JobCreated,
+            NOW,
+            1,
+            oid(job_id),
+            vec![
+                (oid(journal_fact::JOB_ID), job_id.to_string()),
+                (oid(journal_fact::PLAN_ID), "PLAN-RECOVERY".to_string()),
+                (oid("planDigest"), sha256(b"recovery plan").to_hex()),
+                (oid("totalSteps"), total_steps.to_string()),
+                (oid("controllerSessionId"), "SESSION-RECOVERY".to_string()),
+            ],
+        )
+        .unwrap();
+
+    for (index, kind) in kinds.iter().enumerate() {
+        let mut facts = vec![
+            (oid(journal_fact::JOB_ID), job_id.to_string()),
+            (oid(journal_fact::STEP_ID), "STEP-1".to_string()),
+            (oid(journal_fact::PERMIT_ID), "PERMIT-1".to_string()),
+        ];
+        if matches!(
+            kind,
+            JournalRecordKind::SemanticReceiptRecorded
+                | JournalRecordKind::PermitConsumed
+                | JournalRecordKind::StepCheckpointed
+        ) {
+            facts.push((
+                oid(journal_fact::RECEIPT_DIGEST),
+                sha256(b"recovery receipt").to_hex(),
+            ));
+        }
+        journal
+            .append(*kind, NOW + index as u64 + 1, 1, oid("STEP-1"), facts)
+            .unwrap();
     }
 }
 
@@ -394,6 +449,89 @@ fn a_job_walks_from_admission_to_a_durable_intent_to_a_control_receipt() {
     assert!(kinds.contains(&JobEventKind::ActionReceipt));
     assert!(kinds.contains(&JobEventKind::StepCheckpointed));
 
+    // The production daemon uses the same typed transaction path as the
+    // engine: there is one ordered writer, every durable boundary retains the
+    // complete correlation, and receiptDigest identifies the semantic receipt
+    // rather than merely repeating its transport-evidence digest.
+    let receipt = job
+        .events_from(0)
+        .into_iter()
+        .find_map(|event| event.receipt)
+        .expect("the control step published its receipt");
+    assert_eq!(receipt.attempt_id, snapshot.attempt_id);
+    let semantic_digest = receipt.receipt_digest().unwrap();
+    let (journal, _) = DurableJournal::open(root.0.join(format!("{job_id}.journal"))).unwrap();
+    let records = journal.journal().records();
+    let transactional = records
+        .iter()
+        .filter(|record| {
+            matches!(
+                record.kind,
+                JournalRecordKind::StepPermitAccepted
+                    | JournalRecordKind::StepIntentRecorded
+                    | JournalRecordKind::PermitConsuming
+                    | JournalRecordKind::ExternalDispatchStarted
+                    | JournalRecordKind::TransportEvidenceRecorded
+                    | JournalRecordKind::SemanticReceiptRecorded
+                    | JournalRecordKind::PermitConsumed
+                    | JournalRecordKind::StepCheckpointed
+            )
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(transactional.len(), 8);
+    assert_eq!(
+        transactional
+            .iter()
+            .map(|record| record.kind)
+            .collect::<Vec<_>>(),
+        vec![
+            JournalRecordKind::StepPermitAccepted,
+            JournalRecordKind::StepIntentRecorded,
+            JournalRecordKind::PermitConsuming,
+            JournalRecordKind::ExternalDispatchStarted,
+            JournalRecordKind::TransportEvidenceRecorded,
+            JournalRecordKind::SemanticReceiptRecorded,
+            JournalRecordKind::PermitConsumed,
+            JournalRecordKind::StepCheckpointed,
+        ]
+    );
+    for record in &transactional {
+        for (key, expected) in [
+            (journal_fact::JOB_ID, job_id.as_str()),
+            (journal_fact::PLAN_ID, fixture.envelope.plan_id.as_str()),
+            (journal_fact::STEP_ID, snapshot.step_id.as_str()),
+            (journal_fact::ATTEMPT_ID, snapshot.attempt_id.as_str()),
+            (journal_fact::PERMIT_ID, "PERMIT-1"),
+        ] {
+            assert!(
+                record
+                    .facts
+                    .iter()
+                    .any(|(found, value)| { found.as_str() == key && value == expected }),
+                "{} omitted {key}",
+                record.kind.as_str()
+            );
+        }
+    }
+    let recorded_receipt = transactional
+        .iter()
+        .find(|record| record.kind == JournalRecordKind::SemanticReceiptRecorded)
+        .and_then(|record| {
+            record
+                .facts
+                .iter()
+                .find(|(key, _)| key.as_str() == journal_fact::RECEIPT_DIGEST)
+        })
+        .map(|(_, value)| value.as_str())
+        .unwrap();
+    assert_eq!(recorded_receipt, semantic_digest.to_hex());
+    let evidence_hex = receipt
+        .evidence_sha256
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect::<String>();
+    assert_ne!(recorded_receipt, evidence_hex);
+
     // Step two is a device probe, which this build cannot dispatch. The job
     // stops there having said so, rather than pretending it ran.
     let snapshot = pending_snapshot(&mut registry, &fixture, &job_id, NOW);
@@ -562,6 +700,301 @@ fn restart_rehydrates_an_unsettled_intent_as_outcome_unknown_without_replay() {
         .clone();
     assert!(registry.take_pending_dispatch().is_none());
     assert_eq!(outcome, "outcomeUnknown");
+}
+
+fn reconcile_fixture() -> (PossibleEffectSet, PersistentEffect) {
+    let effect = PersistentEffect::WritePartition {
+        partition: PartitionId::new("system").unwrap(),
+        range: ByteRange::new(4096, 8192).unwrap(),
+        content: sha256(b"expected system image"),
+    };
+    let mut effects = arkforge_core::EffectSet::read_only();
+    effects.persistent.push(effect.clone());
+    (
+        PossibleEffectSet {
+            effects,
+            completeness: EffectSetCompleteness::Bounded,
+            source_action_ids: vec![ActionId::new("ACT-WRITE-SYSTEM").unwrap()],
+        },
+        effect,
+    )
+}
+
+#[test]
+fn reconcile_moves_through_the_real_state_and_never_overclaims_partial_scope() {
+    use JournalRecordKind::*;
+
+    let root = TempRoot::new("reconcile-state");
+    let job_id = "JOB-RECONCILE-001";
+    write_recovery_prefix(
+        &root.0,
+        job_id,
+        2,
+        &[
+            StepPermitAccepted,
+            StepIntentRecorded,
+            PermitConsuming,
+            ExternalDispatchStarted,
+        ],
+    );
+    let mut registry = JobRegistry::open(&root.0).unwrap();
+    assert_eq!(
+        registry.job(job_id).unwrap().state(),
+        JobState::OutcomeUnknown
+    );
+    let recovered_terminal_sequence = registry.job(job_id).unwrap().last_sequence();
+    let (possible, effect) = reconcile_fixture();
+
+    registry
+        .begin_reconcile(job_id, possible.digest().unwrap(), "bounded", 1, NOW + 100)
+        .unwrap();
+    assert_eq!(registry.job(job_id).unwrap().state(), JobState::Reconciling);
+    let verdict = registry
+        .complete_reconcile(
+            job_id,
+            &[(effect.clone(), EffectObservation::Indeterminate)],
+            vec![("readOnly".into(), "true".into())],
+            sha256(b"indeterminate read"),
+            false,
+            NOW + 101,
+        )
+        .unwrap();
+    assert!(matches!(verdict, ReconcileVerdict::StillUnknown { .. }));
+    assert_eq!(
+        registry.job(job_id).unwrap().state(),
+        JobState::OutcomeUnknown
+    );
+
+    // Even seeing the interrupted bytes is not proof that the rest of a
+    // multi-step plan ran. The explicit scope gate keeps the job unknown.
+    registry
+        .begin_reconcile(job_id, possible.digest().unwrap(), "bounded", 1, NOW + 102)
+        .unwrap();
+    let verdict = registry
+        .complete_reconcile(
+            job_id,
+            &[(effect.clone(), EffectObservation::Present)],
+            vec![("readOnly".into(), "true".into())],
+            sha256(b"present but partial scope"),
+            false,
+            NOW + 103,
+        )
+        .unwrap();
+    assert!(matches!(verdict, ReconcileVerdict::StillUnknown { .. }));
+
+    // A future Provider that proves the complete terminal contract can use
+    // the declared reconciling -> succeeded edge without any dispatch.
+    registry
+        .begin_reconcile(job_id, possible.digest().unwrap(), "bounded", 1, NOW + 104)
+        .unwrap();
+    assert_eq!(
+        registry
+            .complete_reconcile(
+                job_id,
+                &[(effect, EffectObservation::Present)],
+                vec![("readOnly".into(), "true".into())],
+                sha256(b"complete terminal proof"),
+                true,
+                NOW + 105,
+            )
+            .unwrap(),
+        ReconcileVerdict::Succeeded
+    );
+    let job = registry.job(job_id).unwrap();
+    assert_eq!(job.state(), JobState::Succeeded);
+    assert_eq!(job.last_reconcile_assessment().unwrap().0, "succeeded");
+    let sequences = job
+        .events_from(0)
+        .into_iter()
+        .map(|event| event.sequence)
+        .collect::<Vec<_>>();
+    assert!(
+        sequences.windows(2).all(|pair| pair[0] < pair[1]),
+        "recovered and reconciled event cursors must remain strictly monotonic: {sequences:?}"
+    );
+    assert!(
+        sequences
+            .last()
+            .is_some_and(|sequence| *sequence > recovered_terminal_sequence),
+        "post-restart events must continue after cursor {recovered_terminal_sequence}: {sequences:?}"
+    );
+
+    let records = job.journal().records();
+    assert!(
+        records
+            .iter()
+            .any(|record| record.kind == PossibleEffectSetRecorded)
+    );
+    assert!(
+        records
+            .iter()
+            .any(|record| record.kind == ReadOnlyObservationRecorded)
+    );
+    assert!(
+        records
+            .iter()
+            .any(|record| record.kind == RecoveryAssessmentPublished)
+    );
+    assert_eq!(
+        records
+            .iter()
+            .filter(|record| record.kind == ExternalDispatchStarted)
+            .count(),
+        1,
+        "reconciliation must not create another external-effect dispatch"
+    );
+}
+
+#[test]
+fn a_restart_during_reconcile_returns_to_unknown_without_replaying_reads_or_writes() {
+    use JournalRecordKind::*;
+
+    let root = TempRoot::new("reconcile-restart");
+    let job_id = "JOB-RECONCILE-RESTART";
+    write_recovery_prefix(
+        &root.0,
+        job_id,
+        1,
+        &[StepPermitAccepted, StepIntentRecorded, PermitConsuming],
+    );
+    let (possible, _) = reconcile_fixture();
+    {
+        let mut registry = JobRegistry::open(&root.0).unwrap();
+        registry
+            .begin_reconcile(job_id, possible.digest().unwrap(), "bounded", 1, NOW + 200)
+            .unwrap();
+        assert_eq!(registry.job(job_id).unwrap().state(), JobState::Reconciling);
+    }
+
+    let registry = JobRegistry::open(&root.0).unwrap();
+    let job = registry.job(job_id).unwrap();
+    assert_eq!(job.state(), JobState::OutcomeUnknown);
+    assert!(registry.jobs_needing_admission().is_empty());
+    assert_eq!(
+        job.journal()
+            .records()
+            .iter()
+            .filter(|record| record.kind == PermitConsuming)
+            .count(),
+        1
+    );
+}
+
+#[test]
+fn every_durable_restart_prefix_is_classified_without_replaying_dispatch() {
+    use JournalRecordKind::*;
+
+    let root = TempRoot::new("restart-prefixes");
+    let cases = vec![
+        (
+            "JOB-RECOVERY-001",
+            1,
+            vec![StepPermitAccepted],
+            JobState::CancelledSafe,
+            "cancelledSafe",
+        ),
+        (
+            "JOB-RECOVERY-002",
+            1,
+            vec![StepPermitAccepted, StepIntentRecorded],
+            JobState::OutcomeUnknown,
+            "outcomeUnknown",
+        ),
+        (
+            "JOB-RECOVERY-003",
+            1,
+            vec![StepPermitAccepted, StepIntentRecorded, PermitConsuming],
+            JobState::OutcomeUnknown,
+            "outcomeUnknown",
+        ),
+        (
+            "JOB-RECOVERY-004",
+            1,
+            vec![
+                StepPermitAccepted,
+                StepIntentRecorded,
+                PermitConsuming,
+                SemanticReceiptRecorded,
+            ],
+            JobState::OutcomeUnknown,
+            "outcomeUnknown",
+        ),
+        (
+            "JOB-RECOVERY-005",
+            1,
+            vec![
+                StepPermitAccepted,
+                StepIntentRecorded,
+                PermitConsuming,
+                SemanticReceiptRecorded,
+                PermitConsumed,
+            ],
+            JobState::OutcomeUnknown,
+            "outcomeUnknown",
+        ),
+        (
+            "JOB-RECOVERY-006",
+            2,
+            vec![
+                StepPermitAccepted,
+                StepIntentRecorded,
+                PermitConsuming,
+                SemanticReceiptRecorded,
+                PermitConsumed,
+                StepCheckpointed,
+            ],
+            JobState::OutcomeUnknown,
+            "outcomeUnknown",
+        ),
+        (
+            "JOB-RECOVERY-007",
+            1,
+            vec![
+                StepPermitAccepted,
+                StepIntentRecorded,
+                PermitConsuming,
+                SemanticReceiptRecorded,
+                PermitConsumed,
+                StepCheckpointed,
+            ],
+            JobState::OutcomeUnknown,
+            "outcomeUnknown",
+        ),
+    ];
+
+    for (job_id, total_steps, records, expected_state, expected_outcome) in cases {
+        let jobs_root = root.0.join(job_id);
+        std::fs::create_dir_all(&jobs_root).unwrap();
+        write_recovery_prefix(&jobs_root, job_id, total_steps, &records);
+
+        let registry = JobRegistry::open(&jobs_root).unwrap();
+        let job = registry.job(job_id).expect("durable prefix is rehydrated");
+        assert_eq!(job.state(), expected_state, "{job_id}");
+        assert!(registry.jobs_needing_admission().is_empty(), "{job_id}");
+        let events = job.events_from(0);
+        let event = events.last().unwrap();
+        assert_eq!(event.kind, JobEventKind::OutcomeClassified, "{job_id}");
+        assert_eq!(
+            event
+                .facts
+                .iter()
+                .find(|fact| fact.key == "outcome")
+                .map(|fact| fact.value.as_str()),
+            Some(expected_outcome),
+            "{job_id}"
+        );
+
+        let journal_path = jobs_root.join(format!("{job_id}.journal"));
+        let classified_len = std::fs::metadata(&journal_path).unwrap().len();
+        drop(registry);
+        let reopened = JobRegistry::open(&jobs_root).unwrap();
+        assert_eq!(reopened.job(job_id).unwrap().state(), expected_state);
+        assert_eq!(
+            std::fs::metadata(journal_path).unwrap().len(),
+            classified_len,
+            "a second restart must not append another classification for {job_id}"
+        );
+    }
 }
 
 /// architecture.md 8.3. A permit signed against facts that are no longer in
@@ -1595,6 +2028,22 @@ fn a_job_dispatches_every_step_and_reaches_a_verdict_on_each() {
     // The device's own table was read before any of them.
     assert_eq!(port.issued("readPartitionTable"), 1);
     assert_eq!(port.issued("resetDevice"), 1);
+    let rebinds = job
+        .journal()
+        .records()
+        .iter()
+        .filter(|record| record.kind == JournalRecordKind::RebindObserved)
+        .collect::<Vec<_>>();
+    assert!(
+        !rebinds.is_empty(),
+        "each sealed mode change must enter rebindWait and record the fresh session"
+    );
+    assert!(rebinds.iter().all(|record| {
+        record
+            .facts
+            .iter()
+            .any(|(key, _)| key.as_str() == "transportSessionDigest")
+    }));
 
     let postflight = receipts
         .iter()
@@ -1631,6 +2080,21 @@ fn a_job_dispatches_every_step_and_reaches_a_verdict_on_each() {
             assert_eq!(receipt.typed_skip_reason, "skipped-lba-read-window");
         }
     }
+    for event in job
+        .events_from(0)
+        .into_iter()
+        .filter(|event| event.receipt.is_some())
+    {
+        let linked = job
+            .journal()
+            .records()
+            .iter()
+            .find(|record| {
+                record.record_digest.as_bytes().as_slice() == event.journal_record_sha256.as_slice()
+            })
+            .expect("receipt event links to a durable journal record");
+        assert_eq!(linked.kind, JournalRecordKind::SemanticReceiptRecorded);
+    }
 
     // Success is itself a durable classification. Reopening the registry must
     // neither reinterpret the completed job as a safe cancellation nor append
@@ -1647,6 +2111,27 @@ fn a_job_dispatches_every_step_and_reaches_a_verdict_on_each() {
             .expect("completed job survives restart");
         assert_eq!(recovered.state(), JobState::Succeeded);
         assert_eq!(recovered.stopped(), Some(&JobStop::Completed));
+        let recovered_receipts = recovered
+            .events_from(0)
+            .into_iter()
+            .filter_map(|event| event.receipt)
+            .collect::<Vec<_>>();
+        assert_eq!(recovered_receipts.len(), receipts.len());
+        for (recovered_receipt, original_receipt) in recovered_receipts.iter().zip(&receipts) {
+            assert_eq!(recovered_receipt.step_id, original_receipt.step_id);
+            assert_eq!(
+                recovered_receipt.receipt_digest().unwrap(),
+                original_receipt.receipt_digest().unwrap(),
+                "a restarted daemon must replay the same canonical receipt, not only an opaque digest"
+            );
+        }
+        assert!(recovered_receipts.last().is_some_and(|receipt| {
+            receipt.step_id == "STEP-023"
+                && receipt
+                    .facts
+                    .iter()
+                    .any(|fact| fact.key == "const.ohos.fullname")
+        }));
         assert_eq!(
             recovered.events_from(0).last().unwrap().sequence,
             terminal_sequence

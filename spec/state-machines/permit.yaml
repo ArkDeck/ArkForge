@@ -14,16 +14,17 @@ states:
   - id: acceptedIntentNotDurable
     meaning: stepPermitAccepted is durable, stepIntentRecorded is not
     permits_dispatch: false
-    unresolved: true
+    unresolved: false
   - id: intentDurable
     meaning: stepIntentRecorded is durable; may be consumed exactly once
     permits_dispatch: true
+    unresolved: true
   - id: consumingOutcomeUnknown
     meaning: permitConsuming / externalDispatchStarted is durable and no receipt is
     permits_dispatch: false
     unresolved: true
   - id: consumed
-    meaning: permitConsumed is durable with a receiptDigest; return that receipt, never dispatch again
+    meaning: semanticReceiptRecorded is durable with a receiptDigest (permitConsumed may follow); return that receipt, never dispatch again
     permits_dispatch: false
 
 transitions:
@@ -44,15 +45,21 @@ transitions:
   - id: AF-AUTH-P-T-004
     from: consumingOutcomeUnknown
     to: consumed
-    record: permitConsumed
+    record: semanticReceiptRecorded or permitConsumed
     facts: [receiptDigest]
+    guard: receiptDigest is present and non-empty
+
+replay_invariants:
+  - lifecycle is monotonic; a later earlier-stage record cannot downgrade consuming or consumed
+  - the first non-empty durable receiptDigest is immutable
+  - a receipt marker without receiptDigest remains consumingOutcomeUnknown
 
 verification_order:
   # verify_permit(permit, secret, intent, alreadyConsumed) — first failure wins
   - alreadyConsumed            → PERMIT_ALREADY_CONSUMED
   - singleUse == false         → PERMIT_NOT_SINGLE_USE
-  - epoch != secret.epoch      → PERMIT_STALE_PAIRING_EPOCH
-  - HMAC(secret, body) != tag  → PERMIT_INTEGRITY_TAG_INVALID
+  - "epoch != secret.epoch      → PERMIT_STALE_PAIRING_EPOCH"
+  - "HMAC(secret, body) != tag  → PERMIT_INTEGRITY_TAG_INVALID"
   - now >= expiresAtEpochMs    → PERMIT_EXPIRED
   - planDigest mismatch        → PERMIT_PLAN_MISMATCH
   - privateActionDigest mismatch → PERMIT_ACTION_MISMATCH
@@ -62,4 +69,4 @@ retransmission:
   - the authority persists the complete permit (body, tag, epoch) before returning it
   - a retransmission replays the stored bytes; deterministic re-derivation is forbidden
   - a permit already consumed returns the original receipt
-  - after a restart the epoch rotates; an unconsumed pre-restart permit is void and admission runs again
+  - after a restart the epoch rotates; a pre-restart permit is never dispatched or re-admitted, and the job follows crash-disposition.yaml

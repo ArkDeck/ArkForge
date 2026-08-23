@@ -1,0 +1,24 @@
+{
+  "id": "AF-CONF-RECONCILE-003",
+  "suite": "reconcile",
+  "title": "all declared effects are absent",
+  "kind": "derive",
+  "requirements": ["AF-REC-002"],
+  "description": "Reduce read-only observations only. No verdict authorizes replay, and an indeterminate or empty observation set remains stillUnknown.",
+  "input": {
+    "observations": [
+      {
+        "effect": "system",
+        "observation": "absent"
+      },
+      {
+        "effect": "vendor",
+        "observation": "absent"
+      }
+    ]
+  },
+  "expected": {
+    "verdict": "confirmedNotExecuted"
+  },
+  "files": {}
+}

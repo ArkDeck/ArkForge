@@ -1,0 +1,23 @@
+{
+  "id": "AF-CONF-RECEIPT-001",
+  "suite": "action-receipt",
+  "title": "semantic success with a full verification range",
+  "kind": "digest",
+  "requirements": ["AF-DIG-012", "AF-ENG-011"],
+  "description": "Encode the ActionReceipt semantic body as deterministic CBOR, then compute SHA-256(arkforge/v1/action-receipt\\0 || body). Protobuf bytes and transport evidence alone are not the receipt identity.",
+  "input": {
+    "bodyFile": "receipt.cbor",
+    "bodySha256": "213799e155cb8b845f7cfb354c77ad11680394e92806685aebd40cc98bc1015f"
+  },
+  "expected": {
+    "domain": "arkforge/v1/action-receipt\\0",
+    "receiptDigest": "d130c4cf13d571651970cfc6cbc02d59eab83577d409cb4698d288738e39a418",
+    "diag": "{\"facts\": {\"toolExit\": \"0\", \"partition\": \"system\"}, \"jobId\": \"JOB-1\", \"planId\": \"PLAN-1\", \"stepId\": \"STEP-1\", \"actionId\": \"ACT-1\", \"permitId\": \"PERMIT-1\", \"attemptId\": \"ATTEMPT-1\", \"disposition\": \"semanticSuccess\", \"schemaVersion\": 1, \"verifiedRange\": {\"start\": 4096, \"length\": 8192}, \"evidenceSha256\": h'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa', \"typedSkipReason\": null, \"verificationOutcome\": \"verified\", \"verificationStrength\": \"fullHash\", \"failureClassification\": null}"
+  },
+  "files": {
+    "receipt.cbor": {
+      "bytes": 354,
+      "sha256": "213799e155cb8b845f7cfb354c77ad11680394e92806685aebd40cc98bc1015f"
+    }
+  }
+}

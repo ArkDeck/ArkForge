@@ -9,7 +9,7 @@ use arkforge_engine::JobState;
 
 const SUITE: &str = "state-machine";
 
-pub const ALL_STATES: [JobState; 17] = [
+pub const ALL_STATES: [JobState; 16] = [
     JobState::Planned,
     JobState::AwaitingStart,
     JobState::Preflight,
@@ -19,7 +19,6 @@ pub const ALL_STATES: [JobState; 17] = [
     JobState::ReceiptDurable,
     JobState::Checkpointed,
     JobState::RebindWait,
-    JobState::ReadOnlyDispatch,
     JobState::Postflight,
     JobState::Succeeded,
     JobState::ConfirmedFailed,

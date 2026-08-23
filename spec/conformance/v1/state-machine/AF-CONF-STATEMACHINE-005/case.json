@@ -7,7 +7,7 @@
   "description": "A named invariant over the edge set of AF-CONF-STATEMACHINE-001.",
   "input": {},
   "expected": {
-    "statesWithCancelledSafeEdge": ["awaitingPermit", "dispatching", "checkpointed", "readOnlyDispatch"],
+    "statesWithCancelledSafeEdge": ["preflight", "awaitingPermit", "dispatching", "checkpointed", "rebindWait"],
     "stepIntentDurableMayCancel": false
   },
   "files": {}

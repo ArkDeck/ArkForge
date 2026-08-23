@@ -1,0 +1,23 @@
+{
+  "id": "AF-CONF-RECONCILE-001",
+  "suite": "reconcile",
+  "title": "bounded possible-effect set has one canonical digest",
+  "kind": "digest",
+  "requirements": ["AF-REC-003", "AF-DIG-008"],
+  "description": "Encode the conservative union of unresolved effects and hash it in the possible-effect-set domain before any read-only reconcile begins.",
+  "input": {
+    "bodyFile": "possible-effect-set.cbor"
+  },
+  "expected": {
+    "domain": "arkforge/v1/possible-effect-set\\0",
+    "digest": "3214032223043d202e207ccc6e877dfd58206886e4f8304cf630c357131a9b86",
+    "diag": "{\"effects\": {\"transient\": [], \"dataImpact\": {\"userdata\": \"preserved\", \"calibration\": \"preserved\", \"secureStorage\": \"preserved\", \"nonVolatileConfig\": \"preserved\"}, \"persistent\": [{\"kind\": \"writePartition\", \"range\": {\"start\": 4096, \"length\": 4096}, \"content\": h'c87f6d061817ffd1563baa45b14b317c5ec79eb7703931fc5c6c928ff4c13510', \"partition\": \"system\"}, {\"kind\": \"writePartition\", \"range\": {\"start\": 8192, \"length\": 4096}, \"content\": h'b38df811b52ecfc45185d3a6e4f3ba3f8803ce3d04ebbfc31a0d347071888657', \"partition\": \"vendor\"}]}, \"completeness\": \"bounded\", \"sourceActionIds\": [\"ACT-system\", \"ACT-vendor\"]}",
+    "permitsRecoveryAssessment": true
+  },
+  "files": {
+    "possible-effect-set.cbor": {
+      "bytes": 410,
+      "sha256": "807d911405c2ce6cd83257d2d3445818d4e890275251c98778c43135b4e8c7db"
+    }
+  }
+}

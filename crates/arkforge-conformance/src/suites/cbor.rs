@@ -204,6 +204,7 @@ fn decode_reject_cases() -> Vec<(&'static str, Vec<u8>)> {
 
 fn error_class(error: &CborError) -> &'static str {
     match error {
+        CborError::ModelViolation(_) => "CBOR_MODEL_VIOLATION",
         CborError::NegativeNotNegative(_) => "CBOR_NEGATIVE_NOT_NEGATIVE",
         CborError::DuplicateMapKey(_) => "CBOR_DUPLICATE_MAP_KEY",
         CborError::Truncated => "CBOR_TRUNCATED",

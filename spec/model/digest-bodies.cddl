@@ -269,14 +269,15 @@ possible-effect-set = {
 }
 
 ; ---------------------------------------------------------------------------
-; Domain: "arkforge/v1/device-facts\0"
-; This domain is used with several preimages (ISSUES SI-008):
-;   (a) admission device facts digest over `device-facts-for-admission`;
-;   (b) observation facts digest over `device-observation`;
-;   (c) topology digest: payload = locationId as 4-byte big-endian (IOKit);
-;   (d) serial digest: payload = raw serial bytes;
-;   (e) descriptor digest: payload = descriptor bytes.
-; source: crates/arkforge-transport/src/lib.rs, usb.rs   [fixture: plan 003 for (b)]
+; Domains are one-to-one with their preimage shapes (SI-008):
+;   "arkforge/v1/admission-device-facts\0" over device-facts-for-admission;
+;   "arkforge/v1/device-observation\0" over device-observation;
+;   "arkforge/v1/usb-topology\0" over usb-topology-preimage;
+;   "arkforge/v1/usb-descriptor\0" over usb-descriptor-preimage;
+;   "arkforge/v1/device-serial\0" over device-serial-preimage;
+;   "arkforge/v1/rescue-device-facts\0" over rescue-device-facts.
+; source: crates/arkforge-transport/src/lib.rs, usb.rs; arkforged/src/rescue.rs
+; [fixture: plan 003 for device-observation]
 ; ---------------------------------------------------------------------------
 device-facts-for-admission = {
   "mode": device-mode,
@@ -305,6 +306,20 @@ serial-evidence =
   { "kind": "protocolUnique", "digest": sha256 }
 protocol-identity-fact = { "key": opaque-id, "value": tstr }
 identity-strength = "classOnly" / "serialAsserted" / "serialAndTopology" / "protocolConfirmed"
+usb-topology-preimage = bstr .size 4       ; locationId, unsigned big-endian
+usb-descriptor-preimage = bstr             ; exact ordered descriptor payload from usb.rs
+device-serial-preimage = bstr              ; exact raw serial/connect-key UTF-8 bytes
+rescue-device-facts = {
+  "vendorId": uint,
+  "productId": uint,
+  "usbSpecification": uint / null,
+  "deviceRelease": uint / null,
+  "locationId": uint,
+  "mode": tstr,
+  "serial": tstr / null,
+  "productName": tstr / null,
+  "vendorName": tstr / null,
+}
 
 ; ---------------------------------------------------------------------------
 ; Domain: "arkforge/v1/provider-facts\0"   — used for the MaturityKey digest
@@ -413,10 +428,33 @@ allowed-target = {
 }
 
 ; ---------------------------------------------------------------------------
+; Domain: "arkforge/v1/action-receipt\0"
+; source: crates/arkforge-ipc/src/messages.rs ActionReceiptSummary
+; [fixture: action-receipt]
+; ---------------------------------------------------------------------------
+action-receipt = {
+  "schemaVersion": 1,
+  "jobId": opaque-id,
+  "planId": opaque-id,
+  "stepId": opaque-id,
+  "actionId": opaque-id / null,
+  "attemptId": opaque-id,
+  "permitId": opaque-id,
+  "disposition": "semanticSuccess" / "confirmedNoEffect" /
+                 "confirmedPartialEffect" / "outcomeUnknown",
+  "evidenceSha256": sha256,
+  "verificationOutcome": "verified" / "typedSkip" / "failed" / null,
+  "verificationStrength": "fullHash" / "sampledRanges" /
+                          "prefixHash" / "semanticOnly" / null,
+  "verifiedRange": { "start": uint, "length": uint } / null,
+  "typedSkipReason": tstr / null,
+  "failureClassification": tstr / null,
+  "facts": facts,
+}
+
+; ---------------------------------------------------------------------------
 ; Domain: "arkforge/v1/recovery-coverage\0"  over device-profile.recovery
 ; Domain: "arkforge/v1/transcript\0"          see model/transcript.md
-; Domain: "arkforge/v1/action-receipt\0"      RESERVED — no body is digested
-;                                             under it today (ISSUES SI-009)
 ; Domain: "arkforge/v1/transport-session\0"   over session facts (usb.rs) — draft
 ; Domain: "arkforge/v1/rescue-plan\0", "arkforge/v1/rescue-receipt\0"
 ;                                             rescue surface (crates/arkforged/src/rescue.rs) — draft

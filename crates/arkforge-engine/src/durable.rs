@@ -45,6 +45,10 @@ pub struct DurableJournal {
     /// Bytes written since the last fsync, so a buffered record is not silently
     /// left behind by a reader that never sees a durable one.
     unsynced_records: usize,
+    /// Once a write or fsync fails, the file tail is uncertain. Continuing on
+    /// the same handle could append after a partial frame; reopening is what
+    /// verifies or truncates that tail before another append is allowed.
+    poisoned: bool,
 }
 
 /// What opening a journal found.
@@ -180,6 +184,7 @@ impl DurableJournal {
                 file,
                 journal,
                 unsynced_records: 0,
+                poisoned: false,
             },
             report,
         ))
@@ -219,11 +224,15 @@ impl DurableJournal {
         subject: OpaqueId,
         facts: Vec<(OpaqueId, String)>,
     ) -> Result<Sha256Digest, DurableJournalError> {
+        if self.poisoned {
+            return Err(DurableJournalError::Poisoned {
+                path: self.path.clone(),
+            });
+        }
         let record = self
             .journal
-            .append(kind, at_epoch_ms, job_revision, subject, facts)
-            .map_err(|error| DurableJournalError::Journal(Box::new(error)))?
-            .clone();
+            .prepare_record(kind, at_epoch_ms, job_revision, subject, facts)
+            .map_err(|error| DurableJournalError::Journal(Box::new(error)))?;
 
         let body = record
             .to_canonical_bytes()
@@ -241,25 +250,43 @@ impl DurableJournal {
         frame.extend_from_slice(&length.to_be_bytes());
         frame.extend_from_slice(&body);
 
-        self.file
-            .write_all(&frame)
-            .map_err(|error| DurableJournalError::Io {
-                path: self.path.clone(),
-                message: error.to_string(),
-            })?;
-        self.unsynced_records += 1;
-
-        if record.fsync_policy == FsyncPolicy::Durable {
-            self.file
-                .sync_all()
-                .map_err(|error| DurableJournalError::Io {
+        match self.file.write(&frame) {
+            Ok(written) if written == frame.len() => {}
+            Ok(written) => {
+                self.poisoned = true;
+                return Err(DurableJournalError::Io {
+                    path: self.path.clone(),
+                    message: format!(
+                        "short journal-frame write: wrote {written} of {} bytes",
+                        frame.len()
+                    ),
+                });
+            }
+            Err(error) => {
+                self.poisoned = true;
+                return Err(DurableJournalError::Io {
                     path: self.path.clone(),
                     message: error.to_string(),
-                })?;
+                });
+            }
+        }
+        let policy = record.fsync_policy;
+        let record_digest = record.record_digest;
+        self.journal.commit_record(record);
+        self.unsynced_records += 1;
+
+        if policy == FsyncPolicy::Durable {
+            if let Err(error) = self.file.sync_all() {
+                self.poisoned = true;
+                return Err(DurableJournalError::Io {
+                    path: self.path.clone(),
+                    message: error.to_string(),
+                });
+            }
             self.unsynced_records = 0;
         }
 
-        Ok(record.record_digest)
+        Ok(record_digest)
     }
 
     /// Flushes whatever buffered records are outstanding.
@@ -267,12 +294,18 @@ impl DurableJournal {
     /// Shutdown only. Correctness never depends on this being called: every
     /// record that a decision rests on is `Durable` and was synced by `append`.
     pub fn sync(&mut self) -> Result<(), DurableJournalError> {
-        self.file
-            .sync_all()
-            .map_err(|error| DurableJournalError::Io {
+        if self.poisoned {
+            return Err(DurableJournalError::Poisoned {
+                path: self.path.clone(),
+            });
+        }
+        if let Err(error) = self.file.sync_all() {
+            self.poisoned = true;
+            return Err(DurableJournalError::Io {
                 path: self.path.clone(),
                 message: error.to_string(),
-            })?;
+            });
+        }
         self.unsynced_records = 0;
         Ok(())
     }
@@ -289,6 +322,7 @@ pub enum DurableJournalError {
     NotAJournal { path: PathBuf },
     FrameLengthInvalid { at_offset: u64, length: u32 },
     RecordTooLarge(usize),
+    Poisoned { path: PathBuf },
     Journal(Box<JournalError>),
 }
 
@@ -310,6 +344,11 @@ impl fmt::Display for DurableJournalError {
             DurableJournalError::RecordTooLarge(size) => {
                 write!(f, "journal record of {size} bytes exceeds the frame bound")
             }
+            DurableJournalError::Poisoned { path } => write!(
+                f,
+                "{} has an uncertain tail after an I/O failure; reopen it before appending",
+                path.display()
+            ),
             DurableJournalError::Journal(error) => write!(f, "{error}"),
         }
     }
@@ -573,5 +612,70 @@ mod tests {
             0,
             "an intent must be on stable storage before append returns"
         );
+    }
+
+    #[test]
+    fn an_oversized_record_does_not_advance_the_in_memory_chain() {
+        let dir = TempDir::new("oversized-atomic");
+        let path = dir.file("journal.cbor");
+        let (mut journal, _) = DurableJournal::open(&path).unwrap();
+        let head_before = journal.head_digest();
+
+        let error = journal
+            .append(
+                JournalRecordKind::SemanticReceiptRecorded,
+                1_000,
+                1,
+                id("STEP-1"),
+                vec![(id("receiptBodyHex"), "x".repeat(MAX_FRAME_BYTES as usize))],
+            )
+            .unwrap_err();
+
+        assert!(matches!(error, DurableJournalError::RecordTooLarge(_)));
+        assert_eq!(journal.len(), 0);
+        assert_eq!(journal.head_digest(), head_before);
+
+        journal
+            .append(
+                JournalRecordKind::CancellationRequested,
+                2_000,
+                1,
+                id("JOB-1"),
+                vec![],
+            )
+            .unwrap();
+        drop(journal);
+        let (reopened, report) = DurableJournal::open(&path).unwrap();
+        assert_eq!(report.records_replayed, 1);
+        assert_eq!(
+            reopened.journal().records()[0].kind,
+            JournalRecordKind::CancellationRequested
+        );
+    }
+
+    #[test]
+    fn a_poisoned_handle_requires_reopen_before_any_further_write() {
+        let dir = TempDir::new("poisoned");
+        let path = dir.file("journal.cbor");
+        let (mut journal, _) = DurableJournal::open(&path).unwrap();
+        // I/O fault injection is platform-specific; setting the state directly
+        // exercises the invariant reached by both write_all and sync_all errors.
+        journal.poisoned = true;
+
+        assert!(matches!(
+            journal.append(
+                JournalRecordKind::CancellationRequested,
+                1_000,
+                1,
+                id("JOB-1"),
+                vec![],
+            ),
+            Err(DurableJournalError::Poisoned { .. })
+        ));
+        assert!(matches!(
+            journal.sync(),
+            Err(DurableJournalError::Poisoned { .. })
+        ));
+        assert!(journal.is_empty());
     }
 }

@@ -168,7 +168,7 @@ pub struct DeviceObservation {
 
 impl DeviceObservation {
     pub fn facts_digest(&self) -> Result<Sha256Digest, CborError> {
-        digest_canonical(Domain::DeviceFacts, self)
+        digest_canonical(Domain::DeviceObservation, self)
     }
 
     /// Digest of the device facts that identify the device *now*.
@@ -194,7 +194,7 @@ impl DeviceObservation {
             ),
         ]);
         Ok(digest_in_domain(
-            Domain::DeviceFacts,
+            Domain::AdmissionDeviceFacts,
             &facts.to_canonical_bytes()?,
         ))
     }

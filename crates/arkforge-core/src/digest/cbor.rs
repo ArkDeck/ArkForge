@@ -161,6 +161,8 @@ fn encode_head(out: &mut Vec<u8>, major: u8, argument: u64) {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum CborError {
+    /// The CBOR primitives are encodable, but the schema-bound model is not.
+    ModelViolation(String),
     NegativeNotNegative(i64),
     DuplicateMapKey(Vec<u8>),
     Truncated,
@@ -177,6 +179,7 @@ pub enum CborError {
 impl fmt::Display for CborError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
+            CborError::ModelViolation(message) => write!(f, "model violation: {message}"),
             CborError::NegativeNotNegative(value) => {
                 write!(
                     f,

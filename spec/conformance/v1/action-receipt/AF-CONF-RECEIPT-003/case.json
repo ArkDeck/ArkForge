@@ -1,0 +1,23 @@
+{
+  "id": "AF-CONF-RECEIPT-003",
+  "suite": "action-receipt",
+  "title": "settled no-effect failure is still a durable semantic receipt",
+  "kind": "digest",
+  "requirements": ["AF-DIG-012", "AF-ENG-011"],
+  "description": "Encode the ActionReceipt semantic body as deterministic CBOR, then compute SHA-256(arkforge/v1/action-receipt\\0 || body). Protobuf bytes and transport evidence alone are not the receipt identity.",
+  "input": {
+    "bodyFile": "receipt.cbor",
+    "bodySha256": "1a26ef53f5fa78cd38397dc68f067f9569d85c32a910758ca1be4174a9325461"
+  },
+  "expected": {
+    "domain": "arkforge/v1/action-receipt\\0",
+    "receiptDigest": "85b6f1daa26e908e5c9d92e7ed9246996febe8517201e6a5fab1c2c4f9d9f6dc",
+    "diag": "{\"facts\": {\"failureBoundary\": \"beforeExternalIo\"}, \"jobId\": \"JOB-2\", \"planId\": \"PLAN-2\", \"stepId\": \"STEP-2\", \"actionId\": null, \"permitId\": \"PERMIT-2\", \"attemptId\": \"ATTEMPT-1\", \"disposition\": \"confirmedNoEffect\", \"schemaVersion\": 1, \"verifiedRange\": null, \"evidenceSha256\": h'1111111111111111111111111111111111111111111111111111111111111111', \"typedSkipReason\": null, \"verificationOutcome\": null, \"verificationStrength\": null, \"failureClassification\": null}"
+  },
+  "files": {
+    "receipt.cbor": {
+      "bytes": 321,
+      "sha256": "1a26ef53f5fa78cd38397dc68f067f9569d85c32a910758ca1be4174a9325461"
+    }
+  }
+}

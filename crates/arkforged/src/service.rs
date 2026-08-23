@@ -6,7 +6,7 @@
 //! belong to the service, not to the plumbing.
 
 use crate::artifact_ops::{inspect_stored_container, manifest_response};
-use crate::dispatch::PendingPreparation;
+use crate::dispatch::{PendingPreparation, PendingReconcile, ReconcileDispatchOutcome};
 use crate::jobs::{AdmissionFacts, JobRegistry};
 use arkforge_artifact::cas::{CasQuota, ContentAddressedStore};
 use arkforge_artifact::manifest::ArtifactManifest;
@@ -28,7 +28,7 @@ use arkforge_core::{
     DeviceMode, PersistentEffect, Sha256Digest, TransientEffect,
 };
 use arkforge_engine::superseding::{
-    RecoveryBlocker, SupersedingRecoveryAssessment, assess_superseding_recovery,
+    EffectObservation, RecoveryBlocker, SupersedingRecoveryAssessment, assess_superseding_recovery,
     possible_effects as assess_possible_effects,
 };
 use arkforge_engine::{BoundToolchain, Engine, ExecutionReadiness, StoredPlan};
@@ -43,6 +43,7 @@ use arkforge_provider::rockchip::{RockchipProvider, publish_dayu200_maturity};
 use arkforge_provider::unisoc::{UnisocProvider, publish_af_v3_maturity};
 use arkforge_provider::{
     FlashIntent, FlashProvider, MaterializeRequest, MaturityRegistry, ProbeContext,
+    ReadOnlyReconcilePlan, ReconcileRequest,
 };
 use arkforge_transport::replay::TranscriptTransport;
 use arkforge_transport::usb::{UsbDeviceRecord, UsbEnumerator, UsbTransport};
@@ -90,7 +91,7 @@ fn select_hdc_connect_key(
     let mut matches = candidates
         .into_iter()
         .filter(|(location_id, _)| {
-            digest_in_domain(Domain::DeviceFacts, &location_id.to_be_bytes()).to_hex()
+            digest_in_domain(Domain::UsbTopology, &location_id.to_be_bytes()).to_hex()
                 == topology_sha256
         })
         .filter_map(|(_, serial)| serial)
@@ -100,7 +101,7 @@ fn select_hdc_connect_key(
                 && serial
                     .bytes()
                     .all(|byte| byte.is_ascii() && !byte.is_ascii_whitespace())
-                && digest_in_domain(Domain::DeviceFacts, serial.as_bytes()).to_hex()
+                && digest_in_domain(Domain::DeviceSerial, serial.as_bytes()).to_hex()
                     == serial_sha256
         })
         .collect::<Vec<_>>();
@@ -201,6 +202,7 @@ pub struct Service {
     /// unexplained detach into permission to select a new device.
     authorized_rebinds: BTreeSet<String>,
     pending_preparations: VecDeque<PendingPreparation>,
+    pending_reconciliations: VecDeque<PendingReconcile>,
     clock: Clock,
     jobs: JobRegistry,
     /// The secret the authority handed this daemon at startup. Held here and
@@ -351,6 +353,7 @@ impl Service {
             job_sessions: BTreeMap::new(),
             authorized_rebinds: BTreeSet::new(),
             pending_preparations: VecDeque::new(),
+            pending_reconciliations: VecDeque::new(),
             clock,
             jobs: JobRegistry::open(store_root.join("jobs")).map_err(|error| error.to_string())?,
             pairing: None,
@@ -452,6 +455,29 @@ impl Service {
 
     pub fn take_pending_preparation(&mut self) -> Option<PendingPreparation> {
         self.pending_preparations.pop_front()
+    }
+
+    /// Hands a read-only reconciliation to the native runner. Like ordinary
+    /// dispatch, the slow device reads happen only after the service lock is
+    /// released.
+    pub fn take_pending_reconcile(&mut self) -> Option<PendingReconcile> {
+        self.pending_reconciliations.pop_front()
+    }
+
+    pub fn complete_reconcile(
+        &mut self,
+        work: &PendingReconcile,
+        outcome: ReconcileDispatchOutcome,
+    ) -> Result<(), crate::jobs::JobError> {
+        self.jobs.complete_reconcile(
+            &work.job_id,
+            &outcome.observations,
+            outcome.facts,
+            outcome.evidence_digest,
+            work.terminal_scope,
+            self.clock.now_epoch_ms(),
+        )?;
+        Ok(())
     }
 
     /// Classifies control requests whose deadline passed unanswered.
@@ -1194,7 +1220,7 @@ impl Service {
     /// partitions, so an unresolved write normally remains unknown. Returning
     /// that typed verdict is still materially different from replaying it or
     /// pretending the recovery API does not exist.
-    fn reconcile_job(&self, request: &Request) -> Response {
+    fn reconcile_job(&mut self, request: &Request) -> Response {
         let job_id = first_string_field(&request.payload, 1).unwrap_or_default();
         let Some(job) = self.jobs.job(&job_id) else {
             return self.refuse(
@@ -1204,7 +1230,8 @@ impl Service {
                 &format!("no job {job_id}"),
             );
         };
-        let state = job.state().as_str();
+        let initial_state = job.state();
+        let previous_assessment = job.last_reconcile_assessment();
         let context = self.recovery_surface_context(&job_id);
         let recovered_possible = context
             .is_none()
@@ -1212,43 +1239,173 @@ impl Service {
             .flatten();
         let possible = context
             .as_ref()
-            .map(|context| &context.possible)
-            .or(recovered_possible.as_ref());
+            .map(|context| context.possible.clone())
+            .or(recovered_possible)
+            .unwrap_or_else(|| PossibleEffectSet {
+                effects: arkforge_core::EffectSet::read_only(),
+                completeness: EffectSetCompleteness::Unbounded,
+                source_action_ids: Vec::new(),
+            });
+
+        let (verdict, detail, state) = if initial_state == arkforge_engine::JobState::OutcomeUnknown
+        {
+            let possible_digest = match possible.digest() {
+                Ok(digest) => digest,
+                Err(error) => {
+                    return self.refuse(
+                        request,
+                        Status::Internal,
+                        "RECONCILE_MODEL_INVALID",
+                        &error.to_string(),
+                    );
+                }
+            };
+            let completeness = completeness_name(possible.completeness);
+
+            let selected: Result<Option<(ReadOnlyReconcilePlan, DeviceProfile)>, String> =
+                match self.stored_plan_for_job(&job_id) {
+                    Some(stored) => {
+                        let profile = self
+                            .profiles
+                            .get(&profile_key(
+                                &stored.envelope.profile.id,
+                                stored.envelope.profile.version,
+                            ))
+                            .cloned()
+                            .ok_or_else(|| {
+                                "the stored plan's device profile is not loaded".to_string()
+                            });
+                        profile.and_then(|profile| {
+                            let request = ReconcileRequest {
+                                private_plan: &stored.private_plan,
+                                possible_effects: &possible.effects.persistent,
+                            };
+                            let plan = match stored.envelope.provider.id.as_str() {
+                                arkforge_provider::rockchip::PROVIDER_ID => {
+                                    self.rockchip.reconcile_read_only(&request)
+                                }
+                                arkforge_provider::unisoc::PROVIDER_ID => {
+                                    self.unisoc.reconcile_read_only(&request)
+                                }
+                                provider => Err(arkforge_provider::ProviderError::Unsupported(
+                                    format!("provider {provider} has no reconcile port"),
+                                )),
+                            }
+                            .map_err(|error| error.to_string())?;
+                            Ok(Some((plan, profile)))
+                        })
+                    }
+                    None => Ok(None),
+                };
+
+            if let Err(error) = self.jobs.begin_reconcile(
+                &job_id,
+                possible_digest,
+                completeness,
+                possible.effects.persistent.len(),
+                self.clock.now_epoch_ms(),
+            ) {
+                return self.refuse(request, Status::Refused, error.code(), &error.to_string());
+            }
+
+            match selected {
+                Ok(Some((plan, profile))) if !plan.actions.is_empty() => {
+                    self.pending_reconciliations.push_back(PendingReconcile {
+                        job_id: job_id.clone(),
+                        actions: plan.actions,
+                        profile,
+                        possible_effects: possible.effects.persistent.clone(),
+                        // The current Rockchip surface observes the interrupted
+                        // persistent effect only. It cannot prove later reset/
+                        // postflight steps, so it must not conclude job success.
+                        terminal_scope: false,
+                    });
+                    (
+                        "stillUnknown".to_string(),
+                        "read-only reconciliation was scheduled; watch the exact job for its durable assessment"
+                            .to_string(),
+                        "reconciling".to_string(),
+                    )
+                }
+                selection => {
+                    // No private plan (common after daemon restart), no
+                    // observable persistent effect, or a Provider refusal can
+                    // be reduced immediately without touching a device.
+                    let reason = match selection {
+                        Ok(Some(_)) => {
+                            "the possible effect set has no provider-selected read-only observation"
+                                .to_string()
+                        }
+                        Ok(None) => {
+                            "the durable job was recovered without its private plan".to_string()
+                        }
+                        Err(error) => format!("the provider refused read-only reconcile: {error}"),
+                    };
+                    let observations = possible
+                        .effects
+                        .persistent
+                        .iter()
+                        .cloned()
+                        .map(|effect| (effect, EffectObservation::Indeterminate))
+                        .collect::<Vec<_>>();
+                    if let Err(error) = self.jobs.complete_reconcile(
+                        &job_id,
+                        &observations,
+                        vec![
+                            ("readOnly".into(), "true".into()),
+                            ("reconcileUnavailable".into(), reason.clone()),
+                        ],
+                        sha256(reason.as_bytes()),
+                        false,
+                        self.clock.now_epoch_ms(),
+                    ) {
+                        return self.refuse(
+                            request,
+                            Status::Internal,
+                            error.code(),
+                            &error.to_string(),
+                        );
+                    }
+                    let (verdict, durable_reason) = self
+                        .jobs
+                        .job(&job_id)
+                        .and_then(|job| job.last_reconcile_assessment())
+                        .unwrap_or_else(|| ("stillUnknown".into(), reason));
+                    (
+                        verdict,
+                        durable_reason,
+                        self.jobs
+                            .job(&job_id)
+                            .map(|job| job.state().as_str().to_string())
+                            .unwrap_or_else(|| "outcomeUnknown".into()),
+                    )
+                }
+            }
+        } else if initial_state == arkforge_engine::JobState::Reconciling {
+            (
+                "stillUnknown".into(),
+                "a read-only reconciliation is already in progress".into(),
+                initial_state.as_str().into(),
+            )
+        } else if let Some((verdict, reason)) = previous_assessment {
+            (verdict, reason, initial_state.as_str().into())
+        } else {
+            (
+                "nothingToReconcile".into(),
+                "the job has no unresolved outcome".into(),
+                initial_state.as_str().into(),
+            )
+        };
+
         let mut payload = Vec::new();
         arkforge_ipc::wire::write_string(&mut payload, 1, &job_id);
-        if state == "outcomeUnknown" {
-            arkforge_ipc::wire::write_string(&mut payload, 2, "stillUnknown");
-            arkforge_ipc::wire::write_string(
-                &mut payload,
-                3,
-                if context.is_some() {
-                    "the safe read-only face cannot establish every possible persistent effect; \
-                     the original outcome remains immutable"
-                } else if recovered_possible.is_some() {
-                    "the durable journal bounds every unresolved managed control to zero \
-                     persistent effects; the original outcome remains immutable"
-                } else {
-                    "the durable job was recovered without its private plan, so its possible \
-                     effects cannot be bounded in this daemon process"
-                },
-            );
-        } else {
-            arkforge_ipc::wire::write_string(&mut payload, 2, "nothingToReconcile");
-            arkforge_ipc::wire::write_string(&mut payload, 3, "the job has no unresolved outcome");
+        arkforge_ipc::wire::write_string(&mut payload, 2, &verdict);
+        arkforge_ipc::wire::write_string(&mut payload, 3, &detail);
+        arkforge_ipc::wire::write_string(&mut payload, 4, completeness_name(possible.completeness));
+        for effect in &possible.effects.persistent {
+            arkforge_ipc::wire::write_string(&mut payload, 5, &persistent_effect_name(effect));
         }
-        arkforge_ipc::wire::write_string(
-            &mut payload,
-            4,
-            possible
-                .map(|possible| completeness_name(possible.completeness))
-                .unwrap_or("unbounded"),
-        );
-        if let Some(possible) = possible {
-            for effect in &possible.effects.persistent {
-                arkforge_ipc::wire::write_string(&mut payload, 5, &persistent_effect_name(effect));
-            }
-        }
-        arkforge_ipc::wire::write_string(&mut payload, 6, state);
+        arkforge_ipc::wire::write_string(&mut payload, 6, &state);
         self.ok(request, payload)
     }
 
@@ -1562,6 +1719,24 @@ impl Service {
                 &format!("no job {}", receipt.job_id),
             );
         };
+        let completed_step_id = self
+            .jobs
+            .job(&receipt.job_id)
+            .map(crate::jobs::Job::current_step_id)
+            .unwrap_or_default();
+        let opens_exact_rebind = receipt.accepted
+            && stored
+                .envelope
+                .public_steps
+                .iter()
+                .find(|step| step.step_id.as_str() == completed_step_id)
+                .is_some_and(|step| {
+                    successful_dispatch_requires_rebind(
+                        arkforge_core::outcome::ActionDisposition::SemanticSuccess,
+                        step.expected_mode_before.as_ref(),
+                        step.expected_mode_after.as_ref(),
+                    )
+                });
         let result = self.jobs.submit_control_receipt(
             &receipt,
             &stored.envelope,
@@ -1569,13 +1744,15 @@ impl Service {
             self.clock.now_epoch_ms(),
         );
         if result.is_ok() && receipt.accepted {
-            // A successful managed control action is the authority's proof of
-            // the mode transition. The old session must not be reused across
-            // its detach/re-enumeration; the next admission opens a unique new
-            // observation and the authority checks its raw identity facts.
-            self.job_sessions.remove(&receipt.job_id);
-            self.authorized_rebinds.insert(receipt.job_id.clone());
-            let _ = self.publish_live_admission(&receipt.job_id, true);
+            // Only a sealed mode-changing control opens a rebind. Read-only
+            // property controls keep the exact session and re-read it for the
+            // next admission.
+            if opens_exact_rebind {
+                self.job_sessions.remove(&receipt.job_id);
+                self.authorized_rebinds.insert(receipt.job_id.clone());
+            }
+            let allow_unique_rebind = self.authorized_rebinds.contains(&receipt.job_id);
+            let _ = self.publish_live_admission(&receipt.job_id, allow_unique_rebind);
         }
         let outcome = match result {
             Ok(()) => SubmissionOutcome::accepted(),
@@ -2534,9 +2711,9 @@ mod tests {
 
     #[test]
     fn native_hdc_target_requires_both_sealed_usb_digests() {
-        let serial_digest = digest_in_domain(Domain::DeviceFacts, b"serial").to_hex();
+        let serial_digest = digest_in_domain(Domain::DeviceSerial, b"serial").to_hex();
         let topology_digest =
-            digest_in_domain(Domain::DeviceFacts, &0x0112_0000_u32.to_be_bytes()).to_hex();
+            digest_in_domain(Domain::UsbTopology, &0x0112_0000_u32.to_be_bytes()).to_hex();
         assert_eq!(
             select_hdc_connect_key(
                 vec![
@@ -2586,6 +2763,106 @@ mod tests {
                 .is_none(),
             "an unknown action must remain unbounded after restart"
         );
+    }
+
+    #[test]
+    fn reconcile_api_durably_enters_reconciling_then_returns_unknown_without_a_plan() {
+        let root = std::env::temp_dir().join(format!(
+            "arkforged-reconcile-api-{}-{:?}",
+            std::process::id(),
+            std::thread::current().id()
+        ));
+        let _ = std::fs::remove_dir_all(&root);
+        let jobs = root.join("jobs");
+        std::fs::create_dir_all(&jobs).unwrap();
+        let job_id = "JOB-RECONCILE-API";
+        let id = |value: &str| OpaqueId::new(value).unwrap();
+        let (mut journal, _) =
+            arkforge_engine::durable::DurableJournal::open(jobs.join(format!("{job_id}.journal")))
+                .unwrap();
+        journal
+            .append(
+                JournalRecordKind::JobCreated,
+                1_000,
+                1,
+                id(job_id),
+                vec![
+                    (id("jobId"), job_id.into()),
+                    (id("planId"), "PLAN-RECOVERED".into()),
+                    (id("planDigest"), sha256(b"missing plan").to_hex()),
+                    (id("totalSteps"), "1".into()),
+                    (id("controllerSessionId"), "SESSION-RECOVERED".into()),
+                ],
+            )
+            .unwrap();
+        for kind in [
+            JournalRecordKind::StepPermitAccepted,
+            JournalRecordKind::StepIntentRecorded,
+            JournalRecordKind::PermitConsuming,
+        ] {
+            let mut facts = vec![
+                (id("jobId"), job_id.into()),
+                (id("planId"), "PLAN-RECOVERED".into()),
+                (id("stepId"), "STEP-CONTROL".into()),
+                (id("attemptId"), "ATTEMPT-1".into()),
+                (id("permitId"), "PERMIT-1".into()),
+            ];
+            if kind == JournalRecordKind::PermitConsuming {
+                facts.push((id("controlAction"), "enter-updater".into()));
+            }
+            journal
+                .append(kind, 1_001, 1, id("STEP-CONTROL"), facts)
+                .unwrap();
+        }
+        drop(journal);
+
+        let mut service =
+            Service::new(&root, Vec::new(), Vec::new(), Clock::Fixed(2_000), None).unwrap();
+        assert_eq!(
+            service.jobs.job(job_id).unwrap().state(),
+            arkforge_engine::JobState::OutcomeUnknown
+        );
+        let mut payload = Vec::new();
+        arkforge_ipc::wire::write_string(&mut payload, 1, job_id);
+        let response = service.handle(
+            SessionKind::Controller,
+            &Request {
+                request_id: "REQ-RECONCILE".into(),
+                api: Api::ReconcileJob,
+                payload,
+            },
+            None,
+        );
+        assert_eq!(response.status, Status::Ok);
+        assert_eq!(
+            first_string_field(&response.payload, 2).as_deref(),
+            Some("stillUnknown")
+        );
+        assert_eq!(
+            first_string_field(&response.payload, 6).as_deref(),
+            Some("outcomeUnknown")
+        );
+        let job = service.jobs.job(job_id).unwrap();
+        assert!(
+            job.events_from(0)
+                .iter()
+                .any(|event| event.job_state == "reconciling")
+        );
+        assert_eq!(job.last_reconcile_assessment().unwrap().0, "stillUnknown");
+        assert!(
+            job.journal()
+                .records()
+                .iter()
+                .any(|record| { record.kind == JournalRecordKind::ReadOnlyObservationRecorded })
+        );
+        assert!(
+            !job.journal()
+                .records()
+                .iter()
+                .any(|record| { record.kind == JournalRecordKind::ExternalDispatchStarted })
+        );
+        drop(service);
+        let _ = std::fs::remove_dir_all(root);
     }
 
     fn native_binding_maturity(campaign: Option<&str>) -> MaturityState {

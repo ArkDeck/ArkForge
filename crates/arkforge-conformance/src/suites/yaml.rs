@@ -105,17 +105,17 @@ pub fn populate(tree: &mut Tree) {
         ),
         ("tab indentation", "AF-YAML-011", "a:\n\t- x\n"),
         (
-            "anchor marker inside a value is kept as literal text, never resolved",
+            "anchor marker inside a value is rejected",
             "AF-YAML-012",
             "a: &x 1\n",
         ),
         (
-            "alias marker inside a value is kept as literal text, never resolved",
+            "alias marker inside a value is rejected",
             "AF-YAML-012",
             "a: *x\n",
         ),
         (
-            "tag inside a value is kept as literal text, never interpreted",
+            "tag inside a value is rejected",
             "AF-YAML-012",
             "a: !!str 1\n",
         ),

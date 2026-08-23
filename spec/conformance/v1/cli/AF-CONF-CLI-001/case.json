@@ -1,0 +1,22 @@
+{
+  "id": "AF-CONF-CLI-001",
+  "suite": "cli",
+  "title": "version is a stable one-line contract",
+  "kind": "process",
+  "requirements": ["AF-CLI-001"],
+  "description": "Run the ArkForge CLI as a subprocess with exactly this argv, no daemon and a clean temporary runtime directory. Compare exit status and stdout/stderr byte-for-byte.",
+  "input": {
+    "argv": ["--version"]
+  },
+  "expected": {
+    "exitCode": 0,
+    "stdoutFile": "stdout.txt",
+    "stderrFile": null
+  },
+  "files": {
+    "stdout.txt": {
+      "bytes": 15,
+      "sha256": "a06c95bfaa61cfd468163f1a43fdf1c1c96fe425efd14c4c0f1e9b5ffb8a7a67"
+    }
+  }
+}

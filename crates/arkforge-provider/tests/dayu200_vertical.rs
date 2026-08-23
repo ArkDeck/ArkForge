@@ -17,7 +17,7 @@ use arkforge_core::identity::{
 use arkforge_core::ids::{OpaqueId, PartitionId, PlanId};
 use arkforge_core::plan::ExecutionPurpose;
 use arkforge_core::profile;
-use arkforge_core::projection::{PrivateActionRole, validate_projection};
+use arkforge_core::projection::{PrivateActionRole, StoredProviderPlan, validate_projection};
 use arkforge_core::step::{FlashStepKind, SemanticTarget, WorkflowEffect};
 use arkforge_core::{
     AuthorityBindingRef, AuthorityNamespace, AuthoritySupportBinding, AuthoritySupportState,
@@ -25,6 +25,7 @@ use arkforge_core::{
 use arkforge_provider::rockchip::{RockchipProvider, publish_af_v1_maturity};
 use arkforge_provider::{
     FlashIntent, FlashProvider, MaterializeRequest, MaturityRegistry, ProbeContext,
+    ReadOnlyReconcilePlan, ReconcileRequest,
 };
 use arkforge_transport::replay::TranscriptTransport;
 use arkforge_transport::{DeviceTransport, TypedDiscoveryFilter, transcript};
@@ -743,10 +744,21 @@ fn probing_never_touches_a_write_path() {
 }
 
 #[test]
-fn execution_side_spi_methods_refuse_in_this_build() {
+fn reconcile_spi_selects_only_read_only_actions() {
     let provider = RockchipProvider::new();
     assert!(provider.execute_stored_action().is_err());
-    assert!(provider.reconcile_read_only().is_err());
+    let private_plan = StoredProviderPlan {
+        actions: Vec::new(),
+    };
+    assert_eq!(
+        provider
+            .reconcile_read_only(&ReconcileRequest {
+                private_plan: &private_plan,
+                possible_effects: &[],
+            })
+            .unwrap(),
+        ReadOnlyReconcilePlan::default()
+    );
     assert!(provider.materialize_superseding_recovery().is_err());
 }
 

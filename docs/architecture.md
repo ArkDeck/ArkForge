@@ -1276,19 +1276,23 @@ stateDiagram-v2
     Planned --> AwaitingStart
     AwaitingStart --> Preflight
     Preflight --> AwaitingPermit
-    Preflight --> ReadOnlyDispatch
+    Preflight --> CancelledSafe
 
     AwaitingPermit --> StepIntentDurable
     AwaitingPermit --> CancelledSafe
 
     StepIntentDurable --> Dispatching
     Dispatching --> ReceiptDurable
+    Dispatching --> CancelledSafe
     ReceiptDurable --> Checkpointed
 
     Checkpointed --> RebindWait
     RebindWait --> Preflight
     Checkpointed --> Preflight
     Checkpointed --> Postflight
+    Checkpointed --> ConfirmedFailed
+    Checkpointed --> CancelledSafe
+    RebindWait --> CancelledSafe
 
     Postflight --> Succeeded
     Postflight --> ConfirmedFailed
@@ -1339,6 +1343,11 @@ RecoveryAssessmentPublished
 RecoveryGuidePublished
 ~~~
 
+`SemanticReceiptRecorded` 同时保存 canonical ActionReceipt body、它的
+`receiptDigest` 与预留的 event cursor。`ACTION_RECEIPT.journal_record_sha256`
+指向这条记录。daemon 重启后只有在 body 的 canonical 编码、五个关联 ID 与摘要
+全部复验通过时才重放该 receipt；重放不等于补 checkpoint，更不等于继续执行。
+
 每条记录包含：
 
 - schema version；
@@ -1377,8 +1386,9 @@ ReadOnlyObservationRecorded）为 buffered——丢失只损失记录里的细�
 | permit 收到、ArkForge StepIntent 未落 | 禁止 dispatch；恢复后落同 intent或过期停止 |
 | StepIntent 已落、dispatch 是否发生不明 | outcomeUnknown |
 | dispatch 后无 semantic receipt | outcomeUnknown |
-| receipt durable、checkpoint 未落 | 验证 exact receipt 后补 checkpoint，不重执行 |
-| checkpoint 已落、ArkDeck 未观察 | event replay，不重执行 |
+| receipt durable、checkpoint 未落 | 重放验证通过的 exact receipt，job 仍为 outcomeUnknown；不补 checkpoint、不重执行 |
+| checkpoint 已落、ArkDeck 未观察，且无 durable terminal | event replay 后保持 outcomeUnknown；checkpoint 数量不能证明 success |
+| durable terminal 已落、ArkDeck 未观察 | 按原 cursor 重放验证通过的 receipt，再报告 immutable terminal；不重执行 |
 | postflight 前崩溃 | 只读 postflight/reconcile |
 
 ### 13.4 Cancel
@@ -1811,7 +1821,6 @@ schemaVersion: arkforge.device-profile/v1
 profile:
   id: org.openharmony.dayu200
   version: 1.0.0
-  digest: sha256:...
 identity:
   productModels: [DAYU200]
   soc:
@@ -1821,8 +1830,9 @@ identity:
     allow: [verified-revision-id]
 providers:
   - id: arkforge.rockchip
-    backend: arkforged-native-rockusb   # NRU-004 前的历史值：rkdeveloptool-fixed
-    versionRange: ">=1.0.0 <2.0.0"
+    backend: arkforged-native-rockusb
+    minimumVersion: 0.1.0
+    maximumVersionExclusive: 1.0.0
 artifactCompatibility:
   formats: [rockchip-images-targz]
 modes:
@@ -1832,25 +1842,32 @@ modeTransitions:
   - from: hdc-normal
     to: rockusb-loader
     action: enter-updater
+    serialPolicy: may-change
+    topologyPolicy: may-change
+    rebind:
+      requireDisconnect: true
+      toleranceWindowMs: 30000
+      tolerateTransientMalformed: true
 storage:
   kind: emmc
   logicalBlockSize: 512
 readDomain:
-  write: full-disk               # wlx 全盘可达(AD-006)
-  read: characterize-at-runtime  # rl 读窗须每次执行实测；2026-08-04 观测为扇区 65536 起盲区
+  write: full-disk
+  read: characterize-at-runtime
   erasedMediumFiller: 0xCC
 allowedTargets: []
 protectedTargets: []
 dataImpact:
   userdata: overwritten
-verification:
-  perTarget:
-    default:
-      strategy: readback-if-read-domain-covers
-      fallback: typed-skip + wlx-completion-semantics + build-postflight
-recovery: {}
+  calibration: preserved
+  nonVolatileConfig: preserved
+  secureStorage: preserved
+recovery: null
 evidenceRefs: [AD-006]
 ~~~
+
+该骨架使用 loader 实际接受的字段名和类型；完整机器可校验模型见
+`spec/model/profile.schema.json`，生产实例见 `profiles/dayu200.yaml`。
 
 ### 18.3 Profile invariant
 
@@ -1976,7 +1993,7 @@ evidenceRefs: [AD-006]
 | protocol no-effect NACK | confirmed failed | 0 |
 | write may have started, no receipt | outcomeUnknown | 0 |
 | exit 0, marker absent | outcomeUnknown | 0 |
-| receipt durable, checkpoint missing | recover checkpoint | 不重执行 |
+| receipt durable, checkpoint missing | outcomeUnknown；只重放验证通过的 receipt，不推导 checkpoint/success | 0 |
 | read-only reconcile proves success | original action reconciled | 0 |
 | read-only reconcile inconclusive | outcomeUnknown | 0 |
 | recovery coverage incomplete | recovery ineligible | 0 |

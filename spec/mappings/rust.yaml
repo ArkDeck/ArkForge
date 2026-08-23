@@ -31,18 +31,39 @@ areas:
         symbol: arkforge_core::digest::digest_ordered
       - req: AF-DIG-010
         symbol: arkforge_core::digest::constant_time_eq
+      - req: AF-DIG-011
+        symbol: arkforge_core typed canonical models (no float/path/localized identifier variants)
+        tests: [arkforge-conformance canonical-cbor and plan suites]
+      - req: AF-DIG-012
+        symbol: arkforge_ipc::messages::ActionReceiptSummary::{receipt_digest, to_cbor}
+        tests: [arkforge-conformance action-receipt suite, crates/arkforge-ipc/src/messages.rs tests]
   - area: ID
     symbols:
       - req: AF-ID-001
         symbol: arkforge_core::ids::OpaqueId::new (MAX_ID_LEN = 128)
         tests: [crates/arkforge-core/src/ids.rs tests]
+      - req: AF-ID-002..003
+        symbol: arkforge_core::ids::OpaqueId; arkforge_core::digest::CanonicalCbor
+        tests: [crates/arkforge-core/src/ids.rs tests, arkforge-conformance permit suite]
       - req: AF-ID-004
-        symbol: arkforged::jobs::JobRegistry::create, request_admission
+        symbol: arkforged::jobs::JobRegistry::start, request_admission
+      - req: AF-ID-005
+        symbol: arkforged::jobs::validate_receipt_fact_keys; arkforge_engine::journal::JournalRecord
+        tests: [arkforge-conformance action-receipt 005, journal suite, crates/arkforged/src/jobs.rs tests]
+      - req: AF-ID-006
+        symbol: arkforge_core::effect::DeviceMode::new; arkforge_core::profile::identity_label
+        tests: [crates/arkforge-core/src/effect.rs tests, profile.rs tests::vendor_identity_labels_are_visible_bounded_text]
   - area: PLAN
     symbols:
       - req: AF-PLAN-001
         symbol: arkforge_provider::rockchip::RockchipProvider::build_materialized_plan; arkforge_core::identity::MaturityState::permits_executable_plan; arkforge_core::AuthoritySupportState::permits_execution
         tests: [crates/arkforge-provider/tests/dayu200_vertical.rs, crates/arkforge-provider/tests/hardware_campaign.rs]
+      - req: AF-PLAN-002
+        symbol: arkforge_core::plan::PlanAssessment; arkforge_provider::{build_assessment, evidence_requirements}
+        tests: [arkforge-conformance plan 004]
+      - req: AF-PLAN-003
+        symbol: arkforge_ipc::SessionKind::may_call; arkforged::service::materialize_plan
+        tests: [crates/arkforged/tests/api_surface.rs]
       - req: AF-PLAN-010..012
         symbol: arkforge_core::step::{PublicFlashStep, FlashStepKind::minimum_effect, validate_self_consistent}
         tests: [crates/arkforge-core/src/step.rs tests]
@@ -51,12 +72,12 @@ areas:
         tests: [crates/arkforge-core/src/plan.rs tests, crates/arkforge-engine/src/lib.rs tests]
   - area: PROJ
     symbols:
-      - req: AF-PROJ-001..014
+      - req: AF-PROJ-001..003, AF-PROJ-010..014
         symbol: arkforge_core::projection::{PrivateActionRecord::digest, validate_projection, ProjectionError}
         tests: [crates/arkforge-core/src/projection.rs tests]
   - area: EFF
     symbols:
-      - req: AF-EFF-001..011
+      - req: AF-EFF-001..003, AF-EFF-010..011
         symbol: arkforge_core::effect::{EffectSet::digest, validate_executable, is_destructive, ByteRange}
         tests: [crates/arkforge-core/src/effect.rs tests]
   - area: AUTH
@@ -74,6 +95,9 @@ areas:
         tests: [crates/arkforged/tests/architecture_guard.rs (daemon never names authority_side)]
       - req: AF-AUTH-024
         symbol: arkforged::jobs::JobRegistry::submit_permit (refusal branch)
+      - req: AF-AUTH-025
+        symbol: arkforged::jobs (watch-published requests and inbound submissions only); arkforged::service
+        tests: [crates/arkforged/tests/architecture_guard.rs]
       - req: AF-AUTH-P-001..002
         symbol: arkforge_engine::recovery::{PermitLedger, PermitDisposition}
         tests: [crates/arkforge-engine/src/recovery.rs tests, arkforge-conformance crash suite]
@@ -82,8 +106,8 @@ areas:
       - req: AF-ENG-001..008
         symbol: arkforge_engine::JobState::{as_str, is_terminal, permits_external_dispatch, may_transition_to}
         tests: [crates/arkforge-engine/src/lib.rs tests, arkforge-conformance state-machine suite]
-      - req: AF-ENG-010..016
-        symbol: arkforged::jobs::{JobRegistry::create, submit_permit, complete_dispatch, submit_control_receipt, cancel, advance, request_admission, Job::publish}
+      - req: AF-ENG-010..017
+        symbol: arkforged::jobs::{JobRegistry::start, submit_permit, complete_dispatch, submit_control_receipt, cancel, advance, request_admission, recover_receipt_events, recover_job, Job::publish}
         tests: [crates/arkforged/tests/admission_surface.rs, crates/arkforged/tests/api_surface.rs]
   - area: JRN
     symbols:
@@ -94,7 +118,7 @@ areas:
         symbol: arkforge_engine::durable::{DurableJournal::open, append, sync, RecoveryReport, DurableJournalError}
         tests: [crates/arkforge-engine/src/durable.rs tests (truncation campaign), arkforge-conformance journal suite]
       - req: AF-JRN-019
-        symbol: arkforged::jobs::JobRegistry::create (one file per job)
+        symbol: arkforged::jobs::JobRegistry::start (one file per job)
   - area: CRASH
     symbols:
       - req: AF-CRASH-001
@@ -113,11 +137,19 @@ areas:
         tests: [crates/arkforge-engine/src/superseding.rs tests]
       - req: AF-REC-007
         symbol: arkforged::jobs::JobRegistry::complete_dispatch
+      - req: AF-REC-006
+        symbol: arkforged::service::get_recovery_guide; arkforge_ipc::messages::RecoveryGuide
+      - req: AF-REC-008
+        symbol: ArkDeck RuntimeJobEngine durable arkforge correlation and terminal receipt storage; ArkForgeFlashSession::observeTerminal
+        tests: [ArkDeck RuntimeJobEngineContractTests, ArkDeck ArkForgeFlashSessionContractTests testPassiveObservationConsumesReconciledTerminalAndRestartedReceipt, crates/arkforged/tests/admission_surface.rs a_job_dispatches_every_step_and_reaches_a_verdict_on_each]
   - area: VER
     symbols:
       - req: AF-VER-001..006
         symbol: arkforge_core::verification::{VerificationOutcome, VerificationStrength, TypedSkipReason, FailureClassification, MeasuredReadDomain}; arkforge_provider::rockchip_execute
         tests: [crates/arkforge-core/src/verification.rs tests, crates/arkforge-provider/src/rockchip_execute.rs tests]
+      - req: AF-VER-007
+        symbol: arkforge_provider::rockchip postflight actions; arkforge_standalone::hdc_control::read_properties
+        tests: [crates/arkforged/tests/admission_surface.rs, crates/arkforge-standalone/src/hdc_control.rs tests]
   - area: TRN
     symbols:
       - req: AF-TRN-001..005
@@ -125,9 +157,9 @@ areas:
       - req: AF-TRN-010..018
         symbol: arkforge_transport::evaluate_rebind
         tests: [crates/arkforge-transport/src/lib.rs tests, arkforge-conformance rebind suite]
-      - req: AF-TRN-020..022
+      - req: AF-TRN-020..023
         symbol: arkforge_transport::transcript::{parse, Transcript::digest}; arkforge_transport::replay::TranscriptTransport
-        tests: [crates/arkforge-transport/tests/golden_transcript_parity.rs]
+        tests: [crates/arkforge-transport/tests/golden_transcript_parity.rs, arkforge-conformance transcript-dispatch suite]
   - area: CTL
     symbols:
       - req: AF-CTL-001..007
@@ -141,11 +173,16 @@ areas:
       - req: AF-IPC-003..005
         symbol: arkforge_ipc::{negotiate, SessionKind::may_call, PROTOCOL_MAJOR, PROTOCOL_MINOR}; arkforge_ipc::messages::{Hello, HelloAck, Request, Response}
         tests: [crates/arkforge-ipc/tests/swift_sdk_vectors.rs, arkforge-conformance protobuf suite]
+      - req: AF-IPC-006
+        symbol: arkforged::main pairing bootstrap; arkforge_standalone::supervisor pairing epoch storage
       - req: AF-IPC-010..017
-        symbol: arkforge_ipc::wire::{Reader, write_*, decode_enum, WireError}; arkforge_ipc::messages::*
+        symbol: "arkforge_ipc::wire::{Reader, write_*, decode_enum, WireError}; arkforge_ipc::messages::*"
       - req: AF-IPC-018
         symbol: arkforge_platform
         tests: [crates/arkforge-platform/tests/local_roundtrip.rs]
+      - req: AF-IPC-019
+        symbol: arkforge_arkdeck_adapter::terminal_outcome; ArkDeck ArkForgeFlashSession strict terminal mapper
+        tests: [adapters/arkforge-arkdeck-adapter tests, ArkDeck ArkForgeFlashSessionContractTests]
   - area: ART
     symbols:
       - req: AF-ART-001..002, AF-ART-013
@@ -162,19 +199,19 @@ areas:
         tests: [crates/arkforge-provider/tests/dayu600_vertical.rs]
   - area: PROF
     symbols:
-      - req: AF-PROF-001..023
+      - req: AF-PROF-001..004, AF-PROF-010..015, AF-PROF-020..023
         symbol: arkforge_core::profile::{load, DeviceProfile::validate, digest, identity, execution_blockers}
         tests: [crates/arkforge-core/src/profile.rs tests, crates/arkforge-core/tests/dayu200_profile_parity.rs]
   - area: YAML
     symbols:
-      - req: AF-YAML-001..015
+      - req: AF-YAML-001..006, AF-YAML-010..015
         symbol: arkforge_core::yaml::parse
         tests: [crates/arkforge-core/src/yaml.rs tests, arkforge-conformance strict-yaml suite]
   - area: CLI
     symbols:
       - req: AF-CLI-001..009
         symbol: arkforge_cli (crates/arkforge-cli/src/main.rs); arkforge_standalone::application
-        tests: [crates/arkforge-cli/tests/cli_artifact.rs, cli_signing.rs]
+        tests: [crates/arkforge-cli/tests/cli_artifact.rs, cli_signing.rs, conformance_blackbox.rs, arkforge-conformance cli suite]
   - area: PORT
     symbols:
       - req: ports/durability.md

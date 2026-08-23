@@ -2,6 +2,7 @@
 
 pub mod admission;
 pub mod cbor;
+pub mod cli;
 pub mod crash;
 pub mod hmac;
 pub mod journal;
@@ -9,8 +10,11 @@ pub mod permit;
 pub mod plan;
 pub mod protobuf;
 pub mod rebind;
+pub mod receipt;
+pub mod reconcile;
 pub mod sha256;
 pub mod state_machine;
+pub mod transcript_dispatch;
 pub mod yaml;
 
 /// Case IDs are `AF-CONF-<SUITE>-<NNN>`.

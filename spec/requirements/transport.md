@@ -19,15 +19,17 @@ status: draft
 source: crates/arkforge-transport/src/usb.rs, crates/arkforge-transport/src/lib.rs DeviceObservation::admission_facts_digest
 tests: [AF-CONF-PLAN-003]
 
-`topologyDigest = SHA-256("arkforge/v1/device-facts\0" || locationId as 4-byte
-big-endian)` on IOKit-style hosts; `serialEvidence.digest = SHA-256(domain ||
-serial bytes)`; `descriptorDigest = SHA-256(domain || descriptor payload)`; the
-admission `deviceFactsDigest` is `SHA-256(domain || cbor({mode, topologyDigest,
+`topologyDigest = SHA-256("arkforge/v1/usb-topology\0" || locationId as 4-byte
+big-endian)` on IOKit-style hosts; `serialEvidence.digest =
+SHA-256("arkforge/v1/device-serial\0" || serial bytes)`; `descriptorDigest =
+SHA-256("arkforge/v1/usb-descriptor\0" || descriptor payload)`; the admission
+`deviceFactsDigest` is `SHA-256("arkforge/v1/admission-device-facts\0" || cbor({mode, topologyDigest,
 descriptorDigest, serialEvidence, protocolIdentity, identityStrength,
 malformedDescriptor}))` — note it excludes `observationId`, `observedAtEpochMs`
 and `providerCandidates`, so two observations of the same device at different
-times hash the same. The `device-facts` domain is shared by several preimage
-shapes (ISSUES SI-008).
+times hash the same. A full observation uses the separate
+`"arkforge/v1/device-observation\0"` domain. Every preimage shape has exactly
+one domain.
 
 ### AF-TRN-003 — identity strength is ordered
 status: normative
@@ -52,6 +54,16 @@ tests: [AF-CONF-ADMISSION-007, AF-CONF-ADMISSION-008]
 An open session has a digest under `"arkforge/v1/transport-session\0"`; a
 re-open, a detach or a re-enumeration changes it. Admission freshness treats any
 change as a broken continuity (AF-AUTH-003).
+
+### AF-TRN-023 — transcript dispatch is closed replay
+status: normative
+tests: [AF-CONF-TRANSCRIPT-DISPATCH-001..002]
+
+A transcript runner selects an invocation by semantic action and zero-based
+occurrence. It may construct evidence and an ActionReceipt only from that
+record. A missing occurrence is `TRANSPORT_UNSUPPORTED`; it MUST NOT invent a
+response, fall through to a hardware backend, or make a replay toolchain
+executable.
 
 ## Rebind (AF-CONF-REBIND-001..018)
 

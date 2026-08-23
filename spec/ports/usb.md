@@ -57,9 +57,10 @@ the port's.
 detail, never as the class.
 
 ## Identity facts this port feeds
-`locationId` → topology digest (`SHA-256("arkforge/v1/device-facts\0" ||
-locationId as 4-byte big-endian)`); `serial` bytes → serial digest;
-descriptor bytes → descriptor digest; `productName`/`vendorName` →
+`locationId` → topology digest (`SHA-256("arkforge/v1/usb-topology\0" ||
+locationId as 4-byte big-endian)`); `serial` bytes →
+`"arkforge/v1/device-serial\0"`; descriptor bytes →
+`"arkforge/v1/usb-descriptor\0"`; `productName`/`vendorName` →
 protocol-identity facts `usb.productName` / `usb.vendorName` (AF-TRN-002).
 
 ## Conformance hooks

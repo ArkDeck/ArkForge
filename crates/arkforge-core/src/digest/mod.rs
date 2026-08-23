@@ -24,7 +24,12 @@ pub enum Domain {
     PublicStep,
     EffectSet,
     Plan,
-    DeviceFacts,
+    DeviceObservation,
+    AdmissionDeviceFacts,
+    UsbTopology,
+    UsbDescriptor,
+    DeviceSerial,
+    RescueDeviceFacts,
     TransportSession,
     ProviderFacts,
     ToolchainFacts,
@@ -43,6 +48,36 @@ pub enum Domain {
 }
 
 impl Domain {
+    pub const ALL: [Domain; 27] = [
+        Domain::PrivateAction,
+        Domain::ProviderExecutionPlan,
+        Domain::PublicProjection,
+        Domain::PublicStep,
+        Domain::EffectSet,
+        Domain::Plan,
+        Domain::DeviceObservation,
+        Domain::AdmissionDeviceFacts,
+        Domain::UsbTopology,
+        Domain::UsbDescriptor,
+        Domain::DeviceSerial,
+        Domain::RescueDeviceFacts,
+        Domain::TransportSession,
+        Domain::ProviderFacts,
+        Domain::ToolchainFacts,
+        Domain::ArtifactFacts,
+        Domain::ArtifactManifest,
+        Domain::DeviceProfile,
+        Domain::AdmissionSnapshot,
+        Domain::ActionReceipt,
+        Domain::PossibleEffectSet,
+        Domain::JournalRecord,
+        Domain::Transcript,
+        Domain::RecoveryCoverage,
+        Domain::RescuePlan,
+        Domain::RescueReceipt,
+        Domain::AuthoritySupportKey,
+    ];
+
     /// The literal prefix bytes. The trailing NUL keeps one domain from being a
     /// prefix of another once a longer name is added.
     pub const fn as_bytes(self) -> &'static [u8] {
@@ -53,7 +88,12 @@ impl Domain {
             Domain::PublicStep => b"arkforge/v1/public-step\0",
             Domain::EffectSet => b"arkforge/v1/effect-set\0",
             Domain::Plan => b"arkforge/v1/plan\0",
-            Domain::DeviceFacts => b"arkforge/v1/device-facts\0",
+            Domain::DeviceObservation => b"arkforge/v1/device-observation\0",
+            Domain::AdmissionDeviceFacts => b"arkforge/v1/admission-device-facts\0",
+            Domain::UsbTopology => b"arkforge/v1/usb-topology\0",
+            Domain::UsbDescriptor => b"arkforge/v1/usb-descriptor\0",
+            Domain::DeviceSerial => b"arkforge/v1/device-serial\0",
+            Domain::RescueDeviceFacts => b"arkforge/v1/rescue-device-facts\0",
             Domain::TransportSession => b"arkforge/v1/transport-session\0",
             Domain::ProviderFacts => b"arkforge/v1/provider-facts\0",
             Domain::ToolchainFacts => b"arkforge/v1/toolchain-facts\0",
@@ -116,31 +156,8 @@ mod tests {
 
     #[test]
     fn domains_are_distinct_and_nul_terminated() {
-        let all = [
-            Domain::PrivateAction,
-            Domain::ProviderExecutionPlan,
-            Domain::PublicProjection,
-            Domain::PublicStep,
-            Domain::EffectSet,
-            Domain::Plan,
-            Domain::DeviceFacts,
-            Domain::TransportSession,
-            Domain::ProviderFacts,
-            Domain::ToolchainFacts,
-            Domain::ArtifactFacts,
-            Domain::ArtifactManifest,
-            Domain::DeviceProfile,
-            Domain::AdmissionSnapshot,
-            Domain::ActionReceipt,
-            Domain::PossibleEffectSet,
-            Domain::JournalRecord,
-            Domain::Transcript,
-            Domain::RecoveryCoverage,
-            Domain::RescuePlan,
-            Domain::RescueReceipt,
-        ];
         let mut seen = std::collections::BTreeSet::new();
-        for domain in all {
+        for domain in Domain::ALL {
             let bytes = domain.as_bytes();
             assert_eq!(
                 *bytes.last().unwrap(),

@@ -38,7 +38,10 @@ client (`DAEMON_UNAVAILABLE` after it); stream reads have no global timeout —
 A client reconnects and resumes `watchJob` with `from_sequence`; requests are
 idempotent by `request_id` only where the API says so (`submitStepPermit`
 retransmits the same permit bytes; `startExecution` is not idempotent and a
-second call for the same plan is refused).
+second call for the same plan is refused). A controller therefore persists the
+`startExecution` job/plan correlation before submitting any permit and, after a
+controller restart, resumes `watchJob` for that exact job (AF-REC-008). A
+process-local job or receipt cache is never recovery evidence.
 
 ## Error classes
 `DAEMON_UNAVAILABLE`, `RUNTIME_ALREADY_RUNNING`, `PROTOCOL_REFUSED`,

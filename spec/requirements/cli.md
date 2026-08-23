@@ -2,7 +2,7 @@
 status: draft
 area: CLI
 rationale: docs/openspec/chg-agent-native-cli/{proposal,design,verification}.md
-conformance: none yet — verified as a black box (see `conformance/README.md` gaps)
+conformance: cli (process-level vectors, also executed by arkforge-cli tests)
 
 The CLI is the process boundary a full port is verified through. What is
 normative here is the *contract* (command tree, JSON envelopes, stable codes,
@@ -10,27 +10,27 @@ refusal semantics), not the Rust frontend.
 
 ### AF-CLI-001 — one command tree
 status: normative
-tests: []
+tests: [AF-CONF-CLI-001..004]
 
-`doctor`, `device {list,show,probe,wait}`, `artifact {import,inspect,list,show}`,
-`flash {assess,plan,apply}`, `job {list,show,watch,cancel,reconcile,recovery}`,
-`rescue {list,inspect,read,plan,apply}`, `daemon {run,start,stop,status}`,
-`signing verify`, `completion`, `help`. A port MUST implement the same tree with
+`status`, `device`, `artifact`, `flash`, `apply`, `watch`, `cancel`, `job`,
+`rescue`, `daemon`, `config`, `signing`, `completion`, `help` form the top-level
+tree; their subcommands are the machine-help index. A port MUST implement the same tree with
 the same spellings; `arkforge help [path] --format json` MUST describe it as
 `arkforge.command-help/v1` (index: `arkforge.command-help-index/v1`).
 
 ### AF-CLI-002 — structured output is pure
 status: normative
-tests: []
+tests: [AF-CONF-CLI-002]
 
-With `--format json` (or `jsonl` for streams) stdout carries exactly one JSON
+With global `--output json` (or `jsonl` for streams; machine help itself uses
+`help ... --format json`) stdout carries exactly one JSON
 document per record, each with a `schema` member (`arkforge.<name>/v<n>`), no
 colour, progress, prompt or log text. Human output goes to stdout only without
 `--format`; diagnostics go to stderr.
 
 ### AF-CLI-003 — the error envelope
 status: normative
-tests: []
+tests: [AF-CONF-CLI-004]
 
 A failure is `{"schema": "arkforge.command-result/v1", "ok": false, "command":
 [...], "error": {"code", "message", "remediation", "retryable",

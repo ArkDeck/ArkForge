@@ -32,7 +32,7 @@ body; it is lowercase hex text on JSON/YAML surfaces.
 
 ### AF-ID-004 — identifiers the daemon mints
 status: draft
-source: crates/arkforged/src/jobs.rs JobRegistry::create, request_admission
+source: crates/arkforged/src/jobs.rs JobRegistry::start, request_admission
 tests: []
 
 The reference daemon mints: `JOB-<16 uppercase hex digits of epoch ms>-<4 digit
@@ -44,7 +44,20 @@ structure out of them.
 
 ### AF-ID-005 — fact keys are identifiers
 status: normative
-tests: [AF-CONF-JOURNAL-001]
+tests: [AF-CONF-JOURNAL-001, AF-CONF-RECEIPT-005]
 
-Journal fact keys and protocol-identity fact keys are OpaqueIds. Fact *values*
-are free UTF-8 text.
+Journal, protocol-identity and ActionReceipt fact keys are OpaqueIds. Ingress
+MUST reject an invalid or duplicate key before consuming a linear transaction.
+Fact *values* are free UTF-8 text.
+
+### AF-ID-006 — semantic tokens and vendor labels are distinct types
+status: normative
+tests: []
+
+`DeviceMode` is not an OpaqueId: it is a protocol/profile token with the
+narrower `^[a-z0-9-]{1,64}$` grammar. `productModels` and allowed hardware
+revision labels are vendor-visible text, 1..128 UTF-8 bytes, with no control
+characters or leading/trailing whitespace; they may contain spaces or
+non-ASCII characters. These types are intentionally not unified: identifiers
+are machine-owned keys, modes are closed tokens, and labels reproduce vendor
+facts byte-for-byte.

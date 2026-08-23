@@ -1,5 +1,6 @@
 //! `arkforge-conformance generate [DIR]` writes the fixtures;
-//! `arkforge-conformance check [DIR]` reports drift and exits non-zero on any.
+//! `arkforge-conformance check [DIR]` reports drift and exits non-zero on any;
+//! `arkforge-conformance validate [REPO]` validates published model instances.
 
 use std::path::PathBuf;
 use std::process::ExitCode;
@@ -43,8 +44,28 @@ fn main() -> ExitCode {
                 ExitCode::FAILURE
             }
         }
+        "validate" => {
+            let repository = args.get(1).map(PathBuf::from).unwrap_or_else(|| {
+                PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+                    .join("..")
+                    .join("..")
+            });
+            let report = arkforge_conformance::schema::validate_repository(&repository);
+            if report.is_valid() {
+                println!(
+                    "validated {} schemas, {} profiles, {} transcripts and {} digest domains",
+                    report.schemas, report.profiles, report.transcripts, report.domains
+                );
+                ExitCode::SUCCESS
+            } else {
+                for problem in report.problems {
+                    eprintln!("{problem}");
+                }
+                ExitCode::FAILURE
+            }
+        }
         _ => {
-            eprintln!("usage: arkforge-conformance (generate|check) [DIR]");
+            eprintln!("usage: arkforge-conformance (generate|check) [DIR] | validate [REPO]");
             ExitCode::FAILURE
         }
     }

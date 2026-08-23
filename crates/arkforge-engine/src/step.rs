@@ -31,6 +31,7 @@ use arkforge_authority_api::{
 use arkforge_core::Sha256Digest;
 use arkforge_core::ids::OpaqueId;
 use core::fmt;
+use std::collections::BTreeSet;
 
 /// A step whose permit verified and whose intent is on stable storage.
 ///
@@ -66,27 +67,49 @@ impl AdmittedStep {
 /// the journal, which is the correct record of a process that died mid-step.
 #[derive(Debug)]
 pub struct DispatchInFlight {
-    permit_id: String,
-    step_id: String,
+    context: StepContext,
     intent_digest: Sha256Digest,
+    dispatch_digest: Sha256Digest,
 }
 
 impl DispatchInFlight {
+    pub fn job_id(&self) -> &str {
+        &self.context.job_id
+    }
+
+    pub fn plan_id(&self) -> &str {
+        &self.context.plan_id
+    }
+
+    pub fn step_id(&self) -> &str {
+        &self.context.step_id
+    }
+
+    pub fn attempt_id(&self) -> &str {
+        &self.context.attempt_id
+    }
+
     pub fn permit_id(&self) -> &str {
-        &self.permit_id
+        &self.context.permit_id
     }
 
     pub fn intent_digest(&self) -> Sha256Digest {
         self.intent_digest
+    }
+
+    /// The `externalDispatchStarted` record written immediately before this
+    /// token was issued.
+    pub fn dispatch_digest(&self) -> Sha256Digest {
+        self.dispatch_digest
     }
 }
 
 /// A step with a durable semantic receipt, not yet checkpointed.
 #[derive(Debug)]
 pub struct CompletedStep {
-    permit_id: String,
-    step_id: String,
+    context: StepContext,
     receipt_digest: Sha256Digest,
+    receipt_record_digest: Sha256Digest,
 }
 
 impl CompletedStep {
@@ -95,7 +118,53 @@ impl CompletedStep {
     }
 
     pub fn permit_id(&self) -> &str {
-        &self.permit_id
+        &self.context.permit_id
+    }
+
+    /// Digest of the durable `semanticReceiptRecorded` journal record.
+    pub fn receipt_record_digest(&self) -> Sha256Digest {
+        self.receipt_record_digest
+    }
+}
+
+#[derive(Debug)]
+struct StepContext {
+    job_id: String,
+    plan_id: String,
+    step_id: String,
+    attempt_id: String,
+    permit_id: String,
+}
+
+impl StepContext {
+    fn from_permit(permit: &VerifiedStepPermit) -> Self {
+        let permit = permit.permit();
+        Self {
+            job_id: permit.job_id.as_str().to_string(),
+            plan_id: permit.plan_id.as_str().to_string(),
+            step_id: permit.step_id.as_str().to_string(),
+            attempt_id: permit.attempt_id.as_str().to_string(),
+            permit_id: permit.permit_id.as_str().to_string(),
+        }
+    }
+
+    fn facts(&self) -> Result<Vec<(OpaqueId, String)>, StepError> {
+        Ok(vec![
+            (key(fact::JOB_ID)?, self.job_id.clone()),
+            (key(fact::PLAN_ID)?, self.plan_id.clone()),
+            (key(fact::STEP_ID)?, self.step_id.clone()),
+            (key(fact::ATTEMPT_ID)?, self.attempt_id.clone()),
+            (key(fact::PERMIT_ID)?, self.permit_id.clone()),
+        ])
+    }
+
+    fn facts_with_receipt(
+        &self,
+        receipt_digest: Sha256Digest,
+    ) -> Result<Vec<(OpaqueId, String)>, StepError> {
+        let mut facts = self.facts()?;
+        facts.push((key(fact::RECEIPT_DIGEST)?, receipt_digest.to_string()));
+        Ok(facts)
     }
 }
 
@@ -134,21 +203,14 @@ pub fn admit_step(
 
     let verified = verify_permit(permit, secret, intent, false).map_err(StepError::Verification)?;
 
-    let step_id = permit.step_id.as_str().to_string();
-    let attempt_id = permit.attempt_id.as_str().to_string();
-    let job_id = permit.job_id.as_str().to_string();
+    let context = StepContext::from_permit(&verified);
 
     journal.append(
         JournalRecordKind::StepPermitAccepted,
         intent.now_epoch_ms,
         1,
-        subject(&step_id)?,
-        vec![
-            (key(fact::PERMIT_ID)?, permit_id.clone()),
-            (key(fact::JOB_ID)?, job_id.clone()),
-            (key(fact::STEP_ID)?, step_id.clone()),
-            (key(fact::ATTEMPT_ID)?, attempt_id.clone()),
-        ],
+        subject(&context.step_id)?,
+        context.facts()?,
     )?;
 
     // After this call returns, the intent is on stable storage. Nothing before
@@ -158,13 +220,8 @@ pub fn admit_step(
         JournalRecordKind::StepIntentRecorded,
         intent.now_epoch_ms,
         1,
-        subject(&step_id)?,
-        vec![
-            (key(fact::PERMIT_ID)?, permit_id),
-            (key(fact::JOB_ID)?, job_id),
-            (key(fact::STEP_ID)?, step_id),
-            (key(fact::ATTEMPT_ID)?, attempt_id),
-        ],
+        subject(&context.step_id)?,
+        context.facts()?,
     )?;
 
     Ok(AdmittedStep {
@@ -181,35 +238,44 @@ pub fn begin_dispatch(
     step: AdmittedStep,
     now_epoch_ms: u64,
 ) -> Result<DispatchInFlight, StepError> {
-    let permit_id = step.permit.permit().permit_id.as_str().to_string();
-    let step_id = step.permit.permit().step_id.as_str().to_string();
-    let job_id = step.permit.permit().job_id.as_str().to_string();
+    begin_dispatch_with_facts(journal, step, now_epoch_ms, Vec::new())
+}
+
+/// Marks dispatch as started and attaches operation-specific, non-authority
+/// facts to both durable boundary records.
+///
+/// The engine always supplies the identity facts itself. Callers may add facts
+/// such as a managed-control request id, but cannot omit the job/plan/step/
+/// attempt/permit correlation used during recovery.
+pub fn begin_dispatch_with_facts(
+    journal: &mut DurableJournal,
+    step: AdmittedStep,
+    now_epoch_ms: u64,
+    extra_facts: Vec<(String, String)>,
+) -> Result<DispatchInFlight, StepError> {
+    let context = StepContext::from_permit(&step.permit);
+    let mut facts = context.facts()?;
+    extend_unique_facts(&mut facts, extra_facts)?;
 
     journal.append(
         JournalRecordKind::PermitConsuming,
         now_epoch_ms,
         1,
-        subject(&step_id)?,
-        vec![
-            (key(fact::PERMIT_ID)?, permit_id.clone()),
-            (key(fact::JOB_ID)?, job_id.clone()),
-        ],
+        subject(&context.step_id)?,
+        facts.clone(),
     )?;
-    journal.append(
+    let dispatch_digest = journal.append(
         JournalRecordKind::ExternalDispatchStarted,
         now_epoch_ms,
         1,
-        subject(&step_id)?,
-        vec![
-            (key(fact::PERMIT_ID)?, permit_id.clone()),
-            (key(fact::JOB_ID)?, job_id),
-        ],
+        subject(&context.step_id)?,
+        facts,
     )?;
 
     Ok(DispatchInFlight {
-        permit_id,
-        step_id,
+        context,
         intent_digest: step.intent_digest,
+        dispatch_digest,
     })
 }
 
@@ -224,15 +290,13 @@ pub fn record_transport_evidence(
     now_epoch_ms: u64,
     facts: Vec<(String, String)>,
 ) -> Result<(), StepError> {
-    let mut entries = vec![(key(fact::PERMIT_ID)?, in_flight.permit_id.clone())];
-    for (name, value) in facts {
-        entries.push((key(&name)?, value));
-    }
+    let mut entries = in_flight.context.facts()?;
+    extend_unique_facts(&mut entries, facts)?;
     journal.append(
         JournalRecordKind::TransportEvidenceRecorded,
         now_epoch_ms,
         1,
-        subject(&in_flight.step_id)?,
+        subject(&in_flight.context.step_id)?,
         entries,
     )?;
     Ok(())
@@ -245,31 +309,42 @@ pub fn record_receipt(
     receipt_digest: Sha256Digest,
     now_epoch_ms: u64,
 ) -> Result<CompletedStep, StepError> {
-    journal.append(
+    record_receipt_with_facts(journal, in_flight, receipt_digest, Vec::new(), now_epoch_ms)
+}
+
+/// Records a semantic receipt with durable reconstruction metadata.
+///
+/// Extra facts belong only to the semantic receipt record. The following
+/// consumption and checkpoint markers remain compact and refer to it by its
+/// canonical digest. Engine-owned correlation keys cannot be shadowed.
+pub fn record_receipt_with_facts(
+    journal: &mut DurableJournal,
+    in_flight: DispatchInFlight,
+    receipt_digest: Sha256Digest,
+    extra_facts: Vec<(String, String)>,
+    now_epoch_ms: u64,
+) -> Result<CompletedStep, StepError> {
+    let mut semantic_facts = in_flight.context.facts_with_receipt(receipt_digest)?;
+    extend_unique_facts(&mut semantic_facts, extra_facts)?;
+    let receipt_record_digest = journal.append(
         JournalRecordKind::SemanticReceiptRecorded,
         now_epoch_ms,
         1,
-        subject(&in_flight.step_id)?,
-        vec![
-            (key(fact::PERMIT_ID)?, in_flight.permit_id.clone()),
-            (key(fact::RECEIPT_DIGEST)?, receipt_digest.to_string()),
-        ],
+        subject(&in_flight.context.step_id)?,
+        semantic_facts,
     )?;
     journal.append(
         JournalRecordKind::PermitConsumed,
         now_epoch_ms,
         1,
-        subject(&in_flight.step_id)?,
-        vec![
-            (key(fact::PERMIT_ID)?, in_flight.permit_id.clone()),
-            (key(fact::RECEIPT_DIGEST)?, receipt_digest.to_string()),
-        ],
+        subject(&in_flight.context.step_id)?,
+        in_flight.context.facts_with_receipt(receipt_digest)?,
     )?;
 
     Ok(CompletedStep {
-        permit_id: in_flight.permit_id,
-        step_id: in_flight.step_id,
+        context: in_flight.context,
         receipt_digest,
+        receipt_record_digest,
     })
 }
 
@@ -278,21 +353,17 @@ pub fn checkpoint(
     journal: &mut DurableJournal,
     completed: CompletedStep,
     now_epoch_ms: u64,
-) -> Result<(), StepError> {
-    journal.append(
+) -> Result<Sha256Digest, StepError> {
+    let digest = journal.append(
         JournalRecordKind::StepCheckpointed,
         now_epoch_ms,
         1,
-        subject(&completed.step_id)?,
-        vec![
-            (key(fact::PERMIT_ID)?, completed.permit_id),
-            (
-                key(fact::RECEIPT_DIGEST)?,
-                completed.receipt_digest.to_string(),
-            ),
-        ],
+        subject(&completed.context.step_id)?,
+        completed
+            .context
+            .facts_with_receipt(completed.receipt_digest)?,
     )?;
-    Ok(())
+    Ok(digest)
 }
 
 fn subject(value: &str) -> Result<OpaqueId, StepError> {
@@ -301,6 +372,24 @@ fn subject(value: &str) -> Result<OpaqueId, StepError> {
 
 fn key(value: &str) -> Result<OpaqueId, StepError> {
     OpaqueId::new(value).map_err(|_| StepError::UnusableIdentifier(value.to_string()))
+}
+
+fn extend_unique_facts(
+    facts: &mut Vec<(OpaqueId, String)>,
+    extra: Vec<(String, String)>,
+) -> Result<(), StepError> {
+    let mut seen = facts
+        .iter()
+        .map(|(name, _)| name.as_str().to_string())
+        .collect::<BTreeSet<_>>();
+    for (name, value) in extra {
+        let name = key(&name)?;
+        if !seen.insert(name.as_str().to_string()) {
+            return Err(StepError::DuplicateFactKey(name.to_string()));
+        }
+        facts.push((name, value));
+    }
+    Ok(())
 }
 
 #[derive(Debug)]
@@ -322,6 +411,7 @@ pub enum StepError {
     Verification(PermitVerificationError),
     Journal(DurableJournalError),
     UnusableIdentifier(String),
+    DuplicateFactKey(String),
 }
 
 impl fmt::Display for StepError {
@@ -349,6 +439,12 @@ impl fmt::Display for StepError {
             StepError::Journal(error) => write!(f, "{error}"),
             StepError::UnusableIdentifier(value) => {
                 write!(f, "{value:?} is not usable as a journal identifier")
+            }
+            StepError::DuplicateFactKey(value) => {
+                write!(
+                    f,
+                    "journal fact key {value:?} duplicates a reserved or prior key"
+                )
             }
         }
     }
@@ -492,6 +588,24 @@ mod tests {
                 JournalRecordKind::StepCheckpointed,
             ]
         );
+        for record in reopened.journal().records() {
+            for (name, expected) in [
+                (fact::JOB_ID, "JOB-1"),
+                (fact::PLAN_ID, "PLAN-1"),
+                (fact::STEP_ID, "STEP-1"),
+                (fact::ATTEMPT_ID, "ATTEMPT-1"),
+                (fact::PERMIT_ID, "PERMIT-1"),
+            ] {
+                assert!(
+                    record
+                        .facts
+                        .iter()
+                        .any(|(key, value)| key.as_str() == name && value == expected),
+                    "{} omitted {name}",
+                    record.kind.as_str()
+                );
+            }
+        }
     }
 
     /// The property AF-V2 exists for: a restarted daemon that is handed the
@@ -553,6 +667,32 @@ mod tests {
             }
             other => panic!("a second intent was allowed: {other:?}"),
         }
+    }
+
+    #[test]
+    fn receipt_reconstruction_facts_cannot_shadow_engine_identity() {
+        let dir = TempDir::new("receipt-fact-shadow");
+        let secret = secret();
+        let permit = permit(&secret);
+        let mut journal = dir.journal();
+        let admitted = admit_step(&mut journal, &permit, &secret, &intent()).unwrap();
+        let in_flight = begin_dispatch(&mut journal, admitted, 3_000).unwrap();
+        let records_before = journal.len();
+
+        let error = record_receipt_with_facts(
+            &mut journal,
+            in_flight,
+            sha256(b"receipt"),
+            vec![(fact::RECEIPT_DIGEST.into(), "forged".into())],
+            4_000,
+        )
+        .unwrap_err();
+
+        assert!(matches!(
+            error,
+            StepError::DuplicateFactKey(key) if key == fact::RECEIPT_DIGEST
+        ));
+        assert_eq!(journal.len(), records_before);
     }
 
     #[test]

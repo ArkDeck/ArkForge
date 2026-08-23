@@ -48,7 +48,7 @@ pub struct UsbDeviceRecord {
 impl UsbDeviceRecord {
     /// Hash of the port path.
     pub fn topology_digest(&self) -> Sha256Digest {
-        digest_in_domain(Domain::DeviceFacts, &self.location_id.to_be_bytes())
+        digest_in_domain(Domain::UsbTopology, &self.location_id.to_be_bytes())
     }
 
     /// Hash of the descriptor facts, excluding the serial.
@@ -66,14 +66,14 @@ impl UsbDeviceRecord {
         payload.extend_from_slice(self.vendor_name.as_deref().unwrap_or("").as_bytes());
         payload.push(0);
         payload.extend_from_slice(self.product_name.as_deref().unwrap_or("").as_bytes());
-        digest_in_domain(Domain::DeviceFacts, &payload)
+        digest_in_domain(Domain::UsbDescriptor, &payload)
     }
 
     pub fn serial_evidence(&self) -> SerialEvidence {
         match &self.serial {
             None => SerialEvidence::Absent,
             Some(serial) => SerialEvidence::Descriptor {
-                digest: digest_in_domain(Domain::DeviceFacts, serial.as_bytes()),
+                digest: digest_in_domain(Domain::DeviceSerial, serial.as_bytes()),
             },
         }
     }

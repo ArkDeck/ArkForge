@@ -9,9 +9,11 @@
 //! dispatcher; the provider itself remains responsible for lowering and the
 //! published recovery coverage reference.
 
+use crate::rockchip_execute::StoredAction;
 use crate::{
     FlashIntent, FlashProvider, MaterializeRequest, MaterializedPlan, MaturityRegistry,
-    ProbeContext, ProviderDescriptor, ProviderError, ProviderProbe, ValidationReport,
+    ProbeContext, ProviderDescriptor, ProviderError, ProviderProbe, ReadOnlyReconcilePlan,
+    ReconcileRequest, ValidationReport,
 };
 use arkforge_artifact::manifest::ArtifactManifest;
 use arkforge_core::digest::{
@@ -963,6 +965,62 @@ impl FlashProvider for RockchipProvider {
         maturity: &MaturityRegistry,
     ) -> Result<MaterializedPlan, ProviderError> {
         self.build_materialized_plan(request, maturity)
+    }
+
+    fn reconcile_read_only(
+        &self,
+        request: &ReconcileRequest<'_>,
+    ) -> Result<ReadOnlyReconcilePlan, ProviderError> {
+        let mut actions = Vec::new();
+        for record in &request.private_plan.actions {
+            let decoded = StoredAction::decode(record)
+                .map_err(|error| ProviderError::Core(error.to_string()))?;
+            let selected = match decoded {
+                // These establish exact native identity, the device-owned
+                // table and the measured read face used by every readback.
+                StoredAction::ProbeLoader
+                | StoredAction::ValidatePartitionTable { .. }
+                | StoredAction::CharacterizeReadDomain => true,
+                StoredAction::ReadbackPartition { .. } => request
+                    .possible_effects
+                    .iter()
+                    .any(|effect| readback_observes(record, effect)),
+                // Managed control, write and reset are never reconciliation
+                // actions, even when they appeared in the original plan.
+                StoredAction::ManagedControl { .. }
+                | StoredAction::WritePartition { .. }
+                | StoredAction::ResetDevice => false,
+            };
+            if selected {
+                if record.effect_class != WorkflowEffect::ReadOnly {
+                    return Err(ProviderError::FactsInsufficient(format!(
+                        "reconcile action {} is declared {}, not readOnly",
+                        record.action_id,
+                        record.effect_class.as_str()
+                    )));
+                }
+                actions.push(record.clone());
+            }
+        }
+        Ok(ReadOnlyReconcilePlan { actions })
+    }
+}
+
+fn readback_observes(record: &PrivateActionRecord, effect: &PersistentEffect) -> bool {
+    match (effect, &record.declared_target) {
+        (
+            PersistentEffect::WritePartition {
+                partition,
+                range,
+                content,
+            },
+            Some(SemanticTarget::Partition(observed_partition)),
+        ) => {
+            observed_partition == partition
+                && record.declared_range == Some(*range)
+                && record.content_digest == Some(*content)
+        }
+        _ => false,
     }
 }
 

@@ -1,0 +1,26 @@
+{
+  "id": "AF-CONF-RECONCILE-004",
+  "suite": "reconcile",
+  "title": "present and absent effects are a settled partial execution",
+  "kind": "derive",
+  "requirements": ["AF-REC-002"],
+  "description": "Reduce read-only observations only. No verdict authorizes replay, and an indeterminate or empty observation set remains stillUnknown.",
+  "input": {
+    "observations": [
+      {
+        "effect": "system",
+        "observation": "present"
+      },
+      {
+        "effect": "vendor",
+        "observation": "absent"
+      }
+    ]
+  },
+  "expected": {
+    "verdict": "confirmedPartial",
+    "present": 1,
+    "absent": 1
+  },
+  "files": {}
+}
