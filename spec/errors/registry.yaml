@@ -1,0 +1,1204 @@
+# ArkForge Spec v1 — stable code registry
+#
+# schema: arkforge.error-registry/v1
+# status: draft — every `code` is a literal found in the reference implementation
+#         (`source` names the file); `condition` and `retry` are curated for the
+#         codes a port must reproduce and abbreviated for the long tail.
+#
+# retry: retry-same | new-permit | new-plan | operator | never
+#   never     — a protocol/invariant violation; retrying the same input cannot succeed
+#   operator  — needs a human/agent decision (different input, environment fix)
+#
+# Codes emitted by `format!` rather than a literal do not exist in this
+# implementation: every code is a literal, so a port can enumerate them.
+schema: arkforge.error-registry/v1
+status: draft
+
+surfaces:
+  - id: cli
+    description: "`arkforge` CLI: `arkforge.command-result/v1` → `error.code`"
+    source: crates/arkforge-cli/src/main.rs CliError
+  - id: application
+    description: "standalone application service (CLI/ArkFlash DTO layer): `ApplicationError.code`"
+    source: crates/arkforge-standalone/src/application/dto.rs ApplicationError
+  - id: supervisor
+    description: "standalone authority supervisor (local authority + daemon lifecycle)"
+    source: crates/arkforge-standalone/src/supervisor.rs
+  - id: hdc
+    description: "standalone managed HDC control port"
+    source: crates/arkforge-standalone/src/hdc_control.rs
+  - id: ipc-error
+    description: "daemon IPC: `Error.code` inside a non-OK `Response.payload`"
+    source: crates/arkforged/src/service.rs
+  - id: job
+    description: "daemon job registry: surfaced as `SubmitStepPermitResponse.rejection_code`, `SubmitManagedControlReceiptResponse.rejection_code`, or an ipc-error"
+    source: crates/arkforged/src/jobs.rs JobError::code
+  - id: rescue
+    description: "daemon rescue surface (`arkforge rescue …`)"
+    source: crates/arkforged/src/rescue.rs
+  - id: packaging
+    description: "macOS signing/packaging contract checks (AFD-0003)"
+    source: crates/arkforged/src/packaging.rs
+  - id: artifact
+    description: "artifact parser codes, carried inside ARTIFACT_REJECTED and in inspection results"
+    source: crates/arkforge-artifact/src/tar.rs ArchiveError::code
+  - id: handshake-blocker
+    description: "`HelloAck.execution_blockers` and `EXECUTION_DISABLED` details"
+    source: crates/arkforge-engine/src/lib.rs ExecutionBlocker::code
+  - id: client
+    description: "typed IPC client (`arkforge-client`) errors"
+    source: crates/arkforge-client/src
+
+spec_classes:
+  # Error *classes* the spec names for ports and codecs. The reference
+  # implementation represents them as enum variants (see `source`), not as
+  # string literals; a port MUST expose them as stable names in its own
+  # idiom (error union tag, enum class) and MUST NOT collapse two into one.
+  - family: cbor
+    description: "canonical CBOR decoder/encoder classes (AF-DIG-006/007)"
+    source: crates/arkforge-core/src/digest/cbor.rs CborError
+    classes: [CBOR_NEGATIVE_NOT_NEGATIVE, CBOR_DUPLICATE_MAP_KEY, CBOR_TRUNCATED, CBOR_NON_CANONICAL_HEAD, CBOR_UNSUPPORTED_MAJOR_TYPE, CBOR_UNSUPPORTED_SIMPLE_VALUE, CBOR_INDEFINITE_LENGTH, CBOR_UNSORTED_MAP_KEYS, CBOR_INVALID_UTF8, CBOR_TRAILING_BYTES, CBOR_DEPTH_LIMIT]
+  - family: pb
+    description: "Protobuf wire decoder classes (AF-IPC-012..016)"
+    source: crates/arkforge-ipc/src/wire.rs WireError
+    classes: [PB_TRUNCATED, PB_VARINT_TOO_LONG, PB_UNSUPPORTED_WIRE_TYPE, PB_FIELD_ZERO, PB_INVALID_UTF8, PB_LENGTH_OVERFLOW, PB_DEPTH_LIMIT, PB_TRAILING_BYTES, PB_UNKNOWN_ENUM_VALUE, PB_FRAME_TOO_LARGE, PB_MISSING_FIELD]
+  - family: journal
+    description: "journal replay classes (AF-JRN-010..017)"
+    source: crates/arkforge-engine/src/{journal,durable}.rs JournalError, DurableJournalError
+    classes: [JOURNAL_IO, JOURNAL_NOT_A_JOURNAL, JOURNAL_FRAME_LENGTH_INVALID, JOURNAL_RECORD_TOO_LARGE, JOURNAL_SEQUENCE_BROKEN, JOURNAL_CHAIN_BROKEN, JOURNAL_RECORD_TAMPERED, JOURNAL_FSYNC_POLICY_MISDECLARED, JOURNAL_UNKNOWN_SCHEMA_VERSION, JOURNAL_RECORD_MALFORMED, JOURNAL_CBOR]
+  - family: permit-verify
+    description: "permit verification and decoding classes (AF-AUTH-013..022)"
+    source: crates/arkforge-authority-api/src/lib.rs PermitVerificationError, PermitDecodeError
+    classes: [PERMIT_INTEGRITY_TAG_INVALID, PERMIT_STALE_PAIRING_EPOCH, PERMIT_EXPIRED, PERMIT_ACTION_MISMATCH, PERMIT_PLAN_MISMATCH, PERMIT_CONTEXT_MISMATCH, PERMIT_ALREADY_CONSUMED, PERMIT_NOT_SINGLE_USE, PERMIT_CBOR, PERMIT_DECODE_NOT_A_MAP, PERMIT_DECODE_FIELD, PERMIT_DECODE_NOT_CANONICAL, PERMIT_DECODE_CBOR]
+  - family: usb
+    description: "USB port error classes (ports/usb.md)"
+    source: crates/arkforge-usb/src/lib.rs UsbError
+    classes: [USB_UNSUPPORTED_PLATFORM, USB_ENUMERATION, USB_NO_MATCHING_INTERFACE, USB_NO_EXACT_INTERFACE, USB_AMBIGUOUS_INTERFACES, USB_CLAIM, USB_MISSING_BULK_PIPE, USB_TRANSFER, USB_TRANSFER_TOO_LARGE, USB_SHORT_TRANSFER]
+  - family: transport
+    description: "transport port error classes (ports/transport-identity.md)"
+    source: crates/arkforge-transport/src/lib.rs TransportError
+    classes: [TRANSPORT_NO_DEVICE, TRANSPORT_AMBIGUOUS, TRANSPORT_CLOSED, TRANSPORT_UNSUPPORTED, TRANSPORT_EVIDENCE, TRANSPORT_CBOR]
+
+codes:
+  - code: ACKNOWLEDGEMENT_REQUIRED
+    surfaces: [application, cli, rescue, supervisor]
+    condition: "flash apply / rescue apply without the complete acknowledgement token set the plan returned"
+    retry: operator
+    source: [crates/arkforge-cli/src/main.rs, crates/arkforge-standalone/src/application/service.rs, crates/arkforge-standalone/src/supervisor.rs, crates/arkforged/src/rescue.rs]
+  - code: ACTIVE_JOBS
+    surfaces: [supervisor]
+    condition: "see source"
+    retry: operator
+    source: [crates/arkforge-standalone/src/supervisor.rs]
+  - code: ADHOC_SIGNATURE
+    surfaces: [packaging]
+    condition: "macOS binary is ad-hoc signed"
+    retry: operator
+    source: [crates/arkforged/src/packaging.rs]
+  - code: ADMISSION_EVENT_INVALID
+    surfaces: [supervisor]
+    condition: "A stepAdmissionRequested event contains no admission snapshot."
+    retry: operator
+    source: [crates/arkforge-standalone/src/supervisor.rs]
+  - code: ADMISSION_FACTS_FAILED
+    surfaces: [ipc-error]
+    condition: "see source"
+    retry: operator
+    source: [crates/arkforged/src/service.rs]
+  - code: ADMISSION_NOT_READY
+    surfaces: [job]
+    condition: "see source"
+    retry: operator
+    source: [crates/arkforged/src/jobs.rs]
+  - code: AMBIGUOUS_DEVICE
+    surfaces: [cli]
+    condition: "more than one device matched; never first-match"
+    retry: operator
+    source: [crates/arkforge-cli/src/main.rs]
+  - code: APPLICATION_STATE_POISONED
+    surfaces: [application]
+    condition: "The in-process flash review state is unavailable."
+    retry: operator
+    source: [crates/arkforge-standalone/src/application/service.rs]
+  - code: APPROVAL_CONFLICT
+    surfaces: [supervisor]
+    condition: "see source"
+    retry: operator
+    source: [crates/arkforge-standalone/src/approval.rs]
+  - code: APPROVAL_IO_FAILED
+    surfaces: [supervisor]
+    condition: "see source"
+    retry: operator
+    source: [crates/arkforge-standalone/src/approval.rs]
+  - code: ARC001_IDENTITY_MISMATCH
+    surfaces: [artifact]
+    condition: "archive is not the one the plan is bound to"
+    retry: never
+    source: [crates/arkforge-artifact/src/tar.rs]
+  - code: ARC002_ARCHIVE_INVALID
+    surfaces: [artifact]
+    condition: "gzip/tar framing invalid or I/O failed"
+    retry: operator
+    source: [crates/arkforge-artifact/src/tar.rs]
+  - code: ARC003_PATH_ABSOLUTE
+    surfaces: [artifact]
+    condition: "member path is absolute"
+    retry: never
+    source: [crates/arkforge-artifact/src/tar.rs]
+  - code: ARC004_PATH_TRAVERSAL
+    surfaces: [artifact]
+    condition: "member path contains .."
+    retry: never
+    source: [crates/arkforge-artifact/src/tar.rs]
+  - code: ARC005_PATH_INVALID
+    surfaces: [artifact]
+    condition: "member path has backslash/NUL/control characters"
+    retry: never
+    source: [crates/arkforge-artifact/src/tar.rs]
+  - code: ARC006_PATH_DUPLICATE
+    surfaces: [artifact]
+    condition: "two members share a path"
+    retry: never
+    source: [crates/arkforge-artifact/src/tar.rs]
+  - code: ARC007_LINK_UNSUPPORTED
+    surfaces: [artifact]
+    condition: "symlink or hardlink member"
+    retry: never
+    source: [crates/arkforge-artifact/src/tar.rs]
+  - code: ARC008_MEMBER_TYPE_UNSUPPORTED
+    surfaces: [artifact]
+    condition: "member type outside the supported set"
+    retry: never
+    source: [crates/arkforge-artifact/src/tar.rs]
+  - code: ARC009_MEMBER_SIZE_MISMATCH
+    surfaces: [artifact]
+    condition: "declared member size does not match bytes present"
+    retry: never
+    source: [crates/arkforge-artifact/src/tar.rs]
+  - code: ARTIFACT_FILE_NOT_FOUND
+    surfaces: [application, cli]
+    condition: "see source"
+    retry: operator
+    source: [crates/arkforge-cli/src/main.rs, crates/arkforge-standalone/src/application/service.rs]
+  - code: ARTIFACT_IMPORT_REFUSED
+    surfaces: [application, cli]
+    condition: "import preflight/quota/digest mismatch refused the import"
+    retry: operator
+    source: [crates/arkforge-cli/src/main.rs, crates/arkforge-standalone/src/application/service.rs]
+  - code: ARTIFACT_NOT_FOUND
+    surfaces: [application, cli, ipc-error]
+    condition: "unknown artifact id / digest in the store"
+    retry: operator
+    source: [crates/arkforge-cli/src/main.rs, crates/arkforge-standalone/src/application/service.rs, crates/arkforged/src/service.rs]
+  - code: ARTIFACT_NOT_INSPECTED
+    surfaces: [cli, client]
+    condition: "see source"
+    retry: operator
+    source: [crates/arkforge-cli/src/main.rs, crates/arkforge-client/src/controller.rs]
+  - code: ARTIFACT_REJECTED
+    surfaces: [cli, ipc-error]
+    condition: "the parser refused the artifact (carries an ARC0xx code)"
+    retry: operator
+    source: [crates/arkforge-cli/src/main.rs, crates/arkforged/src/service.rs]
+  - code: ARTIFACT_STATE_CONFLICT
+    surfaces: [cli]
+    condition: "see source"
+    retry: operator
+    source: [crates/arkforge-cli/src/main.rs]
+  - code: ARTIFACT_STORE_FAILED
+    surfaces: [application, cli]
+    condition: ") || code =="
+    retry: operator
+    source: [crates/arkforge-cli/src/main.rs, crates/arkforge-standalone/src/application/service.rs]
+  - code: ASSESSMENT_BECAME_EXECUTABLE_PLAN
+    surfaces: [supervisor]
+    condition: "A read-only assessment returned an executable plan."
+    retry: operator
+    source: [crates/arkforge-standalone/src/supervisor.rs]
+  - code: AUTHORITY_GATE_BYPASSED
+    surfaces: [supervisor]
+    condition: "The daemon produced an executable plan for a hardware-gated authority binding."
+    retry: operator
+    source: [crates/arkforge-standalone/src/supervisor.rs]
+  - code: AUTHORITY_HDC_UNBOUND
+    surfaces: [cli, supervisor]
+    condition: "see source"
+    retry: operator
+    source: [crates/arkforge-cli/src/main.rs, crates/arkforge-standalone/src/supervisor.rs]
+  - code: AUTHORITY_SUPPORT_KEY_INVALID
+    surfaces: [supervisor]
+    condition: "see source"
+    retry: operator
+    source: [crates/arkforge-standalone/src/supervisor.rs]
+  - code: AUTHORITY_SUPPORT_SEAL_MISMATCH
+    surfaces: [cli, supervisor]
+    condition: "The daemon did not seal the exact authority support key and state supplied by this supervisor."
+    retry: operator
+    source: [crates/arkforge-cli/src/main.rs, crates/arkforge-standalone/src/supervisor.rs]
+  - code: AUTHORITY_SUPPORT_UNAVAILABLE
+    surfaces: [cli, supervisor]
+    condition: "see source"
+    retry: operator
+    source: [crates/arkforge-cli/src/main.rs, crates/arkforge-standalone/src/supervisor.rs]
+  - code: AUTHORITY_SUPPORT_UNPUBLISHED
+    surfaces: [cli, supervisor]
+    condition: "see source"
+    retry: operator
+    source: [crates/arkforge-cli/src/main.rs, crates/arkforge-standalone/src/supervisor.rs]
+  - code: BAD_AUTHORITY_NAMESPACE
+    surfaces: [ipc-error]
+    condition: "authorityNamespace is not a usable identifier"
+    retry: operator
+    source: [crates/arkforged/src/service.rs]
+  - code: BAD_AUTHORITY_SUPPORT_KEY
+    surfaces: [ipc-error]
+    condition: "authoritySupportKeySha256 must contain exactly 32 bytes"
+    retry: operator
+    source: [crates/arkforged/src/service.rs]
+  - code: BAD_AUTHORITY_SUPPORT_STATE
+    surfaces: [ipc-error]
+    condition: "authoritySupportState must be productionVerified, or hardwareCampaign/hardwareGated with a non-empty detail"
+    retry: operator
+    source: [crates/arkforged/src/service.rs]
+  - code: BAD_BINDING_ID
+    surfaces: [ipc-error]
+    condition: "bindingId is not a usable identifier"
+    retry: operator
+    source: [crates/arkforged/src/service.rs]
+  - code: BAD_BINDING_REVISION
+    surfaces: [ipc-error]
+    condition: "bindingRevision must be greater than zero"
+    retry: operator
+    source: [crates/arkforged/src/service.rs]
+  - code: BAD_CONTROLLER_SESSION_ID
+    surfaces: [ipc-error]
+    condition: "controllerSessionId is not a usable identifier"
+    retry: operator
+    source: [crates/arkforged/src/service.rs]
+  - code: BAD_PLAN_DIGEST
+    surfaces: [ipc-error]
+    condition: "planSha256 is not 64 hex characters"
+    retry: operator
+    source: [crates/arkforged/src/service.rs]
+  - code: BAD_PLAN_ID
+    surfaces: [ipc-error]
+    condition: "see source"
+    retry: operator
+    source: [crates/arkforged/src/service.rs]
+  - code: BAD_RECEIPT
+    surfaces: [ipc-error]
+    condition: "see source"
+    retry: operator
+    source: [crates/arkforged/src/service.rs]
+  - code: BAD_STABLE_IDENTITY_DIGEST
+    surfaces: [ipc-error]
+    condition: "stableIdentitySha256 must contain exactly 32 bytes"
+    retry: operator
+    source: [crates/arkforged/src/service.rs]
+  - code: BAD_SUBMISSION
+    surfaces: [ipc-error]
+    condition: "submitStepPermit payload does not decode"
+    retry: operator
+    source: [crates/arkforged/src/service.rs]
+  - code: BAD_WATCH_REQUEST
+    surfaces: [ipc-error]
+    condition: "watchJob payload does not decode"
+    retry: operator
+    source: [crates/arkforged/src/service.rs]
+  - code: BOUND_OBSERVATION_MODE_MISMATCH
+    surfaces: [hdc]
+    condition: "see source"
+    retry: operator
+    source: [crates/arkforge-standalone/src/hdc_control.rs]
+  - code: BOUND_OBSERVATION_NOT_FOUND
+    surfaces: [hdc]
+    condition: "see source"
+    retry: operator
+    source: [crates/arkforge-standalone/src/hdc_control.rs]
+  - code: CAMPAIGN_ACKNOWLEDGEMENT_REQUIRED
+    surfaces: [cli]
+    condition: "see source"
+    retry: operator
+    source: [crates/arkforge-cli/src/main.rs]
+  - code: CAMPAIGN_NOT_PERSISTABLE
+    surfaces: [cli]
+    condition: "see source"
+    retry: operator
+    source: [crates/arkforge-cli/src/main.rs]
+  - code: CANCEL_NOT_SAFE
+    surfaces: [job]
+    condition: "cancel refused at the current boundary"
+    retry: operator
+    source: [crates/arkforged/src/jobs.rs]
+  - code: CLOCK_INVALID
+    surfaces: [rescue]
+    condition: "see source"
+    retry: operator
+    source: [crates/arkforged/src/rescue.rs]
+  - code: CONFIG_ALREADY_BOUND
+    surfaces: [cli]
+    condition: "see source"
+    retry: operator
+    source: [crates/arkforge-cli/src/main.rs]
+  - code: CONFIG_DIGEST_MISMATCH
+    surfaces: [cli]
+    condition: "The file at the configured path does not have the expected digest; nothing was stored."
+    retry: operator
+    source: [crates/arkforge-cli/src/main.rs]
+  - code: CONFIG_FILE_NOT_FOUND
+    surfaces: [supervisor]
+    condition: "see source"
+    retry: operator
+    source: [crates/arkforge-standalone/src/config.rs]
+  - code: CONFIG_IO_FAILED
+    surfaces: [supervisor]
+    condition: "see source"
+    retry: operator
+    source: [crates/arkforge-standalone/src/config.rs]
+  - code: CONFIG_NOT_BOUND
+    surfaces: [cli]
+    condition: "see source"
+    retry: operator
+    source: [crates/arkforge-cli/src/main.rs]
+  - code: CONFIG_PIN_DRIFTED
+    surfaces: [supervisor]
+    condition: "see source"
+    retry: operator
+    source: [crates/arkforge-standalone/src/config.rs]
+  - code: CONFIG_REJECTED
+    surfaces: [supervisor]
+    condition: "see source"
+    retry: operator
+    source: [crates/arkforge-standalone/src/config.rs]
+  - code: CONSENT_DECLINED
+    surfaces: [cli]
+    condition: "The confirmation was not accepted; nothing was dispatched."
+    retry: operator
+    source: [crates/arkforge-cli/src/main.rs]
+  - code: CONTENT_REQUIRED
+    surfaces: [cli]
+    condition: "No firmware is stored in this runtime and none is in the current directory; supply --file <path>."
+    retry: operator
+    source: [crates/arkforge-cli/src/main.rs]
+  - code: CONTINUITY_BROKEN
+    surfaces: [job]
+    condition: "device/session/provider/toolchain/artifact facts changed since the snapshot"
+    retry: new-permit
+    source: [crates/arkforged/src/jobs.rs]
+  - code: CONTROLLER_IO_FAILED
+    surfaces: [client]
+    condition: "see source"
+    retry: operator
+    source: [crates/arkforge-client/src/controller.rs]
+  - code: CONTROLLER_RESPONSE_INVALID
+    surfaces: [client]
+    condition: "see source"
+    retry: operator
+    source: [crates/arkforge-client/src/controller.rs]
+  - code: CONTROLLER_UNAVAILABLE
+    surfaces: [cli, client]
+    condition: "see source"
+    retry: operator
+    source: [crates/arkforge-cli/src/main.rs, crates/arkforge-client/src/controller.rs]
+  - code: CONTROL_EVENT_INVALID
+    surfaces: [supervisor]
+    condition: "A managedControlRequested event contains no typed request."
+    retry: operator
+    source: [crates/arkforge-standalone/src/supervisor.rs]
+  - code: CONTROL_EVIDENCE_MISMATCH
+    surfaces: [job]
+    condition: "control receipt evidence digest does not match"
+    retry: never
+    source: [crates/arkforged/src/jobs.rs]
+  - code: CONTROL_FACTS_INCOMPLETE
+    surfaces: [job]
+    condition: "an accepted control receipt lacks an expected fact key"
+    retry: never
+    source: [crates/arkforged/src/jobs.rs]
+  - code: CURRENT_FACTS_UNAVAILABLE
+    surfaces: [ipc-error, job]
+    condition: "the daemon could not re-read device facts before consuming the permit"
+    retry: new-permit
+    source: [crates/arkforged/src/jobs.rs, crates/arkforged/src/service.rs]
+  - code: DAEMON_UNAVAILABLE
+    surfaces: [application, cli, client, supervisor]
+    condition: "no daemon serves the runtime endpoint, or the handshake timed out"
+    retry: retry-same
+    source: [crates/arkforge-cli/src/main.rs, crates/arkforge-client/src/public.rs, crates/arkforge-standalone/src/application/service.rs, crates/arkforge-standalone/src/supervisor.rs]
+  - code: DEVICE_AMBIGUOUS
+    surfaces: [cli]
+    condition: "more than one device matched; never first-match"
+    retry: operator
+    source: [crates/arkforge-cli/src/main.rs]
+  - code: DEVICE_BUSY
+    surfaces: [application]
+    condition: ", ErrorCategory::Device,"
+    retry: operator
+    source: [crates/arkforge-standalone/src/application/mock.rs]
+  - code: DEVICE_CHANGED
+    surfaces: [cli, rescue]
+    condition: "device identity differs from the observation the plan was bound to"
+    retry: new-plan
+    source: [crates/arkforge-cli/src/main.rs, crates/arkforged/src/rescue.rs]
+  - code: DEVICE_NOT_FOUND
+    surfaces: [cli, rescue]
+    condition: "zero devices matched"
+    retry: retry-same
+    source: [crates/arkforge-cli/src/main.rs, crates/arkforged/src/rescue.rs]
+  - code: DEVICE_OBSERVATION_INVALID
+    surfaces: [application]
+    condition: "The runtime returned a device observation without an id."
+    retry: operator
+    source: [crates/arkforge-standalone/src/application/service.rs]
+  - code: DEVICE_REREAD_FAILED
+    surfaces: [ipc-error]
+    condition: "see source"
+    retry: operator
+    source: [crates/arkforged/src/service.rs]
+  - code: DEVICE_WAIT_TIMEOUT
+    surfaces: [cli]
+    condition: "see source"
+    retry: operator
+    source: [crates/arkforge-cli/src/main.rs]
+  - code: DISCOVERY_FAILED
+    surfaces: [ipc-error]
+    condition: "see source"
+    retry: operator
+    source: [crates/arkforged/src/service.rs]
+  - code: ENTITLEMENTS_NOT_EMPTY
+    surfaces: [packaging]
+    condition: "macOS entitlement dictionary is not empty (AFD-0003)"
+    retry: operator
+    source: [crates/arkforged/src/packaging.rs]
+  - code: EXACT_DEVICE_UNAVAILABLE
+    surfaces: [ipc-error]
+    condition: "the exact observed device is no longer present"
+    retry: retry-same
+    source: [crates/arkforged/src/service.rs]
+  - code: EXACT_HDC_TARGET_AMBIGUOUS
+    surfaces: [hdc]
+    condition: "see source"
+    retry: operator
+    source: [crates/arkforge-standalone/src/hdc_control.rs]
+  - code: EXACT_HDC_TARGET_NOT_FOUND
+    surfaces: [hdc]
+    condition: "see source"
+    retry: operator
+    source: [crates/arkforge-standalone/src/hdc_control.rs]
+  - code: EXECUTION_DISABLED
+    surfaces: [ipc-error]
+    condition: "startExecution while a standing or per-plan blocker applies; carries the blocker codes"
+    retry: operator
+    source: [crates/arkforged/src/service.rs]
+  - code: EXECUTION_PURPOSE_MISMATCH
+    surfaces: [ipc-error]
+    condition: "executionPurpose does not match the sealed plan"
+    retry: operator
+    source: [crates/arkforged/src/service.rs]
+  - code: EXPECTED_SEQUENCE_REQUIRED
+    surfaces: [ipc-error]
+    condition: "cancelJob requires the caller's last observed journal sequence"
+    retry: operator
+    source: [crates/arkforged/src/service.rs]
+  - code: FLASH_REVIEW_NOT_FOUND
+    surfaces: [application]
+    condition: "The flash review is missing or was already applied. Prepare the operation again."
+    retry: operator
+    source: [crates/arkforge-standalone/src/application/service.rs]
+  - code: HDC_BINDING_REFUSED
+    surfaces: [cli, supervisor]
+    condition: "the supervisor refused to bind this hdc executable"
+    retry: operator
+    source: [crates/arkforge-cli/src/main.rs, crates/arkforge-standalone/src/supervisor.rs]
+  - code: HDC_COMMAND_FAILED
+    surfaces: [hdc]
+    condition: "see source"
+    retry: operator
+    source: [crates/arkforge-standalone/src/hdc_control.rs]
+  - code: HDC_COMMAND_UNAVAILABLE
+    surfaces: [hdc]
+    condition: "see source"
+    retry: operator
+    source: [crates/arkforge-standalone/src/hdc_control.rs]
+  - code: HDC_CONTROL_DEADLINE_EXCEEDED
+    surfaces: [hdc]
+    condition: "see source"
+    retry: operator
+    source: [crates/arkforge-standalone/src/hdc_control.rs]
+  - code: HDC_DIGEST_MISMATCH
+    surfaces: [cli, supervisor]
+    condition: "the hdc executable SHA-256 differs from the bound digest"
+    retry: operator
+    source: [crates/arkforge-cli/src/main.rs, crates/arkforge-standalone/src/supervisor.rs]
+  - code: HDC_EXECUTABLE_CHANGED
+    surfaces: [hdc]
+    condition: "see source"
+    retry: operator
+    source: [crates/arkforge-standalone/src/hdc_control.rs]
+  - code: HDC_OUTPUT_INVALID_UTF8
+    surfaces: [hdc]
+    condition: "see source"
+    retry: operator
+    source: [crates/arkforge-standalone/src/hdc_control.rs]
+  - code: HDC_OUTPUT_LIMIT_EXCEEDED
+    surfaces: [hdc]
+    condition: "see source"
+    retry: operator
+    source: [crates/arkforge-standalone/src/hdc_control.rs]
+  - code: HDC_PROPERTY_EMPTY
+    surfaces: [hdc]
+    condition: "see source"
+    retry: operator
+    source: [crates/arkforge-standalone/src/hdc_control.rs]
+  - code: HDC_PROPERTY_MISMATCH
+    surfaces: [hdc]
+    condition: "see source"
+    retry: operator
+    source: [crates/arkforge-standalone/src/hdc_control.rs]
+  - code: HDC_TARGET_LIST_MALFORMED
+    surfaces: [hdc]
+    condition: "see source"
+    retry: operator
+    source: [crates/arkforge-standalone/src/hdc_control.rs]
+  - code: IDENTITY_CONFIRMATION_REQUIRED
+    surfaces: [cli]
+    condition: "see source"
+    retry: operator
+    source: [crates/arkforge-cli/src/main.rs]
+  - code: ILLEGAL_TRANSITION
+    surfaces: [job]
+    condition: "a job state move not in the legal edge set (internal invariant)"
+    retry: never
+    source: [crates/arkforged/src/jobs.rs]
+  - code: IMAGE_EMPTY
+    surfaces: [rescue]
+    condition: "see source"
+    retry: operator
+    source: [crates/arkforged/src/rescue.rs]
+  - code: IMAGE_IMPORT_REFUSED
+    surfaces: [rescue]
+    condition: "see source"
+    retry: operator
+    source: [crates/arkforged/src/rescue.rs]
+  - code: IMAGE_OVERRUNS_PARTITION
+    surfaces: [rescue]
+    condition: "see source"
+    retry: operator
+    source: [crates/arkforged/src/rescue.rs]
+  - code: IMPORT_REFUSED
+    surfaces: [ipc-error]
+    condition: "see source"
+    retry: operator
+    source: [crates/arkforged/src/service.rs]
+  - code: INTENT_REQUIRED
+    surfaces: [cli]
+    condition: "see source"
+    retry: operator
+    source: [crates/arkforge-cli/src/main.rs]
+  - code: INTENT_UNAVAILABLE
+    surfaces: [cli]
+    condition: "see source"
+    retry: operator
+    source: [crates/arkforge-cli/src/main.rs]
+  - code: INVALID_ARGUMENT
+    surfaces: [application, cli, rescue, supervisor]
+    condition: "argument shape or value outside the command contract"
+    retry: operator
+    source: [crates/arkforge-cli/src/main.rs, crates/arkforge-standalone/src/application/service.rs, crates/arkforge-standalone/src/lib.rs, crates/arkforged/src/rescue.rs]
+  - code: IPC_IO_FAILED
+    surfaces: [application, cli, client]
+    condition: "socket/pipe read or write failed"
+    retry: retry-same
+    source: [crates/arkforge-cli/src/main.rs, crates/arkforge-client/src/public.rs, crates/arkforge-standalone/src/application/service.rs]
+  - code: IPC_RESPONSE_INVALID
+    surfaces: [application, cli, client]
+    condition: "a response frame did not decode"
+    retry: never
+    source: [crates/arkforge-cli/src/main.rs, crates/arkforge-client/src/public.rs, crates/arkforge-standalone/src/application/service.rs]
+  - code: IPC_RESPONSE_MISMATCH
+    surfaces: [application, cli, client]
+    condition: "a response carried another request id or api"
+    retry: never
+    source: [crates/arkforge-cli/src/main.rs, crates/arkforge-client/src/public.rs, crates/arkforge-standalone/src/application/service.rs]
+  - code: JOB_AMBIGUOUS
+    surfaces: [cli]
+    condition: "see source"
+    retry: operator
+    source: [crates/arkforge-cli/src/main.rs]
+  - code: LAYOUT_NOT_ALLOWED
+    surfaces: [rescue]
+    condition: "see source"
+    retry: operator
+    source: [crates/arkforged/src/rescue.rs]
+  - code: MALFORMED_ARTIFACT_ID
+    surfaces: [ipc-error]
+    condition: "artifact id outside the identifier grammar"
+    retry: never
+    source: [crates/arkforged/src/service.rs]
+  - code: MALFORMED_DIGEST
+    surfaces: [ipc-error]
+    condition: "a digest string is not 64 hex characters"
+    retry: never
+    source: [crates/arkforged/src/service.rs]
+  - code: MALFORMED_REQUEST
+    surfaces: [ipc-error]
+    condition: "request payload did not decode"
+    retry: never
+    source: [crates/arkforged/src/main.rs, crates/arkforged/src/service.rs]
+  - code: MATERIALIZATION_REFUSED
+    surfaces: [ipc-error]
+    condition: "the provider refused to materialize (validation violations)"
+    retry: operator
+    source: [crates/arkforged/src/service.rs]
+  - code: MATURITY_KEY_NOT_ENCODABLE
+    surfaces: [ipc-error]
+    condition: "see source"
+    retry: operator
+    source: [crates/arkforged/src/service.rs]
+  - code: MECHANICS_DAEMON_EXITED
+    surfaces: [supervisor]
+    condition: "see source"
+    retry: operator
+    source: [crates/arkforge-standalone/src/supervisor.rs]
+  - code: MECHANICS_DAEMON_START_FAILED
+    surfaces: [cli]
+    condition: "The signed sibling mechanics daemon is unavailable."
+    retry: operator
+    source: [crates/arkforge-cli/src/main.rs]
+  - code: MECHANICS_DAEMON_START_TIMEOUT
+    surfaces: [supervisor]
+    condition: "arkforged did not accept a versioned public session within 10 seconds."
+    retry: operator
+    source: [crates/arkforge-standalone/src/supervisor.rs]
+  - code: MECHANICS_DAEMON_UNAVAILABLE
+    surfaces: [cli, supervisor]
+    condition: "see source"
+    retry: operator
+    source: [crates/arkforge-cli/src/main.rs, crates/arkforge-standalone/src/supervisor.rs]
+  - code: MECHANICS_MATURITY_KEY_INVALID
+    surfaces: [cli, supervisor]
+    condition: "see source"
+    retry: operator
+    source: [crates/arkforge-cli/src/main.rs, crates/arkforge-standalone/src/supervisor.rs]
+  - code: MECHANICS_RUNTIME_CHANGED
+    surfaces: [cli, supervisor]
+    condition: "The running mechanics toolchain differs from the one sealed by this authority plan; materialize a new plan."
+    retry: operator
+    source: [crates/arkforge-cli/src/main.rs, crates/arkforge-standalone/src/supervisor.rs]
+  - code: MISSING_ARTIFACT_ID
+    surfaces: [ipc-error]
+    condition: "inspectArtifact requires an artifact id"
+    retry: operator
+    source: [crates/arkforged/src/service.rs]
+  - code: MOCK_FIXTURE_MISSING
+    surfaces: [application]
+    condition: "see source"
+    retry: operator
+    source: [crates/arkforge-standalone/src/application/mock.rs]
+  - code: NATIVE_BUILD_CHANGED
+    surfaces: [cli, rescue]
+    condition: "the arkforged build digest changed since the plan"
+    retry: new-plan
+    source: [crates/arkforge-cli/src/main.rs, crates/arkforged/src/rescue.rs]
+  - code: NATIVE_READ_EVIDENCE_MISMATCH
+    surfaces: [rescue]
+    condition: "see source"
+    retry: operator
+    source: [crates/arkforged/src/rescue.rs]
+  - code: NATIVE_READ_LENGTH_MISMATCH
+    surfaces: [rescue]
+    condition: "see source"
+    retry: operator
+    source: [crates/arkforged/src/rescue.rs]
+  - code: NATIVE_USB_READ_FAILED
+    surfaces: [rescue]
+    condition: "see source"
+    retry: operator
+    source: [crates/arkforged/src/rescue.rs]
+  - code: NATIVE_USB_REFUSED
+    surfaces: [cli, rescue]
+    condition: "native USB access refused by the platform"
+    retry: operator
+    source: [crates/arkforge-cli/src/main.rs, crates/arkforged/src/rescue.rs]
+  - code: NOT_A_DIGEST
+    surfaces: [job]
+    condition: "see source"
+    retry: operator
+    source: [crates/arkforged/src/jobs.rs]
+  - code: NO_ADMISSION_PENDING
+    surfaces: [job]
+    condition: "submitStepPermit with no admission outstanding"
+    retry: never
+    source: [crates/arkforged/src/jobs.rs]
+  - code: NO_CONTENT_STREAM
+    surfaces: [ipc-error]
+    condition: "importArtifact carries its content on the controller stream"
+    retry: operator
+    source: [crates/arkforged/src/service.rs]
+  - code: NO_CONTROL_PENDING
+    surfaces: [job]
+    condition: "submitManagedControlReceipt with no control request outstanding"
+    retry: never
+    source: [crates/arkforged/src/jobs.rs]
+  - code: NO_DISPATCHER
+    surfaces: [cli, handshake-blocker]
+    condition: "no execution dispatcher bound (standing blocker)"
+    retry: operator
+    source: [crates/arkforge-cli/src/main.rs, crates/arkforge-engine/src/lib.rs, crates/arkforge-ipc/src/messages.rs]
+  - code: NO_DISPATCH_IN_FLIGHT
+    surfaces: [job]
+    condition: "see source"
+    retry: operator
+    source: [crates/arkforged/src/jobs.rs]
+  - code: NO_HARDENED_RUNTIME
+    surfaces: [packaging]
+    condition: "macOS binary lacks the hardened runtime flag"
+    retry: operator
+    source: [crates/arkforged/src/packaging.rs]
+  - code: NO_JOBS_RECORDED
+    surfaces: [cli]
+    condition: "This runtime has no durable jobs to watch."
+    retry: operator
+    source: [crates/arkforge-cli/src/main.rs]
+  - code: NO_PAIRED_AUTHORITY
+    surfaces: [cli, handshake-blocker]
+    condition: "daemon started without a pairing secret; no permit can be verified (standing blocker)"
+    retry: operator
+    source: [crates/arkforge-cli/src/main.rs, crates/arkforge-engine/src/lib.rs, crates/arkforge-ipc/src/messages.rs]
+  - code: NO_PROVIDER_FOR_PROFILE
+    surfaces: [cli, ipc-error]
+    condition: "no provider accepts the profile's artifact format / backend"
+    retry: operator
+    source: [crates/arkforge-cli/src/main.rs, crates/arkforged/src/service.rs]
+  - code: NO_TEAM_IDENTIFIER
+    surfaces: [packaging]
+    condition: "macOS signature has no team identifier"
+    retry: operator
+    source: [crates/arkforged/src/packaging.rs]
+  - code: OBSERVATION_NOT_FOUND
+    surfaces: [cli, ipc-error, supervisor]
+    condition: "the observation id is not a current observation"
+    retry: retry-same
+    source: [crates/arkforge-cli/src/main.rs, crates/arkforge-standalone/src/supervisor.rs, crates/arkforged/src/service.rs]
+  - code: OBSERVED_MODE_MISMATCH
+    surfaces: [job]
+    condition: "observed device mode differs from the step's expectedModeBefore"
+    retry: operator
+    source: [crates/arkforged/src/jobs.rs]
+  - code: OUTCOME_UNKNOWN
+    surfaces: [application, cli]
+    condition: "the job is outcomeUnknown; cancel/retry refused"
+    retry: operator
+    source: [crates/arkforge-cli/src/main.rs, crates/arkforge-standalone/src/application/service.rs]
+  - code: OUTPUT_EXISTS
+    surfaces: [rescue]
+    condition: "see source"
+    retry: operator
+    source: [crates/arkforged/src/rescue.rs]
+  - code: OUTPUT_PARENT_MISSING
+    surfaces: [rescue]
+    condition: "see source"
+    retry: operator
+    source: [crates/arkforged/src/rescue.rs]
+  - code: PAIRING_EPOCH_EXHAUSTED
+    surfaces: [supervisor]
+    condition: "The durable pairing epoch cannot advance; this runtime must not execute."
+    retry: operator
+    source: [crates/arkforge-standalone/src/supervisor.rs]
+  - code: PARTITION_NOT_FOUND
+    surfaces: [rescue]
+    condition: "see source"
+    retry: operator
+    source: [crates/arkforged/src/rescue.rs]
+  - code: PERMIT_INPUT_INVALID
+    surfaces: [supervisor]
+    condition: "see source"
+    retry: operator
+    source: [crates/arkforge-standalone/src/supervisor.rs]
+  - code: PERMIT_JOURNAL_INVALID
+    surfaces: [supervisor]
+    condition: "A durable permit is incomplete or belongs to another pairing epoch."
+    retry: operator
+    source: [crates/arkforge-standalone/src/supervisor.rs]
+  - code: PERMIT_NOT_DECODABLE
+    surfaces: [ipc-error]
+    condition: "permit_cbor did not decode as a canonical permit"
+    retry: new-permit
+    source: [crates/arkforged/src/service.rs]
+  - code: PERMIT_REJECTED
+    surfaces: [job]
+    condition: "verify_permit failed; message names the verification error"
+    retry: new-permit
+    source: [crates/arkforged/src/jobs.rs]
+  - code: PLAN_DIGEST_MISMATCH
+    surfaces: [cli, rescue, supervisor]
+    condition: "caller's plan SHA-256 differs from the stored plan, or the store recomputes a different digest"
+    retry: new-plan
+    source: [crates/arkforge-cli/src/main.rs, crates/arkforge-standalone/src/supervisor.rs, crates/arkforged/src/rescue.rs]
+  - code: PLAN_EXPIRED
+    surfaces: [application, cli, rescue, supervisor]
+    condition: "now >= plan.expiresAtEpochMs"
+    retry: new-plan
+    source: [crates/arkforge-cli/src/main.rs, crates/arkforge-standalone/src/application/service.rs, crates/arkforge-standalone/src/supervisor.rs, crates/arkforged/src/rescue.rs]
+  - code: PLAN_HAS_NO_STEPS
+    surfaces: [job]
+    condition: "an executable plan with an empty step list"
+    retry: new-plan
+    source: [crates/arkforged/src/jobs.rs]
+  - code: PLAN_INVALID
+    surfaces: [rescue]
+    condition: "see source"
+    retry: operator
+    source: [crates/arkforged/src/rescue.rs]
+  - code: PLAN_NOT_FOUND
+    surfaces: [rescue, supervisor]
+    condition: "no stored plan with that id"
+    retry: new-plan
+    source: [crates/arkforge-standalone/src/supervisor.rs, crates/arkforged/src/rescue.rs]
+  - code: PLAN_NOT_STARTABLE
+    surfaces: [client, ipc-error]
+    condition: "startExecution for a plan the daemon cannot run (assessment, wrong purpose, blockers)"
+    retry: new-plan
+    source: [crates/arkforge-client/src/controller.rs, crates/arkforged/src/service.rs]
+  - code: PLAN_NOT_STORABLE
+    surfaces: [ipc-error]
+    condition: "see source"
+    retry: operator
+    source: [crates/arkforged/src/service.rs]
+  - code: PLAN_NOT_YET_VALID
+    surfaces: [rescue]
+    condition: "The rescue plan was created in the future according to this host clock. Correct the clock and create a new plan."
+    retry: operator
+    source: [crates/arkforged/src/rescue.rs]
+  - code: PLAN_OBSERVATION_UNAVAILABLE
+    surfaces: [ipc-error]
+    condition: "the executable plan has no sealed device observation context"
+    retry: operator
+    source: [crates/arkforged/src/service.rs]
+  - code: PLAN_STATE_CONFLICT
+    surfaces: [supervisor]
+    condition: "see source"
+    retry: operator
+    source: [crates/arkforge-standalone/src/supervisor.rs]
+  - code: PLAN_STATE_INVALID
+    surfaces: [supervisor]
+    condition: "see source"
+    retry: operator
+    source: [crates/arkforge-standalone/src/supervisor.rs]
+  - code: PLAN_TRANSPORT_UNAVAILABLE
+    surfaces: [ipc-error]
+    condition: "the transport used to materialize this plan is no longer loaded"
+    retry: operator
+    source: [crates/arkforged/src/service.rs]
+  - code: PLAN_UNAVAILABLE
+    surfaces: [cli]
+    condition: "flash plan could produce only an assessment"
+    retry: operator
+    source: [crates/arkforge-cli/src/main.rs]
+  - code: PLAN_UNSUPPORTED
+    surfaces: [rescue]
+    condition: "see source"
+    retry: operator
+    source: [crates/arkforged/src/rescue.rs]
+  - code: PLATFORM_UNSUPPORTED
+    surfaces: [cli]
+    condition: "see source"
+    retry: operator
+    source: [crates/arkforge-cli/src/main.rs]
+  - code: PROBE_REFUSED
+    surfaces: [cli, ipc-error]
+    condition: "see source"
+    retry: operator
+    source: [crates/arkforge-cli/src/main.rs, crates/arkforged/src/service.rs]
+  - code: PROFILE_AMBIGUOUS
+    surfaces: [cli]
+    condition: "see source"
+    retry: operator
+    source: [crates/arkforge-cli/src/main.rs]
+  - code: PROFILE_CHANGED
+    surfaces: [cli, rescue]
+    condition: "profile digest differs from the one the plan sealed"
+    retry: new-plan
+    source: [crates/arkforge-cli/src/main.rs, crates/arkforged/src/rescue.rs]
+  - code: PROFILE_FILE_NOT_FOUND
+    surfaces: [cli]
+    condition: "Cannot read profile /private/secret/profile.yaml: missing"
+    retry: operator
+    source: [crates/arkforge-cli/src/main.rs]
+  - code: PROFILE_IDENTITY_INVALID
+    surfaces: [ipc-error]
+    condition: "see source"
+    retry: operator
+    source: [crates/arkforged/src/service.rs]
+  - code: PROFILE_INCOMPATIBLE
+    surfaces: [cli]
+    condition: "see source"
+    retry: operator
+    source: [crates/arkforge-cli/src/main.rs]
+  - code: PROFILE_NOT_FOUND
+    surfaces: [cli, client, ipc-error]
+    condition: "unknown profile id"
+    retry: operator
+    source: [crates/arkforge-cli/src/main.rs, crates/arkforge-client/src/controller.rs, crates/arkforged/src/service.rs]
+  - code: PROFILE_NOT_LOADED
+    surfaces: [ipc-error]
+    condition: "see source"
+    retry: operator
+    source: [crates/arkforged/src/service.rs]
+  - code: PROFILE_REJECTED
+    surfaces: [cli]
+    condition: "profile failed the strict loader or its invariants"
+    retry: operator
+    source: [crates/arkforge-cli/src/main.rs]
+  - code: PROTOCOL_REFUSED
+    surfaces: [application, cli, client]
+    condition: "the daemon refused the handshake (major version mismatch)"
+    retry: operator
+    source: [crates/arkforge-cli/src/main.rs, crates/arkforge-client/src/controller.rs, crates/arkforge-client/src/public.rs, crates/arkforge-standalone/src/application/service.rs]
+  - code: PUBLIC_ASSESSMENT_VIOLATION
+    surfaces: [client]
+    condition: "The public runtime returned an executable plan to a read-only client."
+    retry: operator
+    source: [crates/arkforge-client/src/public.rs]
+  - code: PUBLIC_PLAN_FORBIDDEN
+    surfaces: [ipc-error]
+    condition: "materializePlan on a public session asked for controller-only bindings"
+    retry: never
+    source: [crates/arkforged/src/service.rs]
+  - code: READ_OUT_OF_RANGE
+    surfaces: [rescue]
+    condition: "see source"
+    retry: operator
+    source: [crates/arkforged/src/rescue.rs]
+  - code: READ_TOO_LARGE
+    surfaces: [rescue]
+    condition: "see source"
+    retry: operator
+    source: [crates/arkforged/src/rescue.rs]
+  - code: RECEIPT_CARRIES_FORBIDDEN_FACTS
+    surfaces: [job]
+    condition: "receipt carried connectKey/hdcExecutablePath/hdcEndpoint/argv/shell/serverLifecycleAction"
+    retry: never
+    source: [crates/arkforged/src/jobs.rs]
+  - code: RECOVERY_CONTRACT_UNAVAILABLE
+    surfaces: [ipc-error]
+    condition: "the selected profile publishes no complete-overwrite recovery contract"
+    retry: operator
+    source: [crates/arkforged/src/service.rs]
+  - code: RECOVERY_NOT_ELIGIBLE
+    surfaces: [supervisor]
+    condition: "see source"
+    retry: operator
+    source: [crates/arkforge-standalone/src/supervisor.rs]
+  - code: RECOVERY_PLAN_UNAVAILABLE
+    surfaces: [cli]
+    condition: "see source"
+    retry: operator
+    source: [crates/arkforge-cli/src/main.rs]
+  - code: REGISTRY_IO
+    surfaces: [job]
+    condition: "see source"
+    retry: operator
+    source: [crates/arkforged/src/jobs.rs]
+  - code: RELEASE_SIGNING_REQUIRED
+    surfaces: [supervisor]
+    condition: "--require-release-signing set and the binary is not release-signed"
+    retry: operator
+    source: [crates/arkforge-standalone/src/supervisor.rs]
+  - code: RESCUE_PLAN_ALREADY_APPLIED
+    surfaces: [cli, rescue]
+    condition: "a rescue plan may be applied once"
+    retry: new-plan
+    source: [crates/arkforge-cli/src/main.rs, crates/arkforged/src/rescue.rs]
+  - code: RESCUE_PLAN_DOMAIN
+    surfaces: [cli]
+    condition: "see source"
+    retry: operator
+    source: [crates/arkforge-cli/src/main.rs]
+  - code: RESCUE_STORE_COLLISION
+    surfaces: [rescue]
+    condition: "see source"
+    retry: operator
+    source: [crates/arkforged/src/rescue.rs]
+  - code: RESCUE_STORE_IO
+    surfaces: [rescue]
+    condition: "see source"
+    retry: operator
+    source: [crates/arkforged/src/rescue.rs]
+  - code: RESCUE_STORE_UNAVAILABLE
+    surfaces: [rescue]
+    condition: "see source"
+    retry: operator
+    source: [crates/arkforged/src/rescue.rs]
+  - code: RUNTIME_ALREADY_RUNNING
+    surfaces: [application, supervisor]
+    condition: "a daemon already serves this runtime directory"
+    retry: operator
+    source: [crates/arkforge-standalone/src/application/service.rs, crates/arkforge-standalone/src/supervisor.rs]
+  - code: RUNTIME_CAMPAIGN_MISMATCH
+    surfaces: [cli]
+    condition: "see source"
+    retry: operator
+    source: [crates/arkforge-cli/src/main.rs]
+  - code: RUNTIME_NOT_RUNNING
+    surfaces: [cli]
+    condition: "daemon stop/status when nothing is running"
+    retry: operator
+    source: [crates/arkforge-cli/src/main.rs]
+  - code: SESSION_NOT_PERMITTED
+    surfaces: [ipc-error]
+    condition: "a public session called a controller-only API"
+    retry: never
+    source: [crates/arkforged/src/service.rs]
+  - code: SHIPPED_PROFILE_INVALID
+    surfaces: [rescue]
+    condition: "see source"
+    retry: operator
+    source: [crates/arkforged/src/rescue.rs]
+  - code: SIGNING_INPUT_REFUSED
+    surfaces: [cli]
+    condition: "see source"
+    retry: operator
+    source: [crates/arkforge-cli/src/main.rs]
+  - code: SNAPSHOT_EXPIRED
+    surfaces: [job]
+    condition: "permit arrived after the admission snapshot lifetime; re-snapshot and ask again"
+    retry: new-permit
+    source: [crates/arkforged/src/jobs.rs]
+  - code: STALE_JOB_SEQUENCE
+    surfaces: [cli, client, ipc-error]
+    condition: "watch/cancel carried a sequence behind the job's current one"
+    retry: retry-same
+    source: [crates/arkforge-cli/src/main.rs, crates/arkforge-client/src/controller.rs, crates/arkforged/src/service.rs]
+  - code: STALE_SNAPSHOT
+    surfaces: [handshake-blocker]
+    condition: "the snapshot expired"
+    retry: operator
+    source: [crates/arkforge-ipc/src/messages.rs]
+  - code: STEP_HAS_NO_ACTION
+    surfaces: [job]
+    condition: "a public step with no primary private action (internal invariant)"
+    retry: never
+    source: [crates/arkforged/src/jobs.rs]
+  - code: SUBMISSION_AMBIGUOUS
+    surfaces: [ipc-error]
+    condition: "a submission carries a permit or a refusal, never both and never neither"
+    retry: operator
+    source: [crates/arkforged/src/service.rs]
+  - code: SUPERVISOR_IO_FAILED
+    surfaces: [supervisor]
+    condition: "see source"
+    retry: operator
+    source: [crates/arkforge-standalone/src/supervisor.rs]
+  - code: SUPERVISOR_REQUEST_INVALID
+    surfaces: [supervisor]
+    condition: "The authority supervisor does not recognize this request."
+    retry: operator
+    source: [crates/arkforge-standalone/src/supervisor.rs]
+  - code: SUPERVISOR_RESPONSE_INVALID
+    surfaces: [application, supervisor]
+    condition: "see source"
+    retry: operator
+    source: [crates/arkforge-standalone/src/application/service.rs, crates/arkforge-standalone/src/supervisor.rs]
+  - code: TARGET_BINDING_CONFLICT
+    surfaces: [supervisor]
+    condition: "see source"
+    retry: operator
+    source: [crates/arkforge-standalone/src/supervisor.rs]
+  - code: TARGET_LINEAGE_CONFLICT
+    surfaces: [supervisor]
+    condition: "the bound target lineage contradicts the current observation"
+    retry: operator
+    source: [crates/arkforge-standalone/src/supervisor.rs]
+  - code: TARGET_LINEAGE_INVALID
+    surfaces: [supervisor]
+    condition: "The durable target lineage is incomplete."
+    retry: operator
+    source: [crates/arkforge-standalone/src/supervisor.rs]
+  - code: TARGET_LINEAGE_STALE
+    surfaces: [supervisor]
+    condition: "A stale target-lineage revision cannot replace newer durable evidence."
+    retry: operator
+    source: [crates/arkforge-standalone/src/supervisor.rs]
+  - code: TARGET_NOT_ALLOWED
+    surfaces: [rescue]
+    condition: "see source"
+    retry: operator
+    source: [crates/arkforged/src/rescue.rs]
+  - code: TOOLCHAIN_DIGEST_MISMATCH
+    surfaces: [cli, handshake-blocker]
+    condition: "plan.toolchain.backendDigest differs from the daemon's bound backend digest"
+    retry: new-plan
+    source: [crates/arkforge-cli/src/main.rs, crates/arkforge-engine/src/lib.rs]
+  - code: TOOLCHAIN_ID_MISMATCH
+    surfaces: [ipc-error]
+    condition: "plan toolchain id differs from the bound toolchain id"
+    retry: new-plan
+    source: [crates/arkforged/src/service.rs]
+  - code: UNEXPECTED_ACKNOWLEDGEMENT
+    surfaces: [application, cli, supervisor]
+    condition: "an acknowledgement token that the plan did not require"
+    retry: operator
+    source: [crates/arkforge-cli/src/main.rs, crates/arkforge-standalone/src/application/service.rs, crates/arkforge-standalone/src/supervisor.rs]
+  - code: UNIQUE_LOADER_REBIND_NOT_OBSERVED
+    surfaces: [hdc]
+    condition: "see source"
+    retry: operator
+    source: [crates/arkforge-standalone/src/hdc_control.rs]
+  - code: UNIQUE_NORMAL_REBIND_NOT_OBSERVED
+    surfaces: [hdc]
+    condition: "see source"
+    retry: operator
+    source: [crates/arkforge-standalone/src/hdc_control.rs]
+  - code: UNKNOWN_CONTROL_ACTION
+    surfaces: [job]
+    condition: "see source"
+    retry: operator
+    source: [crates/arkforged/src/jobs.rs]
+  - code: UNKNOWN_JOB
+    surfaces: [application, cli, client, ipc-error, job]
+    condition: "no job with that id"
+    retry: operator
+    source: [crates/arkforge-cli/src/main.rs, crates/arkforge-client/src/controller.rs, crates/arkforge-standalone/src/application/service.rs, crates/arkforged/src/jobs.rs, crates/arkforged/src/service.rs]
+  - code: UNSUPPORTED_EXECUTION_PURPOSE
+    surfaces: [ipc-error]
+    condition: "materializePlan requires executionPurpose=primaryFlash or supersedingRecovery"
+    retry: operator
+    source: [crates/arkforged/src/service.rs]
+  - code: UNSUPPORTED_FLASH_INTENT
+    surfaces: [ipc-error]
+    condition: "materializePlan currently requires intent=fullRestore"
+    retry: operator
+    source: [crates/arkforged/src/service.rs]
+  - code: UNUSABLE_IDENTIFIER
+    surfaces: [job]
+    condition: "see source"
+    retry: operator
+    source: [crates/arkforged/src/jobs.rs]
+  - code: WRONG_CONTROL_ACTION
+    surfaces: [job]
+    condition: "receipt names another action than the request"
+    retry: never
+    source: [crates/arkforged/src/jobs.rs]
+  - code: WRONG_REQUEST
+    surfaces: [job]
+    condition: "request_id does not match the pending admission/control request"
+    retry: never
+    source: [crates/arkforged/src/jobs.rs]
+
+coverage:
+  total_codes: 221
+  by_primary_surface:
+    application: 22
+    artifact: 9
+    cli: 55
+    client: 4
+    handshake-blocker: 1
+    hdc: 15
+    ipc-error: 41
+    job: 21
+    packaging: 4
+    rescue: 22
+    supervisor: 27
+  scanned: [crates/**/src/*.rs, adapters/**/src/*.rs]
+  excluded: [tests, crates/arkforge-conformance, environment variable names, Mach-O and Win32 constants, journal fact keys, RockUSB opcodes]

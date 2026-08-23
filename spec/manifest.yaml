@@ -1,0 +1,157 @@
+# ArkForge Spec v1 — inventory
+#
+# schema: arkforge.spec-manifest/v1
+# Bump `version` on any normative change; list every file with its status.
+# `external` lists normative files that live outside spec/ for tooling reasons.
+schema: arkforge.spec-manifest/v1
+version: 1.0.0-draft.1
+date: 2026-08-23
+reference_implementation: rust workspace at this commit (not normative)
+precedence: [conformance/v1, model and state-machines and errors, requirements, docs/architecture.md, reference implementation]
+
+files:
+  - path: README.md
+    status: normative
+    role: entry point, precedence, porting order
+  - path: AUTHORING.md
+    status: informative
+  - path: glossary.md
+    status: informative
+  - path: ISSUES.md
+    status: informative
+  - path: requirements/digest.md
+    status: normative
+    areas: [DIG]
+  - path: requirements/identifiers.md
+    status: normative
+    areas: [ID]
+  - path: requirements/plan.md
+    status: normative
+    areas: [PLAN, PROJ, EFF]
+  - path: requirements/authority.md
+    status: normative
+    areas: [AUTH]
+  - path: requirements/engine.md
+    status: normative
+    areas: [ENG, JRN, CRASH]
+  - path: requirements/recovery.md
+    status: draft
+    areas: [REC]
+  - path: requirements/verification.md
+    status: normative
+    areas: [VER]
+  - path: requirements/transport.md
+    status: draft
+    areas: [TRN]
+  - path: requirements/control.md
+    status: draft
+    areas: [CTL]
+  - path: requirements/ipc.md
+    status: normative
+    areas: [IPC]
+  - path: requirements/artifact.md
+    status: draft
+    areas: [ART]
+  - path: requirements/profile.md
+    status: draft
+    areas: [PROF]
+  - path: requirements/cli.md
+    status: draft
+    areas: [CLI]
+  - path: model/README.md
+    status: informative
+  - path: model/digest-bodies.cddl
+    status: mixed
+    note: rules marked [fixture] are normative, the rest draft
+  - path: model/vocabularies.yaml
+    status: draft
+  - path: model/strict-yaml.md
+    status: normative
+    areas: [YAML]
+  - path: model/profile.schema.json
+    status: draft
+  - path: model/transcript.schema.json
+    status: draft
+  - path: model/transcript.md
+    status: draft
+  - path: state-machines/README.md
+    status: informative
+  - path: state-machines/job.yaml
+    status: mixed
+    note: legal edges normative; daemon journal mapping and restart policy draft
+  - path: state-machines/crash-disposition.yaml
+    status: normative
+  - path: state-machines/permit.yaml
+    status: normative
+  - path: ports/README.md
+    status: informative
+  - path: ports/durability.md
+    status: normative
+  - path: ports/clock.md
+    status: normative
+  - path: ports/filesystem.md
+    status: draft
+  - path: ports/usb.md
+    status: draft
+  - path: ports/transport-identity.md
+    status: draft
+  - path: ports/device-control.md
+    status: draft
+  - path: ports/ipc-framing.md
+    status: draft
+  - path: errors/registry.yaml
+    status: draft
+  - path: conformance/README.md
+    status: informative
+  - path: conformance/v1/manifest.json
+    status: normative
+    note: generated; lists every fixture file with its SHA-256
+  - path: mappings/rust.yaml
+    status: informative
+  - path: mappings/zig.yaml
+    status: informative
+  - path: mappings/cpp.yaml
+    status: informative
+
+external:
+  - path: proto/arkforge.proto
+    status: normative
+    role: IPC wire schema (arkforge.ipc.v1)
+  - path: profiles/dayu200.yaml
+    status: normative
+    role: published DeviceProfile data
+  - path: profiles/dayu600.yaml
+    status: normative
+    role: published research DeviceProfile data
+  - path: transcripts/dayu200-gj4-ecamp-96effff15.yaml
+    status: normative
+    role: golden transcript used by AF-CONF-PLAN-003
+  - path: crates/arkforge-conformance
+    status: tooling
+    role: fixture generator and drift guard (not part of the spec)
+
+suites:
+  - id: sha256
+    cases: 7
+  - id: hmac-sha256
+    cases: 8
+  - id: canonical-cbor
+    cases: 69
+  - id: permit
+    cases: 49
+  - id: admission
+    cases: 15
+  - id: journal
+    cases: 13
+  - id: crash
+    cases: 21
+  - id: state-machine
+    cases: 5
+  - id: protobuf
+    cases: 31
+  - id: rebind
+    cases: 18
+  - id: strict-yaml
+    cases: 33
+  - id: plan
+    cases: 9

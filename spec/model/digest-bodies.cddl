@@ -1,0 +1,425 @@
+; ===========================================================================
+; ArkForge Spec v1 — digest bodies (RFC 8610 CDDL)
+; status: normative for every rule that a conformance fixture exercises
+;         (marked [fixture]); draft for the rest (extracted from the Rust
+;         reference implementation, `source:` given).
+;
+; Every digest is SHA-256(domain || deterministic_cbor(body)), or
+; SHA-256(domain || d1 || d2 || …) where stated. `domain` is the ASCII string
+; shown INCLUDING its trailing NUL byte (written \0 below).
+;
+; Encoding: RFC 8949 §4.2.1 deterministic. Key order in this file is
+; documentation only — the encoder sorts by encoded key bytes.
+; Absent optional values are encoded as CBOR `null` under their key; a key is
+; never omitted unless the rule says `?`.
+; ===========================================================================
+
+sha256      = bstr .size 32
+opaque-id   = tstr .regexp "[A-Za-z0-9._:-]{1,128}"
+device-mode = tstr .regexp "[a-z0-9-]{1,64}"
+epoch-ms    = uint
+version     = [major: uint, minor: uint, patch: uint]
+facts       = { * opaque-id => tstr }
+
+; ---------------------------------------------------------------------------
+; Domain: "arkforge/v1/permit"  — NOTE: the permit is NOT hashed under a
+; domain; it is MAC'ed: integrityTag = HMAC-SHA-256(pairingSecret, body).
+; source: crates/arkforge-authority-api/src/lib.rs permit_body   [fixture: permit]
+; ---------------------------------------------------------------------------
+permit-signing-body = {
+  "permitId": opaque-id,
+  "authorityNamespace": opaque-id,
+  "controllerSessionId": opaque-id,
+  "jobId": opaque-id,
+  "planId": opaque-id,
+  "planDigest": sha256,
+  "stepId": opaque-id,
+  "attemptId": opaque-id,
+  "publicStepDigest": sha256,
+  "privateActionDigest": sha256,
+  "effectSetDigest": sha256,
+  "authorityBinding": authority-binding,
+  "admittedDeviceFactsDigest": sha256,
+  "issuedAtEpochMs": epoch-ms,
+  "expiresAtEpochMs": epoch-ms,
+  "singleUse": bool,
+}
+
+authority-binding = {
+  "authorityNamespace": opaque-id,
+  "bindingId": opaque-id,
+  "bindingRevision": uint,
+  "stableIdentityDigest": sha256,
+}
+
+; ---------------------------------------------------------------------------
+; Domain: "arkforge/v1/admission-snapshot\0"
+; source: crates/arkforge-authority-api/src/lib.rs StepAdmissionSnapshot  [fixture: admission]
+; ---------------------------------------------------------------------------
+admission-snapshot = {
+  "capturedAtEpochMs": epoch-ms,
+  "freshnessDeadlineEpochMs": epoch-ms,
+  "deviceFactsDigest": sha256,
+  "transportSessionDigest": sha256 / null,
+  "providerFactsDigest": sha256,
+  "toolchainFactsDigest": sha256,
+  "artifactFactsDigest": sha256,
+}
+
+; ---------------------------------------------------------------------------
+; Domain: "arkforge/v1/journal-record\0"
+; recordDigest covers `journal-record-body`; the stored record adds
+; "recordDigest": sha256 to the same map.
+; source: crates/arkforge-engine/src/journal.rs JournalRecord::body   [fixture: journal]
+; ---------------------------------------------------------------------------
+journal-record-fields = (
+  "schemaVersion": 1,
+  "sequence": uint,             ; 1-based, contiguous
+  "jobRevision": uint,
+  "kind": journal-record-kind,
+  "fsyncPolicy": "durable" / "buffered",
+  "atEpochMs": epoch-ms,
+  "subject": opaque-id,
+  "facts": facts,
+  "previousDigest": sha256,     ; 32 zero bytes for record 1
+)
+journal-record-body = { journal-record-fields }                 ; digested
+journal-record      = { journal-record-fields, "recordDigest": sha256 }   ; stored
+
+journal-record-kind =
+  "planStored" / "jobCreated" / "localExecutorLeaseAcquired" /
+  "preflightObserved" / "stepAdmissionRequested" / "stepPermitAccepted" /
+  "stepIntentRecorded" / "permitConsuming" / "externalDispatchStarted" /
+  "transportEvidenceRecorded" / "semanticReceiptRecorded" / "permitConsumed" /
+  "stepCheckpointed" / "rebindObserved" / "cancellationRequested" /
+  "postflightRecorded" / "outcomeClassified" / "possibleEffectSetRecorded" /
+  "recoveryAssessmentPublished" / "recoveryGuidePublished" /
+  "readOnlyObservationRecorded"
+
+; ---------------------------------------------------------------------------
+; Domain: "arkforge/v1/plan\0"
+; source: crates/arkforge-core/src/plan.rs plan_digest_body   [fixture: plan 009]
+; ---------------------------------------------------------------------------
+plan-body = {
+  "schemaVersion": 1,
+  "planId": opaque-id,
+  "executionPurpose": "primaryFlash" / "supersedingRecovery",
+  "authorityBinding": authority-binding,
+  "provider": provider-identity,
+  "profile": profile-identity,
+  "artifact": artifact-identity,
+  "toolchain": toolchain-identity,
+  "maturity": maturity-state,
+  "authoritySupport": authority-support-binding,
+  "negotiatedCapabilities": { * opaque-id => bool },
+  "publicSteps": [* public-step],
+  "effectSet": effect-set,
+  "providerExecutionPlanDigest": sha256,
+  "publicProjectionDigest": sha256,
+  "recoveryContract": recovery-contract-ref / null,
+  "postflight": postflight-policy,
+  "createdAtEpochMs": epoch-ms,
+  "expiresAtEpochMs": epoch-ms,      ; > createdAtEpochMs
+}
+
+provider-identity = {
+  "id": opaque-id,
+  "version": version,
+  "implementationDigest": sha256,
+}
+profile-identity = {
+  "id": opaque-id,
+  "version": version,
+  "digest": sha256,                  ; the DeviceProfile digest (below)
+}
+artifact-format = { "id": opaque-id, "version": version }
+artifact-identity = {
+  "artifactId": opaque-id,
+  "format": artifact-format,
+  "contentDigest": sha256,           ; SHA-256 of the imported bytes (no domain)
+  "sizeBytes": uint,
+  "manifestDigest": sha256,
+}
+toolchain-identity = {
+  "id": opaque-id,
+  "kind": "fixedTool" / "nativeProtocol" / "replay",
+  "version": version,
+  "backendDigest": sha256,
+  "upstreamRef": tstr / null,
+}
+maturity-state = {
+  "state": "productionVerified" / "hardwareCampaign" / "hardwareGated" /
+           "planOnly" / "researchOnly" / "unavailable",
+  "blocker": tstr / null,            ; null for productionVerified / hardwareCampaign
+  "campaign": tstr / null,           ; non-null only for hardwareCampaign
+}
+authority-support-binding = {
+  "keyDigest": sha256,
+  "state": authority-support-state,
+}
+authority-support-state = {
+  "state": "productionVerified" / "hardwareCampaign" / "hardwareGated",
+  "campaign": tstr / null,
+  "blocker": tstr / null,
+}
+recovery-contract-ref = { "id": opaque-id, "version": version, "digest": sha256 }
+postflight-policy = {
+  "requireExactTargetLineage": bool,
+  "requireMode": device-mode / null,
+  "requiredRuntimeFacts": facts,
+}
+
+; ---------------------------------------------------------------------------
+; Domain: "arkforge/v1/public-step\0"
+; source: crates/arkforge-core/src/step.rs PublicFlashStep   [fixture: plan 006]
+; ---------------------------------------------------------------------------
+public-step = {
+  "stepId": opaque-id,
+  "kind": flash-step-kind,
+  "effect": workflow-effect,
+  "cancellation": "nonInterruptible" / "cancellableAtBoundary" / "cancellableImmediately",
+  "binding": "exactBoundTarget" / "exactBoundTargetWithModeLineage",
+  "privateActionDigest": sha256,
+  "semanticTarget": semantic-target / null,
+  "contentDigest": sha256 / null,
+  "expectedModeBefore": device-mode / null,
+  "expectedModeAfter": device-mode / null,
+}
+flash-step-kind =
+  "ensureMode" / "probeDevice" / "validateLayout" / "loadEphemeralAgent" /
+  "eraseTarget" / "writeTarget" / "verifyTarget" / "awaitRebind" / "reboot" /
+  "postflightProbe"
+workflow-effect = "readOnly" / "transient" / "mutating" / "destructive"
+semantic-target =
+  { "partition": opaque-id } /
+  { "rawRegion": opaque-id } /
+  { "bootMetadata": "activeSlot" / "bootCount" / "updaterCommand" / "lockState" } /
+  { "device": null }
+
+; ---------------------------------------------------------------------------
+; Domain: "arkforge/v1/private-action\0"
+; source: crates/arkforge-core/src/projection.rs PrivateActionRecord   [fixture: plan 005]
+; ---------------------------------------------------------------------------
+private-action = {
+  "actionId": opaque-id,
+  "stepId": opaque-id,
+  "role": "primaryEffect" / "readOnlyTransportSubAction",
+  "effectClass": workflow-effect,
+  "declaredTarget": semantic-target / null,
+  "declaredRange": byte-range / null,
+  "contentDigest": sha256 / null,
+  "body": any,                       ; provider-shaped; must itself be canonical CBOR
+}
+byte-range = { "start": uint, "length": uint }   ; length > 0, no overflow
+
+; ---------------------------------------------------------------------------
+; Domain: "arkforge/v1/provider-execution-plan\0"
+;   digest = SHA-256(domain || binding[0].privateActionDigest || binding[1]… )
+; Domain: "arkforge/v1/public-projection\0"
+;   digest = SHA-256(domain || deterministic_cbor([* action-digest-binding]))
+; source: crates/arkforge-core/src/projection.rs validate_projection   [fixture: plan 007]
+; ---------------------------------------------------------------------------
+action-digest-binding = {
+  "stepId": opaque-id,
+  "actionId": opaque-id,
+  "role": "primaryEffect" / "readOnlyTransportSubAction",
+  "privateActionDigest": sha256,
+}
+
+; ---------------------------------------------------------------------------
+; Domain: "arkforge/v1/effect-set\0"
+; source: crates/arkforge-core/src/effect.rs EffectSet   [fixture: plan 008]
+; ---------------------------------------------------------------------------
+effect-set = {
+  "persistent": [* persistent-effect],
+  "transient": [* transient-effect],
+  "dataImpact": data-impact,
+}
+persistent-effect =
+  { "kind": "erasePartition", "partition": opaque-id, "range": byte-range } /
+  { "kind": "writePartition", "partition": opaque-id, "range": byte-range, "content": sha256 } /
+  { "kind": "writeRawRegion", "region": opaque-id, "range": byte-range, "content": sha256 } /
+  { "kind": "replacePartitionTable", "layoutDigest": sha256 } /
+  { "kind": "changeBootMetadata",
+    "field": "activeSlot" / "bootCount" / "updaterCommand" / "lockState",
+    "expectedValue": typed-value }
+transient-effect =
+  { "kind": "enterMode", "from": device-mode, "to": device-mode } /
+  { "kind": "loadEphemeralAgent", "stage": tstr, "memoryRegion": memory-region, "content": sha256 } /
+  { "kind": "usbDetachReattach", "expectationDigest": sha256 } /
+  { "kind": "reboot", "targetMode": device-mode }
+memory-region = { "baseAddress": uint, "length": uint }
+typed-value = { "text": tstr } / { "integer": int } / { "bool": bool }
+data-impact = {
+  "userdata": data-impact-state,
+  "calibration": data-impact-state,
+  "nonVolatileConfig": data-impact-state,
+  "secureStorage": data-impact-state,
+}
+data-impact-state = "preserved" / "overwritten" / "unknown"
+
+; ---------------------------------------------------------------------------
+; Domain: "arkforge/v1/possible-effect-set\0"
+; source: crates/arkforge-authority-api/src/lib.rs PossibleEffectSet   (draft)
+; ---------------------------------------------------------------------------
+possible-effect-set = {
+  "effects": effect-set,
+  "completeness": "bounded" / "unbounded",
+  "sourceActionIds": [* opaque-id],
+}
+
+; ---------------------------------------------------------------------------
+; Domain: "arkforge/v1/device-facts\0"
+; This domain is used with several preimages (ISSUES SI-008):
+;   (a) admission device facts digest over `device-facts-for-admission`;
+;   (b) observation facts digest over `device-observation`;
+;   (c) topology digest: payload = locationId as 4-byte big-endian (IOKit);
+;   (d) serial digest: payload = raw serial bytes;
+;   (e) descriptor digest: payload = descriptor bytes.
+; source: crates/arkforge-transport/src/lib.rs, usb.rs   [fixture: plan 003 for (b)]
+; ---------------------------------------------------------------------------
+device-facts-for-admission = {
+  "mode": device-mode,
+  "topologyDigest": sha256,
+  "descriptorDigest": sha256,
+  "serialEvidence": serial-evidence,
+  "protocolIdentity": [* protocol-identity-fact],
+  "identityStrength": identity-strength,
+  "malformedDescriptor": bool,
+}
+device-observation = {
+  "observationId": opaque-id,
+  "observedAtEpochMs": epoch-ms,
+  "mode": device-mode,
+  "topologyDigest": sha256,
+  "descriptorDigest": sha256,
+  "serialEvidence": serial-evidence,
+  "protocolIdentity": [* protocol-identity-fact],
+  "providerCandidates": [* { "providerId": opaque-id, "confidence": opaque-id }],
+  "identityStrength": identity-strength,
+  "malformedDescriptor": bool,
+}
+serial-evidence =
+  { "kind": "absent", "digest": null } /
+  { "kind": "descriptor", "digest": sha256 } /
+  { "kind": "protocolUnique", "digest": sha256 }
+protocol-identity-fact = { "key": opaque-id, "value": tstr }
+identity-strength = "classOnly" / "serialAsserted" / "serialAndTopology" / "protocolConfirmed"
+
+; ---------------------------------------------------------------------------
+; Domain: "arkforge/v1/provider-facts\0"   — used for the MaturityKey digest
+; source: crates/arkforge-core/src/identity.rs MaturityKey   (draft)
+; ---------------------------------------------------------------------------
+maturity-key = {
+  "provider": provider-identity,
+  "profile": profile-identity,
+  "artifactFormat": artifact-format,
+  "toolchain": toolchain-identity,
+  "hostPlatform": { "os": opaque-id, "arch": opaque-id },
+  "driverFactsDigest": sha256,
+  "evidenceSetDigest": sha256,
+}
+
+; ---------------------------------------------------------------------------
+; Domain: "arkforge/v1/toolchain-facts\0"  over toolchain-identity
+; Domain: "arkforge/v1/artifact-facts\0"   over artifact-identity
+; source: crates/arkforged/src/service.rs (admission snapshot inputs)   (draft)
+; ---------------------------------------------------------------------------
+
+; ---------------------------------------------------------------------------
+; Domain: "arkforge/v1/artifact-manifest\0"
+; source: crates/arkforge-artifact/src/manifest.rs ArtifactManifest   [fixture: plan 001]
+; ---------------------------------------------------------------------------
+artifact-manifest = {
+  "format": artifact-format,
+  "contentDigest": sha256,
+  "sizeBytes": uint,
+  "members": [* archive-member],
+  "partitionTable": partition-table / null,
+  "buildFacts": { * tstr => tstr },
+  "unclassifiedMembers": [* tstr],
+  "executionRelevantUnknowns": [* { "id": opaque-id, "summary": tstr }],
+  "confidence": "researchOnly" / "productionManifest",
+}
+archive-member = {
+  "path": tstr,
+  "role": "partitionTable" / "loader" / "imageCandidate" / "metadata" / "unclassified",
+  "sha256": sha256,
+  "sizeBytes": uint,
+}
+partition-table = {
+  "device": tstr,
+  "logicalBlockSize": uint,
+  "entries": [* partition-entry],
+}
+partition-entry = {
+  "name": tstr,
+  "index": uint,
+  "attribute": "bootable" / "grow" / null,
+  "sizeSectors": uint / null,        ; null for the remainder partition
+  "grammarBranch": "fixed" / "fixedBootable" / "remainderGrow",
+  "offsetSectors": uint,
+}
+
+; ---------------------------------------------------------------------------
+; Domain: "arkforge/v1/device-profile\0"
+; The digest is over the canonical model, not the YAML bytes.
+; source: crates/arkforge-core/src/profile.rs DeviceProfile   [fixture: plan 002]
+; ---------------------------------------------------------------------------
+device-profile = {
+  "schemaVersion": "arkforge.device-profile/v1",
+  "id": opaque-id,
+  "version": version,
+  "productModels": [+ tstr],
+  "soc": { "vendor": opaque-id, "family": opaque-id },
+  "hardwareRevisions": { "allow": [* tstr] } / { "anyRevisionEvidence": opaque-id },
+  "providers": [* { "providerId": opaque-id, "backend": opaque-id,
+                    "minimumVersion": version, "maximumVersionExclusive": version }],
+  "artifactFormats": [* opaque-id],
+  "knownMetadataMembers": [* tstr],
+  "modes": [* { "id": device-mode, "aliases": [* device-mode] }],
+  "usbIdentities": [* { "mode": device-mode, "vendorId": uint, "productId": uint,
+                        "evidenceRef": opaque-id }],
+  "modeTransitions": [* mode-transition],
+  "storage": { "kind": opaque-id, "logicalBlockSize": uint / null },
+  "readDomain": { "write": "full-disk" / "characterize-at-runtime",
+                  "read": "full" / "characterize-at-runtime",
+                  "erasedMediumFiller": uint / null },
+  "allowedTargets": [* allowed-target],
+  "protectedTargets": [* opaque-id],
+  "dataImpact": data-impact,
+  "recovery": { "supportsCompleteOverwrite": bool, "version": version,
+                "coveredEffects": [* opaque-id], "unsupportedStates": [* tstr] },
+  "evidenceRefs": [* opaque-id],
+}
+mode-transition = {
+  "from": device-mode,
+  "to": device-mode,
+  "action": opaque-id,
+  "serialPolicy": "must-match" / "may-change",
+  "topologyPolicy": "must-match" / "may-change",
+  "rebind": { "requireDisconnect": bool, "toleranceWindowMs": uint,
+              "tolerateTransientMalformed": bool },
+}
+allowed-target = {
+  "partition": opaque-id,
+  "writeOrder": uint,
+  "offsetSectors": uint,
+  "sourceMember": tstr / null,
+  "verification": {
+    "maxStrengthWhenReadable": "fullHash" / "sampledRanges" / "prefixHash" / "semanticOnly",
+    "fallback": { "writeCompletionSemantics": bool, "buildPostflight": bool },
+  },
+}
+
+; ---------------------------------------------------------------------------
+; Domain: "arkforge/v1/recovery-coverage\0"  over device-profile.recovery
+; Domain: "arkforge/v1/transcript\0"          see model/transcript.md
+; Domain: "arkforge/v1/action-receipt\0"      RESERVED — no body is digested
+;                                             under it today (ISSUES SI-009)
+; Domain: "arkforge/v1/transport-session\0"   over session facts (usb.rs) — draft
+; Domain: "arkforge/v1/rescue-plan\0", "arkforge/v1/rescue-receipt\0"
+;                                             rescue surface (crates/arkforged/src/rescue.rs) — draft
+; Domain: "arkforge/v1/authority-support-key\0"
+;                                             standalone authority support key — draft
+; ---------------------------------------------------------------------------

@@ -306,6 +306,7 @@ application certificate is not treated as a production driver signature.
 
 ## Learn more
 
+- [Language-neutral specification `spec/`](spec/README.md) (conformance fixtures, state tables, CDDL, stable codes; Rust is not the spec)
 - [Architecture and safety boundaries](docs/architecture.md)
 - [Agent-native CLI proposal](docs/openspec/chg-agent-native-cli/proposal.md)
 - [CLI acceptance matrix](docs/openspec/chg-agent-native-cli/verification.md)

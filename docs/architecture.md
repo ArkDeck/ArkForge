@@ -11,6 +11,12 @@
 > 目标设备：DAYU200、DAYU600，以及后续采用其他 SoC、固件格式和下载协议的产品
 >
 > 安全声明：本文是架构提案，不构成代码批准、Provider 发布或设备执行授权。生产启用新 Operation、Provider、integration/device profile 或 destructive admission 变化，必须经过 ArkDeck 规定的 OpenSpec 与维护者 PR review。
+>
+> 规范正本（2026-08-23 起）：可检查的语义——摘要与 CBOR 模型、状态机与崩溃处置、
+> permit、journal、端口契约、稳定错误码——以 [`spec/`](../spec/README.md) 为准，
+> 其 conformance fixture 是最高优先级；本文保留为设计依据、ArkDeck 边界与历史。
+> 本文的 Rust 代码块与 §13.1 状态图不是规范（差异见 [`spec/ISSUES.md`](../spec/ISSUES.md)，
+> 决定见 [AFD-0005](decisions/AFD-0005-language-neutral-spec.md)）。
 
 ---
 

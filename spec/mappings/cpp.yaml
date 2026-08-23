@@ -1,0 +1,39 @@
+# Traceability template for a C++ port
+#
+# schema: arkforge.mapping/v1
+# status: informative — fill in as the port lands.
+schema: arkforge.mapping/v1
+implementation: cpp
+status: template
+
+conventions:
+  errors: "std::expected<T, E> with an enum class per spec error family; registry codes as std::string_view constants; no exceptions across port boundaries"
+  ownership: "std::span<const std::byte> for borrowed input; std::vector<std::byte> for owned output; RAII handle types for claimed USB interfaces and journal files"
+  integers: "std::uint64_t for every spec unsigned; std::int64_t for CBOR negatives; never size_t on the wire"
+  digests: "std::array<std::byte, 32> by value; constant-time comparison helper for tags"
+  durability: "state the reached level (fsync / fdatasync / F_FULLFSYNC / FlushFileBuffers)"
+  yaml: "implement the strict subset directly; do not wrap yaml-cpp"
+  standard: "C++23 recommended for std::expected; C++20 minimum"
+
+stages:
+  - stage: 0
+    suites: [sha256, hmac-sha256, canonical-cbor, protobuf, strict-yaml]
+    symbols: []
+  - stage: 1
+    suites: [permit, admission, plan]
+    symbols: []
+  - stage: 2
+    suites: [plan (001-002)]
+    symbols: []
+  - stage: 3
+    suites: [journal, crash, state-machine]
+    symbols: []
+  - stage: 4
+    suites: [rebind]
+    symbols: []
+  - stage: 5
+    suites: [protobuf (framing), cli black-box]
+    symbols: []
+  - stage: 6
+    suites: []
+    note: OS ports; hardware-in-the-loop

@@ -1,0 +1,81 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://arkforge.dev/spec/v1/model/transcript.schema.json",
+  "title": "ArkForge transcript (arkforge.transcript/v1)",
+  "description": "A recorded device interaction, read through the strict YAML subset; scalars arrive as text. status: draft (extracted from crates/arkforge-transport/src/transcript.rs parse). See spec/model/transcript.md for semantics and the digest.",
+  "type": "object",
+  "required": ["schemaVersion", "transcript", "records"],
+  "$defs": {
+    "opaqueId": { "type": "string", "pattern": "^[A-Za-z0-9._:-]{1,128}$" },
+    "deviceMode": { "type": "string", "pattern": "^[a-z0-9-]{1,64}$" },
+    "unsigned": { "type": "string", "pattern": "^(0[xX][0-9A-Fa-f_]+|[0-9_]+)$" },
+    "sha256Hex": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+    "keyValue": {
+      "type": "object",
+      "required": ["key", "value"],
+      "properties": { "key": { "$ref": "#/$defs/opaqueId" }, "value": { "type": "string" } }
+    },
+    "observation": {
+      "type": "object",
+      "required": ["id", "mode", "topologyDigest", "descriptorDigest", "identityStrength"],
+      "properties": {
+        "id": { "$ref": "#/$defs/opaqueId" },
+        "mode": { "$ref": "#/$defs/deviceMode" },
+        "topologyDigest": { "$ref": "#/$defs/sha256Hex" },
+        "descriptorDigest": { "$ref": "#/$defs/sha256Hex" },
+        "serialKind": { "type": "string", "enum": ["absent", "descriptor", "protocolUnique"], "default": "absent" },
+        "serialDigest": { "$ref": "#/$defs/sha256Hex", "description": "required when serialKind is not absent" },
+        "identityStrength": { "type": "string", "enum": ["classOnly", "serialAsserted", "serialAndTopology", "protocolConfirmed"] },
+        "malformedDescriptor": { "type": "string", "enum": ["true", "false"], "default": "false" },
+        "protocolIdentity": { "type": "array", "items": { "$ref": "#/$defs/keyValue" } },
+        "providerCandidates": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": ["providerId", "confidence"],
+            "properties": { "providerId": { "$ref": "#/$defs/opaqueId" }, "confidence": { "$ref": "#/$defs/opaqueId" } }
+          }
+        }
+      }
+    }
+  },
+  "properties": {
+    "schemaVersion": { "const": "arkforge.transcript/v1" },
+    "transcript": {
+      "type": "object",
+      "required": ["id", "provenance", "source", "profileId"],
+      "properties": {
+        "id": { "$ref": "#/$defs/opaqueId" },
+        "provenance": {
+          "type": "string",
+          "enum": ["captured", "derived-from-published-receipts", "synthetic"],
+          "description": "only `captured` supports protocol claims"
+        },
+        "source": { "type": "string" },
+        "profileId": { "$ref": "#/$defs/opaqueId" }
+      }
+    },
+    "records": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "object",
+        "required": ["sequence", "kind", "atEpochMs", "status"],
+        "properties": {
+          "sequence": { "$ref": "#/$defs/unsigned", "description": "contiguous from 1" },
+          "kind": { "type": "string", "enum": ["observation", "attach", "detach", "rebind", "invocation"] },
+          "atEpochMs": { "$ref": "#/$defs/unsigned" },
+          "durationMs": { "$ref": "#/$defs/unsigned", "default": "0" },
+          "status": { "type": "string", "enum": ["ok", "failed", "timeout", "disconnected"] },
+          "action": { "$ref": "#/$defs/opaqueId", "description": "required for kind = invocation" },
+          "observation": { "$ref": "#/$defs/observation", "description": "required for kind = observation/attach/rebind" },
+          "requestBytes": { "$ref": "#/$defs/unsigned" },
+          "requestDigest": { "$ref": "#/$defs/sha256Hex" },
+          "responseBytes": { "$ref": "#/$defs/unsigned" },
+          "responseDigest": { "$ref": "#/$defs/sha256Hex" },
+          "semantic": { "type": "array", "items": { "$ref": "#/$defs/keyValue" } }
+        }
+      }
+    }
+  }
+}

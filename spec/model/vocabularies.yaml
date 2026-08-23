@@ -1,0 +1,347 @@
+# ArkForge Spec v1 — closed vocabularies and identifier grammar
+#
+# schema: arkforge.vocabulary/v1
+# status: draft (spellings are extracted from the reference implementation;
+#         each entry names its source). Where a conformance fixture pins the
+#         spelling, the entry says so and is normative.
+#
+# `unknown_value_policy` says what the reference implementation does with a
+# value outside the list on that surface:
+#   reject  — the document/message/record is refused
+#   unknown — mapped to an explicit unknown state (never a default)
+schema: arkforge.vocabulary/v1
+status: draft
+
+identifiers:
+  opaque-id:
+    regex: "^[A-Za-z0-9._:-]{1,128}$"
+    bytes_not_chars: true
+    case_sensitive: true
+    source: crates/arkforge-core/src/ids.rs OpaqueId::new
+    fixture: AF-CONF-PERMIT-048
+    newtypes: [PlanId, JobId, StepId, AttemptId, PermitId, ActionId, ObservationId, RequestId, ControllerSessionId, PartitionId, RegionId, AuthorityNamespace]
+  device-mode:
+    regex: "^[a-z0-9-]{1,64}$"
+    source: crates/arkforge-core/src/effect.rs DeviceMode::new
+  version:
+    text_form: "major.minor.patch (decimal, no leading v)"
+    cbor_form: "[major, minor, patch] as three unsigned integers"
+    source: crates/arkforge-core/src/identity.rs Version
+
+digest-text-forms:
+  - surface: cbor digest bodies
+    form: 32-byte byte string
+  - surface: JSON (CLI, IPC strings such as sha256 fields), YAML, journal facts
+    form: lowercase hex, 64 characters, no prefix
+    source: crates/arkforge-core/src/digest/sha256.rs Sha256Digest::to_hex
+  - surface: profile `profile.expectedDigest`
+    form: lowercase hex, optional `sha256:` prefix accepted
+    source: crates/arkforge-core/src/profile.rs load
+  - surface: IPC bytes fields (`*_sha256` of type bytes)
+    form: raw 32 bytes
+
+vocabularies:
+  - id: job-state
+    source: crates/arkforge-engine/src/lib.rs JobState::as_str
+    fixture: AF-CONF-STATEMACHINE-001
+    used_in: [ipc JobSummary.state, ipc JobEvent.job_state, journal outcomeClassified.outcome (terminal four), cli]
+    unknown_value_policy: reject
+    values: [planned, awaitingStart, preflight, awaitingPermit, stepIntentDurable, dispatching, receiptDurable, checkpointed, rebindWait, readOnlyDispatch, postflight, succeeded, confirmedFailed, cancelledSafe, outcomeUnknown, reconciling, recoveryAssessable]
+
+  - id: journal-record-kind
+    source: crates/arkforge-engine/src/journal.rs JournalRecordKind::as_str
+    fixture: AF-CONF-JOURNAL-002
+    unknown_value_policy: reject
+    values: [planStored, jobCreated, localExecutorLeaseAcquired, preflightObserved, stepAdmissionRequested, stepPermitAccepted, stepIntentRecorded, permitConsuming, externalDispatchStarted, transportEvidenceRecorded, semanticReceiptRecorded, permitConsumed, stepCheckpointed, rebindObserved, cancellationRequested, postflightRecorded, outcomeClassified, possibleEffectSetRecorded, recoveryAssessmentPublished, recoveryGuidePublished, readOnlyObservationRecorded]
+
+  - id: fsync-policy
+    source: crates/arkforge-engine/src/journal.rs FsyncPolicy::as_str
+    fixture: AF-CONF-JOURNAL-002
+    unknown_value_policy: reject
+    values: [durable, buffered]
+
+  - id: journal-fact-key
+    source: crates/arkforge-engine/src/recovery.rs fact; crates/arkforged/src/jobs.rs
+    note: keys recovery reads are normative; the rest are what the reference daemon writes
+    values: [jobId, planId, stepId, attemptId, permitId, receiptDigest, planDigest, totalSteps, controllerSessionId, outcome, reason, eventSequence, failureClassification, refusal, controlRequestId, controlAction, controlDeadlineEpochMs, mode]
+
+  - id: outcome-classified-outcome
+    source: crates/arkforged/src/jobs.rs recover_job; crates/arkforge-engine/src/recovery.rs terminal_state
+    fixture: AF-CONF-CRASH-021
+    unknown_value_policy: unknown   # any other text reads as outcomeUnknown
+    values: [succeeded, confirmedFailed, cancelledSafe, recoveryAssessable, outcomeUnknown, confirmedNoEffect, confirmedPartialEffect]
+
+  - id: flash-step-kind
+    source: crates/arkforge-core/src/step.rs FlashStepKind::as_str
+    fixture: AF-CONF-PLAN-006
+    unknown_value_policy: reject
+    values:
+      - wire: ensureMode
+        minimum_effect: transient
+      - wire: probeDevice
+        minimum_effect: readOnly
+      - wire: validateLayout
+        minimum_effect: readOnly
+      - wire: loadEphemeralAgent
+        minimum_effect: transient
+      - wire: eraseTarget
+        minimum_effect: destructive
+      - wire: writeTarget
+        minimum_effect: destructive
+      - wire: verifyTarget
+        minimum_effect: readOnly
+      - wire: awaitRebind
+        minimum_effect: transient
+      - wire: reboot
+        minimum_effect: transient
+      - wire: postflightProbe
+        minimum_effect: readOnly
+
+  - id: workflow-effect
+    source: crates/arkforge-core/src/step.rs WorkflowEffect::as_str
+    order: "readOnly < transient < mutating < destructive; >= mutating requires a StepPermit"
+    unknown_value_policy: reject
+    values: [readOnly, transient, mutating, destructive]
+
+  - id: cancellation-policy
+    source: crates/arkforge-core/src/step.rs CancellationPolicy::as_str
+    order: "nonInterruptible < cancellableAtBoundary < cancellableImmediately (strength)"
+    values: [nonInterruptible, cancellableAtBoundary, cancellableImmediately]
+
+  - id: binding-requirement
+    source: crates/arkforge-core/src/step.rs BindingRequirement::as_str
+    values: [exactBoundTarget, exactBoundTargetWithModeLineage]
+
+  - id: private-action-role
+    source: crates/arkforge-core/src/projection.rs PrivateActionRole::as_str
+    fixture: AF-CONF-PLAN-005
+    values: [primaryEffect, readOnlyTransportSubAction]
+
+  - id: persistent-effect-kind
+    source: crates/arkforge-core/src/effect.rs PersistentEffect
+    fixture: AF-CONF-PLAN-008
+    values: [erasePartition, writePartition, writeRawRegion, replacePartitionTable, changeBootMetadata]
+
+  - id: transient-effect-kind
+    source: crates/arkforge-core/src/effect.rs TransientEffect
+    fixture: AF-CONF-PLAN-008
+    values: [enterMode, loadEphemeralAgent, usbDetachReattach, reboot]
+
+  - id: boot-metadata-field
+    source: crates/arkforge-core/src/effect.rs BootMetadataField::as_str
+    values: [activeSlot, bootCount, updaterCommand, lockState]
+
+  - id: data-impact-state
+    source: crates/arkforge-core/src/effect.rs DataImpactState::as_str
+    fixture: AF-CONF-PLAN-008
+    unknown_value_policy: reject
+    values: [preserved, overwritten, unknown]
+
+  - id: data-impact-axis
+    source: crates/arkforge-core/src/effect.rs DataImpact
+    values: [userdata, calibration, nonVolatileConfig, secureStorage]
+
+  - id: execution-purpose
+    source: crates/arkforge-core/src/plan.rs ExecutionPurpose::as_str
+    fixture: AF-CONF-PLAN-009
+    unknown_value_policy: reject
+    values: [primaryFlash, supersedingRecovery]
+
+  - id: flash-intent
+    source: crates/arkforge-provider/src/lib.rs FlashIntent::as_str
+    note: "the CLI accepts the argv spelling `full-restore` and maps it to the wire spelling"
+    values: [fullRestore]
+
+  - id: execution-availability
+    source: crates/arkforge-core/src/plan.rs ExecutionAvailability::as_str
+    fixture: AF-CONF-PLAN-004
+    values: [available, unavailable]
+
+  - id: mechanics-maturity-state
+    source: crates/arkforge-core/src/identity.rs MaturityState::as_str
+    fixture: AF-CONF-PLAN-009
+    executable: [productionVerified, hardwareCampaign]
+    production_evidence: [productionVerified]
+    values: [productionVerified, hardwareCampaign, hardwareGated, planOnly, researchOnly, unavailable]
+
+  - id: authority-support-state
+    source: crates/arkforge-core/src/authority.rs AuthoritySupportState::as_str
+    executable: [productionVerified, hardwareCampaign]
+    values: [productionVerified, hardwareCampaign, hardwareGated]
+
+  - id: toolchain-kind
+    source: crates/arkforge-core/src/identity.rs ToolchainKind::as_str
+    note: "fixedTool is retired (NRU-004) and kept so historical plans decode; replay never publishes productionVerified"
+    values: [fixedTool, nativeProtocol, replay]
+
+  - id: toolchain-backend-id
+    source: profiles/dayu200.yaml, crates/arkforge-provider/src/rockchip.rs
+    note: OpaqueIds, open set per provider; these are the published ones
+    values: [arkforged-native-rockusb, transcript-replay, research-inspect]
+
+  - id: provider-id
+    source: crates/arkforge-provider/src/{rockchip,unisoc}.rs
+    values: [arkforge.rockchip, arkforge.unisoc]
+
+  - id: artifact-format-id
+    source: profiles/*.yaml, crates/arkforge-artifact
+    values: [rockchip-images-targz, unisoc-pac]
+
+  - id: parser-confidence
+    source: crates/arkforge-artifact/src/manifest.rs ParserConfidence::as_str
+    fixture: AF-CONF-PLAN-001
+    values: [researchOnly, productionManifest]
+
+  - id: archive-member-role
+    source: crates/arkforge-artifact/src/manifest.rs MemberRole::as_str
+    fixture: AF-CONF-PLAN-001
+    values: [partitionTable, loader, imageCandidate, metadata, unclassified]
+
+  - id: partition-attribute
+    source: crates/arkforge-artifact/src/manifest.rs PartitionAttribute::as_str
+    unknown_value_policy: reject
+    values: [bootable, grow]
+
+  - id: partition-grammar-branch
+    source: crates/arkforge-artifact/src/manifest.rs GrammarBranch::as_str
+    values: [fixed, fixedBootable, remainderGrow]
+
+  - id: identity-evidence-strength
+    source: crates/arkforge-transport/src/lib.rs IdentityEvidenceStrength::as_str
+    fixture: AF-CONF-REBIND-010
+    order: "classOnly < serialAsserted < serialAndTopology < protocolConfirmed"
+    unknown_value_policy: reject
+    values: [classOnly, serialAsserted, serialAndTopology, protocolConfirmed]
+
+  - id: serial-evidence-kind
+    source: crates/arkforge-transport/src/lib.rs SerialEvidence; crates/arkforged/src/jobs.rs request_admission
+    values: [absent, descriptor, protocolUnique]
+
+  - id: rebind-outcome
+    source: crates/arkforge-transport/src/lib.rs RebindOutcome
+    fixture: AF-CONF-REBIND-001..018
+    values: [settled, noCandidate, ambiguous, identityWeakened, serialChanged, topologyChanged, expectedModeNotReached, toleranceWindowExhausted]
+
+  - id: identity-field-policy
+    source: crates/arkforge-core/src/profile.rs IdentityFieldPolicy::parse
+    used_in: [profile modeTransitions serialPolicy, profile modeTransitions topologyPolicy]
+    unknown_value_policy: reject
+    values: [must-match, may-change]
+
+  - id: write-domain-declaration
+    source: crates/arkforge-core/src/profile.rs WriteDomainDeclaration::parse
+    values: [full-disk, characterize-at-runtime]
+
+  - id: read-domain-declaration
+    source: crates/arkforge-core/src/verification.rs ReadDomainDeclaration::as_str
+    values: [full, characterize-at-runtime]
+
+  - id: verification-strength
+    source: crates/arkforge-core/src/verification.rs VerificationStrength::as_str
+    order: "semanticOnly < prefixHash < sampledRanges < fullHash"
+    values: [semanticOnly, prefixHash, sampledRanges, fullHash]
+
+  - id: verification-outcome
+    source: crates/arkforged/src/jobs.rs complete_dispatch; proto ActionReceiptSummary.verification_outcome
+    fixture: AF-CONF-PB-015
+    values: [verified, typedSkip, failed]
+
+  - id: typed-skip-reason
+    source: crates/arkforge-core/src/verification.rs TypedSkipReason::as_str
+    values: [skipped-lba-read-window, profile-declares-unreachable]
+
+  - id: failure-classification
+    source: crates/arkforge-core/src/verification.rs FailureClassification::as_str
+    values: [content-mismatch, erased-medium-filler]
+
+  - id: action-disposition
+    source: crates/arkforge-core/src/outcome.rs ActionDisposition::as_str
+    fixture: AF-CONF-PB-015
+    note: "a zero exit status is not a disposition and is never sent"
+    values: [semanticSuccess, confirmedNoEffect, confirmedPartialEffect, outcomeUnknown]
+
+  - id: effect-set-completeness
+    source: crates/arkforge-authority-api/src/lib.rs EffectSetCompleteness
+    values: [bounded, unbounded]
+
+  - id: reconcile-verdict
+    source: crates/arkforged/src/service.rs (reconcileJob); proto ReconcileJobResponse.verdict
+    values: [succeeded, confirmedNotExecuted, confirmedPartial, stillUnknown, nothingToReconcile]
+
+  - id: cancellation-disposition
+    source: crates/arkforged/src/jobs.rs CancellationDisposition::as_str
+    used_in: [ipc cancelJob response, cli arkforge.job-cancellation/v1.disposition]
+    values: [queued-at-safe-boundary, cancelled-safe, already-terminal, outcome-unknown]
+
+  - id: freshness-verdict
+    source: crates/arkforge-authority-api/src/lib.rs FreshnessVerdict
+    fixture: AF-CONF-ADMISSION-003..015
+    values: [fresh, staleSnapshot, continuityBroken]
+
+  - id: continuity-break
+    source: crates/arkforge-authority-api/src/lib.rs ContinuityBreak
+    fixture: AF-CONF-ADMISSION-006..015
+    values: [sessionChanged, detachObserved, deviceFactsChanged, providerFactsChanged, toolchainFactsChanged, artifactFactsChanged]
+
+  - id: permit-disposition
+    source: crates/arkforge-engine/src/recovery.rs PermitDisposition
+    fixture: AF-CONF-CRASH-001..020
+    values: [unseen, acceptedIntentNotDurable, intentDurable, consumingOutcomeUnknown, consumed]
+
+  - id: crash-disposition
+    source: crates/arkforge-engine/src/recovery.rs CrashDisposition
+    fixture: AF-CONF-CRASH-001..020
+    values: [noJob, safeToCancel, dispatchForbiddenUntilIntentDurable, outcomeUnknown, checkpointFromDurableReceipt, replayFromCheckpoint, concluded]
+
+  - id: managed-control-action
+    source: crates/arkforge-ipc/src/messages.rs ManagedControlAction::as_str; proto ManagedControlAction
+    fixture: AF-CONF-PB-018
+    values:
+      - wire: 1
+        text: enter-updater
+      - wire: 2
+        text: reboot-to-normal
+      - wire: 3
+        text: read-product-facts
+      - wire: 4
+        text: read-build-facts
+
+  - id: forbidden-control-receipt-fact-key
+    source: crates/arkforge-ipc/src/messages.rs FORBIDDEN_CONTROL_RECEIPT_FACTS
+    fixture: AF-CONF-PB-018
+    values: [connectKey, hdcExecutablePath, hdcEndpoint, argv, shell, serverLifecycleAction]
+
+  - id: ipc-api
+    source: crates/arkforge-ipc/src/lib.rs Api; proto Api
+    fixture: AF-CONF-PB-018
+    values: [importArtifact, inspectArtifact, discoverDevices, probeDevice, materializePlan, startExecution, watchJob, cancelJob, reconcileJob, planSupersedingRecovery, getRecoveryGuide, submitStepPermit, submitManagedControlReceipt, getJob, listJobs]
+
+  - id: ipc-status
+    source: crates/arkforge-ipc/src/lib.rs Status::as_str; proto Status
+    fixture: AF-CONF-PB-018
+    values: [ok, refused, unavailable, invalidArgument, notFound, internal]
+
+  - id: ipc-session-kind
+    source: crates/arkforge-ipc/src/lib.rs SessionKind
+    values: [public, controller]
+
+  - id: job-event-kind
+    source: crates/arkforge-ipc/src/messages.rs JobEventKind; proto JobEventKind
+    fixture: AF-CONF-PB-018
+    values: [STATE_CHANGED, STEP_ADMISSION_REQUESTED, MANAGED_CONTROL_REQUESTED, ACTION_RECEIPT, STEP_CHECKPOINTED, POSTFLIGHT_RECORDED, OUTCOME_CLASSIFIED, POSSIBLE_EFFECT_SET, RECOVERY_ASSESSMENT]
+
+  - id: artifact-execution-unknown-id
+    source: crates/arkforge-artifact/src/dayu200.rs
+    fixture: AF-CONF-PLAN-001
+    values:
+      - wire: RK-A01
+        meaning: archive carries no partition table
+      - wire: RK-A02
+        meaning: unclassified archive members
+      - wire: RK-A03
+        meaning: no build facts inside any hashed image member
+
+  - id: protocol-identity-fact-key
+    source: crates/arkforge-transport/src/usb.rs, crates/arkforge-provider/src/rockchip.rs
+    note: open set; keys are OpaqueIds. The keys the reference transport and provider publish are listed; `transport` is the probe fact the replay transport adds.
+    values: [usb.identity, usb.productName, usb.vendorName, transport, profile]

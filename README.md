@@ -264,6 +264,7 @@ Hardware Developer Program 返回的签名 catalog；仓库不会用应用证书
 
 ## 进一步了解
 
+- [语言无关规范正本 `spec/`](spec/README.md)（conformance fixture、状态表、CDDL、错误码；Rust 不是规范）
 - [架构与安全边界](docs/architecture.md)
 - [Agent-native CLI 设计](docs/openspec/chg-agent-native-cli/proposal.md)
 - [CLI 验收矩阵](docs/openspec/chg-agent-native-cli/verification.md)

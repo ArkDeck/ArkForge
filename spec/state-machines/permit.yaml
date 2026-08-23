@@ -1,0 +1,65 @@
+# ArkForge Spec v1 — permit lifecycle (one permit id)
+#
+# schema: arkforge.state-machine/v1
+# status: normative — fixtures AF-CONF-PERMIT-004..026 (verification) and
+#         AF-CONF-CRASH-001..020 (ledger dispositions).
+schema: arkforge.state-machine/v1
+machine: permit
+status: normative
+
+states:
+  - id: unseen
+    meaning: the journal has never mentioned this permit id; admission may proceed
+    permits_dispatch: false
+  - id: acceptedIntentNotDurable
+    meaning: stepPermitAccepted is durable, stepIntentRecorded is not
+    permits_dispatch: false
+    unresolved: true
+  - id: intentDurable
+    meaning: stepIntentRecorded is durable; may be consumed exactly once
+    permits_dispatch: true
+  - id: consumingOutcomeUnknown
+    meaning: permitConsuming / externalDispatchStarted is durable and no receipt is
+    permits_dispatch: false
+    unresolved: true
+  - id: consumed
+    meaning: permitConsumed is durable with a receiptDigest; return that receipt, never dispatch again
+    permits_dispatch: false
+
+transitions:
+  - id: AF-AUTH-P-T-001
+    from: unseen
+    to: acceptedIntentNotDurable
+    record: stepPermitAccepted
+    guard: verify_permit succeeded for the pending dispatch intent (AF-AUTH-020 order)
+  - id: AF-AUTH-P-T-002
+    from: acceptedIntentNotDurable
+    to: intentDurable
+    record: stepIntentRecorded
+  - id: AF-AUTH-P-T-003
+    from: intentDurable
+    to: consumingOutcomeUnknown
+    record: permitConsuming
+    note: no device access before this record has returned from a durable append
+  - id: AF-AUTH-P-T-004
+    from: consumingOutcomeUnknown
+    to: consumed
+    record: permitConsumed
+    facts: [receiptDigest]
+
+verification_order:
+  # verify_permit(permit, secret, intent, alreadyConsumed) — first failure wins
+  - alreadyConsumed            → PERMIT_ALREADY_CONSUMED
+  - singleUse == false         → PERMIT_NOT_SINGLE_USE
+  - epoch != secret.epoch      → PERMIT_STALE_PAIRING_EPOCH
+  - HMAC(secret, body) != tag  → PERMIT_INTEGRITY_TAG_INVALID
+  - now >= expiresAtEpochMs    → PERMIT_EXPIRED
+  - planDigest mismatch        → PERMIT_PLAN_MISMATCH
+  - privateActionDigest mismatch → PERMIT_ACTION_MISMATCH
+  - authorityNamespace / controllerSessionId / jobId / planId / stepId / attemptId / publicStepDigest / effectSetDigest / authorityBinding / admittedDeviceFactsDigest mismatch → PERMIT_CONTEXT_MISMATCH{field}
+
+retransmission:
+  - the authority persists the complete permit (body, tag, epoch) before returning it
+  - a retransmission replays the stored bytes; deterministic re-derivation is forbidden
+  - a permit already consumed returns the original receipt
+  - after a restart the epoch rotates; an unconsumed pre-restart permit is void and admission runs again

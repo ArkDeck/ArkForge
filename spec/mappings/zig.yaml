@@ -1,0 +1,39 @@
+# Traceability template for a Zig port
+#
+# schema: arkforge.mapping/v1
+# status: informative — fill in as the port lands; the spec does not change to
+# fit the language, the mapping says how the language carries the spec.
+schema: arkforge.mapping/v1
+implementation: zig
+status: template
+
+conventions:
+  errors: "each spec error class is a tag of an error set per port/codec (e.g. `CborError.NonCanonicalHead`); codes that cross a process boundary are emitted as the exact registry string"
+  ownership: "buffers passed in are borrowed slices; returned bytes are allocated from the caller's allocator and owned by the caller; a claimed USB interface is a struct with deinit()"
+  integers: "u64 everywhere the spec says unsigned; i64 for CBOR negatives; no usize on the wire"
+  digests: "[32]u8 by value; hex only at JSON/YAML surfaces"
+  durability: "which fsync level the port reaches (fsync / F_FULLFSYNC / FlushFileBuffers) — state it here"
+  yaml: "implement the strict subset directly (model/strict-yaml.md); do not wrap a general YAML library"
+
+stages:
+  - stage: 0
+    suites: [sha256, hmac-sha256, canonical-cbor, protobuf, strict-yaml]
+    symbols: []
+  - stage: 1
+    suites: [permit, admission, plan]
+    symbols: []
+  - stage: 2
+    suites: [plan (001-002)]
+    symbols: []
+  - stage: 3
+    suites: [journal, crash, state-machine]
+    symbols: []
+  - stage: 4
+    suites: [rebind]
+    symbols: []
+  - stage: 5
+    suites: [protobuf (framing), cli black-box]
+    symbols: []
+  - stage: 6
+    suites: []
+    note: OS ports; hardware-in-the-loop

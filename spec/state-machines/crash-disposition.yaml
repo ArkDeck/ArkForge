@@ -1,0 +1,114 @@
+# ArkForge Spec v1 — crash dispositions (architecture.md §13.3 as data)
+#
+# schema: arkforge.state-machine/v1
+# status: normative — fixture AF-CONF-CRASH-001..021 pins every row.
+# source: crates/arkforge-engine/src/recovery.rs CrashDisposition::derive, PermitLedger
+#
+# Derivation for job J over its replayed records (subject == J or fact jobId == J):
+#   1. no jobCreated record            → noJob
+#   2. newest outcomeClassified whose `outcome` is a terminal state → concluded(state)
+#   3. newest record carrying a permitId fact names permit P; if none → safeToCancel
+#   4. ledger(P):
+#        unseen                     → safeToCancel
+#        acceptedIntentNotDurable   → dispatchForbiddenUntilIntentDurable(P)
+#        intentDurable              → outcomeUnknown(P)
+#        consumingOutcomeUnknown    → outcomeUnknown(P)
+#        consumed, no stepCheckpointed naming P → checkpointFromDurableReceipt(P)
+#        consumed, checkpointed     → replayFromCheckpoint
+#   No row permits a new external effect.
+schema: arkforge.state-machine/v1
+machine: crash-disposition
+status: normative
+
+permit_ledger:
+  # Last matching record wins, per permit id.
+  permits_dispatch: [intentDurable]
+  unresolved: [acceptedIntentNotDurable, consumingOutcomeUnknown]
+  records:
+    - record: stepPermitAccepted
+      disposition: acceptedIntentNotDurable
+    - record: stepIntentRecorded
+      disposition: intentDurable
+    - record: permitConsuming
+      disposition: consumingOutcomeUnknown
+    - record: externalDispatchStarted
+      disposition: consumingOutcomeUnknown
+    - record: permitConsumed
+      disposition: consumed
+      facts: [receiptDigest]
+
+rows:
+  - id: AF-CRASH-R-001
+    disposition: noJob
+    when: no jobCreated record for the job
+    action: plan and start again; nothing happened
+    permits_external_effect: false
+    fixtures: [AF-CONF-CRASH-001, AF-CONF-CRASH-002]
+  - id: AF-CRASH-R-002
+    disposition: safeToCancel
+    when: job exists, no record names a permit (or the newest permit is unseen)
+    action: safe to pause or cancel
+    permits_external_effect: false
+    fixtures: [AF-CONF-CRASH-003, AF-CONF-CRASH-004, AF-CONF-CRASH-017]
+  - id: AF-CRASH-R-003
+    disposition: dispatchForbiddenUntilIntentDurable
+    when: newest permit is acceptedIntentNotDurable
+    action: record the same intent under the same permit id, or let the permit expire; never create a second intent; never dispatch
+    permits_external_effect: false
+    fixtures: [AF-CONF-CRASH-005]
+  - id: AF-CRASH-R-004
+    disposition: outcomeUnknown
+    when: newest permit is intentDurable or consumingOutcomeUnknown
+    action: reconcile (read-only); never replay
+    permits_external_effect: false
+    fixtures: [AF-CONF-CRASH-006, AF-CONF-CRASH-007, AF-CONF-CRASH-008, AF-CONF-CRASH-009]
+    note: see ISSUES SI-003 for the daemon's narrower reading of intentDurable
+  - id: AF-CRASH-R-005
+    disposition: checkpointFromDurableReceipt
+    when: newest permit is consumed and no stepCheckpointed names it
+    action: verify the exact receipt, write the checkpoint; do not re-execute
+    permits_external_effect: false
+    fixtures: [AF-CONF-CRASH-010]
+  - id: AF-CRASH-R-006
+    disposition: replayFromCheckpoint
+    when: newest permit is consumed and checkpointed
+    action: replay events to the authority; continue read-only; do not re-execute
+    permits_external_effect: false
+    fixtures: [AF-CONF-CRASH-011, AF-CONF-CRASH-019]
+  - id: AF-CRASH-R-007
+    disposition: concluded
+    when: an outcomeClassified record names a terminal outcome
+    action: report that state
+    permits_external_effect: false
+    fixtures: [AF-CONF-CRASH-012, AF-CONF-CRASH-013, AF-CONF-CRASH-014, AF-CONF-CRASH-015, AF-CONF-CRASH-016, AF-CONF-CRASH-021]
+  - id: AF-CRASH-R-008
+    disposition: (newest permit decides)
+    when: several permits are mentioned
+    action: derive from the permit named by the newest record carrying permitId
+    fixtures: [AF-CONF-CRASH-018, AF-CONF-CRASH-019]
+  - id: AF-CRASH-R-009
+    disposition: (other jobs ignored)
+    when: records for another job share the journal
+    action: a record counts only if subject == jobId or fact jobId == jobId
+    fixtures: [AF-CONF-CRASH-020]
+
+architecture_13_3_mapping:
+  # How the prose table in docs/architecture.md §13.3 maps onto the rows.
+  - prose: start 前
+    row: AF-CRASH-R-001
+  - prose: permit 前
+    row: AF-CRASH-R-002
+  - prose: ArkDeck intent 已落、permit 传输丢失
+    row: authority side; the daemon sees AF-CRASH-R-002 and the authority retransmits the stored permit
+  - prose: permit 收到、ArkForge StepIntent 未落
+    row: AF-CRASH-R-003
+  - prose: StepIntent 已落、dispatch 是否发生不明
+    row: AF-CRASH-R-004
+  - prose: dispatch 后无 semantic receipt
+    row: AF-CRASH-R-004
+  - prose: receipt durable、checkpoint 未落
+    row: AF-CRASH-R-005
+  - prose: checkpoint 已落、ArkDeck 未观察
+    row: AF-CRASH-R-006
+  - prose: postflight 前崩溃
+    row: AF-CRASH-R-006 (read-only postflight/reconcile)

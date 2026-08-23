@@ -1,0 +1,333 @@
+# ArkForge Spec v1 — job state machine
+#
+# schema: arkforge.state-machine/v1
+# status: draft — the `states` and `transitions[].legal` facts are normative
+#         (fixture AF-CONF-STATEMACHINE-001); the `trigger`, `journal_*` and
+#         `exercised_by_daemon` facts are extracted from the reference daemon
+#         (crates/arkforged/src/jobs.rs) and are draft.
+#
+# The Mermaid diagram in docs/architecture.md §13.1 is a picture of this table
+# and is known to be incomplete (ISSUES SI-001). This table wins.
+#
+# Reading guide:
+#   journal_before — records appended (with fsync policy) before the state
+#                    changes; all durable ones have returned before the move.
+#   external_effect — whether the device may be touched during/after the edge.
+schema: arkforge.state-machine/v1
+machine: job
+status: draft
+source: [crates/arkforge-engine/src/lib.rs JobState::may_transition_to, crates/arkforged/src/jobs.rs JobRegistry]
+
+states:
+  - id: planned
+    terminal: false
+    permits_external_dispatch: false
+    cancel: accepted-immediately
+  - id: awaitingStart
+    terminal: false
+    permits_external_dispatch: false
+    cancel: accepted-immediately
+  - id: preflight
+    terminal: false
+    permits_external_dispatch: false
+    cancel: accepted-immediately   # daemon forces awaitingPermit first (SI-004)
+  - id: awaitingPermit
+    terminal: false
+    permits_external_dispatch: false
+    cancel: accepted-immediately
+  - id: stepIntentDurable
+    terminal: false
+    permits_external_dispatch: true
+    cancel: queued-to-safe-boundary
+  - id: dispatching
+    terminal: false
+    permits_external_dispatch: false
+    cancel: immediate-if-not-handed-to-dispatcher-else-queued
+  - id: receiptDurable
+    terminal: false
+    permits_external_dispatch: false
+    cancel: queued-to-safe-boundary
+  - id: checkpointed
+    terminal: false
+    permits_external_dispatch: false
+    cancel: concludes-at-this-boundary
+  - id: rebindWait
+    terminal: false
+    permits_external_dispatch: false
+    cancel: queued-to-safe-boundary
+    exercised_by_daemon: false
+  - id: readOnlyDispatch
+    terminal: false
+    permits_external_dispatch: false
+    cancel: accepted-immediately
+    exercised_by_daemon: false
+  - id: postflight
+    terminal: false
+    permits_external_dispatch: false
+    cancel: refused
+  - id: succeeded
+    terminal: true
+    permits_external_dispatch: false
+    cancel: already-terminal
+  - id: confirmedFailed
+    terminal: true
+    permits_external_dispatch: false
+    cancel: already-terminal
+  - id: cancelledSafe
+    terminal: true
+    permits_external_dispatch: false
+    cancel: already-terminal
+  - id: outcomeUnknown
+    terminal: false
+    permits_external_dispatch: false
+    cancel: refused-outcome-unknown
+  - id: reconciling
+    terminal: false
+    permits_external_dispatch: false
+    cancel: refused
+    exercised_by_daemon: false
+  - id: recoveryAssessable
+    terminal: true
+    permits_external_dispatch: false
+    cancel: already-terminal
+
+transitions:
+  - id: AF-ENG-T-001
+    from: planned
+    to: awaitingStart
+    trigger: startExecution accepted (plan verified, readiness checked, job journal created)
+    journal_before: [jobCreated (durable)]
+    facts: [jobId, planId, planDigest, totalSteps, controllerSessionId]
+    external_effect: none
+    exercised_by_daemon: true
+    source: crates/arkforged/src/jobs.rs JobRegistry::create
+  - id: AF-ENG-T-002
+    from: awaitingStart
+    to: preflight
+    trigger: immediately after AF-ENG-T-001
+    journal_before: []
+    external_effect: none
+    exercised_by_daemon: true
+    source: crates/arkforged/src/jobs.rs JobRegistry::create
+  - id: AF-ENG-T-003
+    from: preflight
+    to: awaitingPermit
+    trigger: submitStepPermit carrying a permit that verified for the pending admission
+    guards: [pending admission exists, request_id matches, freshness verdict is fresh, permit verifies against the dispatch intent, permit id unseen in the ledger]
+    journal_before: [stepAdmissionRequested (buffered, written when the admission was published)]
+    facts: [stepId]
+    external_effect: none
+    exercised_by_daemon: true
+    source: crates/arkforged/src/jobs.rs JobRegistry::submit_permit
+  - id: AF-ENG-T-004
+    from: preflight
+    to: readOnlyDispatch
+    trigger: a read-only step dispatched without admission
+    journal_before: []
+    external_effect: read-only
+    exercised_by_daemon: false   # the daemon admits every step (SI-005)
+    source: crates/arkforge-engine/src/lib.rs
+  - id: AF-ENG-T-005
+    from: readOnlyDispatch
+    to: preflight
+    exercised_by_daemon: false
+  - id: AF-ENG-T-006
+    from: readOnlyDispatch
+    to: postflight
+    exercised_by_daemon: false
+  - id: AF-ENG-T-007
+    from: readOnlyDispatch
+    to: cancelledSafe
+    exercised_by_daemon: false
+  - id: AF-ENG-T-008
+    from: awaitingPermit
+    to: stepIntentDurable
+    trigger: permit accepted
+    journal_before: [stepPermitAccepted (durable), stepIntentRecorded (durable)]
+    facts: [permitId, jobId, stepId, attemptId]
+    external_effect: none
+    notes: after stepIntentRecorded returns, everything downstream must assume the device may be touched
+    exercised_by_daemon: true
+    source: crates/arkforged/src/jobs.rs JobRegistry::submit_permit
+  - id: AF-ENG-T-009
+    from: awaitingPermit
+    to: cancelledSafe
+    trigger: the authority refused the admission (SubmitStepPermitRequest.refusal), or cancelJob before any permit
+    journal_before: [cancellationRequested (durable), outcomeClassified(outcome=cancelledSafe) (durable)]
+    facts: [refusal | reason, eventSequence]
+    external_effect: none
+    exercised_by_daemon: true
+    source: crates/arkforged/src/jobs.rs submit_permit (refusal branch), cancel
+  - id: AF-ENG-T-010
+    from: stepIntentDurable
+    to: dispatching
+    trigger: immediately after AF-ENG-T-008; the step's primary action is queued for the dispatcher or issued as a managed control request
+    journal_before: [permitConsuming (durable)]
+    facts: [permitId]
+    facts_for_managed_control: [permitId, controlRequestId, controlAction, controlDeadlineEpochMs]
+    external_effect: possible-after-this-record
+    exercised_by_daemon: true
+    source: crates/arkforged/src/jobs.rs JobRegistry::submit_permit
+  - id: AF-ENG-T-011
+    from: stepIntentDurable
+    to: outcomeUnknown
+    trigger: crash-derived (engine CrashDisposition) — the daemon never sits in stepIntentDurable across a call boundary
+    exercised_by_daemon: false
+  - id: AF-ENG-T-012
+    from: dispatching
+    to: receiptDurable
+    trigger: dispatch (or control receipt) completed with disposition semanticSuccess
+    journal_before: [transportEvidenceRecorded (buffered), semanticReceiptRecorded (durable), permitConsumed (durable)]
+    facts: [permitId, receiptDigest]
+    external_effect: happened
+    exercised_by_daemon: true
+    source: crates/arkforged/src/jobs.rs complete_dispatch, submit_control_receipt
+  - id: AF-ENG-T-013
+    from: dispatching
+    to: cancelledSafe
+    trigger: cancelJob while the dispatch is queued and has not been handed to a dispatcher
+    journal_before: [cancellationRequested (durable), outcomeClassified(outcome=cancelledSafe) (durable)]
+    external_effect: none
+    exercised_by_daemon: true
+    source: crates/arkforged/src/jobs.rs cancel
+  - id: AF-ENG-T-014
+    from: dispatching
+    to: outcomeUnknown
+    trigger: dispatch disposition other than semanticSuccess; control receipt not accepted; control request deadline expired
+    journal_before: [transportEvidenceRecorded (buffered), outcomeClassified(outcome=<disposition>|outcomeUnknown) (durable)]
+    facts: [outcome, reason?, eventSequence]
+    external_effect: possible
+    exercised_by_daemon: true
+    source: crates/arkforged/src/jobs.rs complete_dispatch, submit_control_receipt, expire_stale_controls
+  - id: AF-ENG-T-015
+    from: receiptDurable
+    to: checkpointed
+    trigger: immediately after AF-ENG-T-012
+    journal_before: [stepCheckpointed (durable)]
+    facts: [permitId, receiptDigest]
+    external_effect: none
+    exercised_by_daemon: true
+    source: crates/arkforged/src/jobs.rs complete_dispatch
+  - id: AF-ENG-T-016
+    from: receiptDurable
+    to: outcomeUnknown
+    exercised_by_daemon: false
+  - id: AF-ENG-T-017
+    from: checkpointed
+    to: preflight
+    trigger: more steps remain and no cancellation is queued
+    journal_before: []
+    external_effect: none
+    exercised_by_daemon: true
+    source: crates/arkforged/src/jobs.rs advance
+  - id: AF-ENG-T-018
+    from: checkpointed
+    to: postflight
+    trigger: the last step checkpointed
+    journal_before: [outcomeClassified(outcome=succeeded) (durable)]
+    facts: [outcome, reason, eventSequence]
+    external_effect: none
+    exercised_by_daemon: true
+    source: crates/arkforged/src/jobs.rs advance
+  - id: AF-ENG-T-019
+    from: checkpointed
+    to: rebindWait
+    exercised_by_daemon: false   # rebind is a provider action inside a step today
+  - id: AF-ENG-T-020
+    from: checkpointed
+    to: confirmedFailed
+    trigger: the checkpointed step's verification outcome is failed
+    journal_before: [outcomeClassified(outcome=confirmedFailed, failureClassification) (durable)]
+    external_effect: none
+    exercised_by_daemon: true
+    source: crates/arkforged/src/jobs.rs complete_dispatch
+  - id: AF-ENG-T-021
+    from: checkpointed
+    to: cancelledSafe
+    trigger: a cancellation queued during the in-flight step is honoured at this boundary
+    journal_before: [outcomeClassified(outcome=cancelledSafe) (durable)]
+    external_effect: none
+    exercised_by_daemon: true
+    source: crates/arkforged/src/jobs.rs finish_queued_cancellation
+  - id: AF-ENG-T-022
+    from: rebindWait
+    to: preflight
+    exercised_by_daemon: false
+  - id: AF-ENG-T-023
+    from: rebindWait
+    to: outcomeUnknown
+    exercised_by_daemon: false
+  - id: AF-ENG-T-024
+    from: postflight
+    to: succeeded
+    trigger: immediately after AF-ENG-T-018 (postflight facts were gathered by the postflightProbe step)
+    journal_before: []
+    external_effect: none
+    exercised_by_daemon: true
+    source: crates/arkforged/src/jobs.rs advance
+  - id: AF-ENG-T-025
+    from: postflight
+    to: confirmedFailed
+    exercised_by_daemon: false
+  - id: AF-ENG-T-026
+    from: outcomeUnknown
+    to: reconciling
+    exercised_by_daemon: false   # reconcileJob answers from the journal without changing state (SI-011)
+  - id: AF-ENG-T-027
+    from: outcomeUnknown
+    to: recoveryAssessable
+    exercised_by_daemon: false
+  - id: AF-ENG-T-028
+    from: reconciling
+    to: succeeded
+    exercised_by_daemon: false
+  - id: AF-ENG-T-029
+    from: reconciling
+    to: confirmedFailed
+    exercised_by_daemon: false
+  - id: AF-ENG-T-030
+    from: reconciling
+    to: outcomeUnknown
+    exercised_by_daemon: false
+
+# Every (from, to) pair not listed above is illegal and must be refused with
+# ILLEGAL_TRANSITION. 30 edges; fixture AF-CONF-STATEMACHINE-001.
+
+permit_consumption:
+  # The typed order. Each stage consumes the previous by value in the reference
+  # implementation; what the spec requires is the observable journal order.
+  - stage: admit
+    records: [stepPermitAccepted (durable), stepIntentRecorded (durable)]
+    precondition: ledger disposition of the permit id is unseen
+  - stage: begin_dispatch
+    records: [permitConsuming (durable), externalDispatchStarted (durable — engine helper only)]
+    note: the daemon writes permitConsuming only and dispatches from its queue (SI-012)
+  - stage: transport_evidence
+    records: [transportEvidenceRecorded (buffered)]
+  - stage: record_receipt
+    records: [semanticReceiptRecorded (durable), permitConsumed (durable)]
+  - stage: checkpoint
+    records: [stepCheckpointed (durable)]
+
+restart:
+  # What the reference daemon does when it opens a job journal at startup
+  # (crates/arkforged/src/jobs.rs recover_job). See also crash-disposition.yaml.
+  policy: conclude-never-resume
+  rules:
+    - when: an outcomeClassified record with a terminal outcome exists
+      state: that outcome (succeeded | confirmedFailed | cancelledSafe | recoveryAssessable); any other outcome text reads as outcomeUnknown
+      appends: nothing
+    - when: the permit ledger has an unresolved permit (acceptedIntentNotDurable or consumingOutcomeUnknown)
+      state: outcomeUnknown
+      appends: outcomeClassified(outcome=outcomeUnknown, reason="daemon restarted with a durable external intent and no settled receipt")
+    - when: every step is checkpointed (stepCheckpointed count >= totalSteps > 0)
+      state: succeeded
+      appends: outcomeClassified(outcome=succeeded)
+    - otherwise:
+      state: cancelledSafe
+      appends: outcomeClassified(outcome=cancelledSafe, reason="daemon restarted before any unresolved external intent existed")
+  apis_after_restart:
+    cancel: already-terminal or outcome-unknown
+    reconcile: allowed (read-only, answers from the journal)
+    planSupersedingRecovery: allowed for outcomeUnknown
+    watch: replays the recorded events
