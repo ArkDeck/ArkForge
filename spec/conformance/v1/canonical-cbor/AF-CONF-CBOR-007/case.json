@@ -1,0 +1,24 @@
+{
+  "id": "AF-CONF-CBOR-007",
+  "suite": "canonical-cbor",
+  "title": "unsigned 65536 (first 4-byte argument)",
+  "kind": "encode",
+  "requirements": ["AF-DIG-003", "AF-DIG-004", "AF-DIG-005"],
+  "description": "The value encodes to exactly `expected.hex` and decodes back to the same value. `input.diag` is RFC 8949 §8 notation; `input.value` is the typed JSON form.",
+  "input": {
+    "diag": "65536",
+    "value": {
+      "uint": 65536
+    }
+  },
+  "expected": {
+    "hex": "1a00010000",
+    "roundTrip": true
+  },
+  "files": {
+    "encoded.cbor": {
+      "bytes": 5,
+      "sha256": "2928012187f03446d1e9ec37dae5cc9586656c20bd6e28ff4953181b933cb3f0"
+    }
+  }
+}

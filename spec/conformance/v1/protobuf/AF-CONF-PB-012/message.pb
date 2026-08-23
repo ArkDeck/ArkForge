@@ -1,0 +1,1 @@
+PERMIT_REJECTEDstale pairing epoch

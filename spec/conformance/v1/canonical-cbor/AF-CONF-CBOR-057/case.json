@@ -1,0 +1,16 @@
+{
+  "id": "AF-CONF-CBOR-057",
+  "suite": "canonical-cbor",
+  "title": "simple value undefined (23)",
+  "kind": "decode",
+  "requirements": ["AF-DIG-007"],
+  "description": "A canonical decoder MUST reject these bytes. `errorClass` is the class the reference implementation reports; a port MUST reject and SHOULD report the same class.",
+  "input": {
+    "hex": "f7"
+  },
+  "expected": {
+    "result": "reject",
+    "errorClass": "CBOR_UNSUPPORTED_SIMPLE_VALUE"
+  },
+  "files": {}
+}

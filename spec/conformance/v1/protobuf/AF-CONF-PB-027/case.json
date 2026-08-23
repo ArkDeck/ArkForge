@@ -1,0 +1,18 @@
+{
+  "id": "AF-CONF-PB-027",
+  "suite": "protobuf",
+  "title": "length-delimited field overruns the message",
+  "kind": "decode",
+  "requirements": ["AF-IPC-015"],
+  "description": "Decode the bytes as `Hello`.",
+  "input": {
+    "decoder": "Hello",
+    "hex": "1a050102"
+  },
+  "expected": {
+    "result": "reject",
+    "code": "PB_LENGTH_OVERFLOW",
+    "detail": {}
+  },
+  "files": {}
+}

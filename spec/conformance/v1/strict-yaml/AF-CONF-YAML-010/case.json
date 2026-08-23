@@ -1,0 +1,30 @@
+{
+  "id": "AF-CONF-YAML-010",
+  "suite": "strict-yaml",
+  "title": "hash inside quotes is not a comment",
+  "kind": "decode",
+  "requirements": ["AF-YAML-004"],
+  "description": "Parse `input.yaml` with the strict subset reader. The value tree has only scalars (text), sequences, mappings and null; typing happens in the consumer. `message` on a rejection is informative.",
+  "input": {
+    "yaml": "a: \"x # not a comment\"\n"
+  },
+  "expected": {
+    "result": "accept",
+    "value": {
+      "mapping": [
+        [
+          "a",
+          {
+            "scalar": "x # not a comment"
+          }
+        ]
+      ]
+    }
+  },
+  "files": {
+    "input.yaml": {
+      "bytes": 23,
+      "sha256": "403a06e4f07930200909342b1d4f48bc9a592c7ad177250459e7d6783926fe0f"
+    }
+  }
+}

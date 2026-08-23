@@ -1,0 +1,21 @@
+{
+  "id": "AF-CONF-SHA256-003",
+  "suite": "sha256",
+  "title": "FIPS 180-4 two-block message (56 bytes)",
+  "kind": "digest",
+  "requirements": ["AF-DIG-001"],
+  "description": "SHA-256 of the input bytes, lowercase hex.",
+  "input": {
+    "ascii": "abcdbcdecdefdefgefghfghighijhijkijkljklmklmnlmnomnopnopq",
+    "length": 56
+  },
+  "expected": {
+    "sha256": "248d6a61d20638b8e5c026930c3e6039a33ce45964ff2167f6ecedd419db06c1"
+  },
+  "files": {
+    "input.bin": {
+      "bytes": 56,
+      "sha256": "248d6a61d20638b8e5c026930c3e6039a33ce45964ff2167f6ecedd419db06c1"
+    }
+  }
+}

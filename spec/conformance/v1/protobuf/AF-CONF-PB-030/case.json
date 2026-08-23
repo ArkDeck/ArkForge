@@ -1,0 +1,20 @@
+{
+  "id": "AF-CONF-PB-030",
+  "suite": "protobuf",
+  "title": "wire-type mismatch (varint where a string is expected) is refused",
+  "kind": "decode",
+  "requirements": ["AF-IPC-015"],
+  "description": "Decode the bytes as `Request`.",
+  "input": {
+    "decoder": "Request",
+    "hex": "08011802"
+  },
+  "expected": {
+    "result": "reject",
+    "code": "PB_UNSUPPORTED_WIRE_TYPE",
+    "detail": {
+      "wireType": 9
+    }
+  },
+  "files": {}
+}

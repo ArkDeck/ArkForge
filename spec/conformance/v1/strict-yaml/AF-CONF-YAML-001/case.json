@@ -1,0 +1,49 @@
+{
+  "id": "AF-CONF-YAML-001",
+  "suite": "strict-yaml",
+  "title": "block mapping with nested block",
+  "kind": "decode",
+  "requirements": ["AF-YAML-001"],
+  "description": "Parse `input.yaml` with the strict subset reader. The value tree has only scalars (text), sequences, mappings and null; typing happens in the consumer. `message` on a rejection is informative.",
+  "input": {
+    "yaml": "a: 1\nb:\n  c: x\n  d: y\n"
+  },
+  "expected": {
+    "result": "accept",
+    "value": {
+      "mapping": [
+        [
+          "a",
+          {
+            "scalar": "1"
+          }
+        ],
+        [
+          "b",
+          {
+            "mapping": [
+              [
+                "c",
+                {
+                  "scalar": "x"
+                }
+              ],
+              [
+                "d",
+                {
+                  "scalar": "y"
+                }
+              ]
+            ]
+          }
+        ]
+      ]
+    }
+  },
+  "files": {
+    "input.yaml": {
+      "bytes": 22,
+      "sha256": "11ec8efb2f1c507c5ab5fccb361e10a57d68cb2dd7a1ab6ee5769174fe2a598c"
+    }
+  }
+}

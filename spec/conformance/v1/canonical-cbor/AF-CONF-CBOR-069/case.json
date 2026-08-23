@@ -1,0 +1,16 @@
+{
+  "id": "AF-CONF-CBOR-069",
+  "suite": "canonical-cbor",
+  "title": "array nested 65 deep (one past the depth limit)",
+  "kind": "decode",
+  "requirements": ["AF-DIG-007"],
+  "description": "A canonical decoder MUST reject these bytes. `errorClass` is the class the reference implementation reports; a port MUST reject and SHOULD report the same class.",
+  "input": {
+    "hex": "818181818181818181818181818181818181818181818181818181818181818181818181818181818181818181818181818181818181818181818181818181818101"
+  },
+  "expected": {
+    "result": "reject",
+    "errorClass": "CBOR_DEPTH_LIMIT"
+  },
+  "files": {}
+}

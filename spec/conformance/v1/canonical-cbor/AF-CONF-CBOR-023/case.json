@@ -1,0 +1,24 @@
+{
+  "id": "AF-CONF-CBOR-023",
+  "suite": "canonical-cbor",
+  "title": "text with 2-byte UTF-8 (ü)",
+  "kind": "encode",
+  "requirements": ["AF-DIG-003", "AF-DIG-004", "AF-DIG-005"],
+  "description": "The value encodes to exactly `expected.hex` and decodes back to the same value. `input.diag` is RFC 8949 §8 notation; `input.value` is the typed JSON form.",
+  "input": {
+    "diag": "\"ü\"",
+    "value": {
+      "text": "ü"
+    }
+  },
+  "expected": {
+    "hex": "62c3bc",
+    "roundTrip": true
+  },
+  "files": {
+    "encoded.cbor": {
+      "bytes": 3,
+      "sha256": "579077f8dd4d539fa306635d1bb46a134bfe3e7ec064be8a0381cde26894d78a"
+    }
+  }
+}

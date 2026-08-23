@@ -1,0 +1,21 @@
+{
+  "id": "AF-CONF-YAML-033",
+  "suite": "strict-yaml",
+  "title": "a line that is not key: value",
+  "kind": "decode",
+  "requirements": ["AF-YAML-015"],
+  "description": "Parse `input.yaml` with the strict subset reader. The value tree has only scalars (text), sequences, mappings and null; typing happens in the consumer. `message` on a rejection is informative.",
+  "input": {
+    "yaml": "a: 1\njust text\n"
+  },
+  "expected": {
+    "result": "reject",
+    "message": "line 2: expected `key: value`, found \"just text\""
+  },
+  "files": {
+    "input.yaml": {
+      "bytes": 15,
+      "sha256": "d6176f2b4731bac8634b34e57fa7a2c66bfcdea1a24e64347ea139851ce1ae3c"
+    }
+  }
+}

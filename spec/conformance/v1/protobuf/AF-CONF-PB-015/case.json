@@ -1,0 +1,21 @@
+{
+  "id": "AF-CONF-PB-015",
+  "suite": "protobuf",
+  "title": "ActionReceiptSummary with a typed skip",
+  "kind": "encode",
+  "requirements": ["AF-IPC-010", "AF-IPC-011"],
+  "description": "Encoding of `arkforge.ipc.v1.ActionReceiptSummary` per proto/arkforge.proto. Proto3 defaults (0, false, empty) are omitted; fields are written in field number order; repeated message fields are one tag per element.",
+  "input": {
+    "message": "ActionReceiptSummary"
+  },
+  "expected": {
+    "hex": "0a054a4f422d311206504c414e2d311a06535445502d3522054143542d352a09415454454d50542d3132085045524d49542d353a0f73656d616e746963537563636573734220dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd4a097479706564536b69706a17736b69707065642d6c62612d726561642d77696e646f777a180a1277726974655061796c6f616453686132353612026565",
+    "roundTrip": true
+  },
+  "files": {
+    "message.pb": {
+      "bytes": 164,
+      "sha256": "dac7d2884090aa866b26a342a27856518cfbb09714cd3e7dd3369c9bd3029b8e"
+    }
+  }
+}

@@ -1,0 +1,21 @@
+{
+  "id": "AF-CONF-PB-003",
+  "suite": "protobuf",
+  "title": "HelloAck with two execution blockers",
+  "kind": "encode",
+  "requirements": ["AF-IPC-010", "AF-IPC-011"],
+  "description": "Encoding of `arkforge.ipc.v1.HelloAck` per proto/arkforge.proto. Proto3 defaults (0, false, empty) are omitted; fields are written in field number order; repeated message fields are one tag per element.",
+  "input": {
+    "message": "HelloAck"
+  },
+  "expected": {
+    "hex": "080118022205302e312e303a134e4f5f5041495245445f415554484f524954593a0d4e4f5f44495350415443484552",
+    "roundTrip": true
+  },
+  "files": {
+    "message.pb": {
+      "bytes": 47,
+      "sha256": "e2bc30a9945884ad54096f3a7ec7b0a0014023c81c0a054d651fe8e119fb2462"
+    }
+  }
+}

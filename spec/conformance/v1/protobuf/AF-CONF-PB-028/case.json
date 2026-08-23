@@ -1,0 +1,18 @@
+{
+  "id": "AF-CONF-PB-028",
+  "suite": "protobuf",
+  "title": "message ends mid-varint",
+  "kind": "decode",
+  "requirements": ["AF-IPC-015"],
+  "description": "Decode the bytes as `Hello`.",
+  "input": {
+    "decoder": "Hello",
+    "hex": "0880"
+  },
+  "expected": {
+    "result": "reject",
+    "code": "PB_TRUNCATED",
+    "detail": {}
+  },
+  "files": {}
+}

@@ -1,0 +1,14 @@
+{
+  "id": "AF-CONF-STATEMACHINE-005",
+  "suite": "state-machine",
+  "title": "cancel edges exist only at declared safe boundaries",
+  "kind": "table",
+  "requirements": ["AF-ENG-008"],
+  "description": "A named invariant over the edge set of AF-CONF-STATEMACHINE-001.",
+  "input": {},
+  "expected": {
+    "statesWithCancelledSafeEdge": ["awaitingPermit", "dispatching", "checkpointed", "readOnlyDispatch"],
+    "stepIntentDurableMayCancel": false
+  },
+  "files": {}
+}

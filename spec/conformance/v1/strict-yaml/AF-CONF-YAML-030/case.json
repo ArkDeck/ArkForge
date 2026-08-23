@@ -1,0 +1,21 @@
+{
+  "id": "AF-CONF-YAML-030",
+  "suite": "strict-yaml",
+  "title": "empty item in a flow sequence",
+  "kind": "decode",
+  "requirements": ["AF-YAML-013"],
+  "description": "Parse `input.yaml` with the strict subset reader. The value tree has only scalars (text), sequences, mappings and null; typing happens in the consumer. `message` on a rejection is informative.",
+  "input": {
+    "yaml": "a: [x,,y]\n"
+  },
+  "expected": {
+    "result": "reject",
+    "message": "line 1: empty item in flow sequence"
+  },
+  "files": {
+    "input.yaml": {
+      "bytes": 10,
+      "sha256": "703428f0da6bd50d0f8fab282528d56a69b091abb6855654fcf27f182122389e"
+    }
+  }
+}

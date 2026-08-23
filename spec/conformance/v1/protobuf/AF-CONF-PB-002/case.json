@@ -1,0 +1,21 @@
+{
+  "id": "AF-CONF-PB-002",
+  "suite": "protobuf",
+  "title": "Hello (public)",
+  "kind": "encode",
+  "requirements": ["AF-IPC-010", "AF-IPC-011"],
+  "description": "Encoding of `arkforge.ipc.v1.Hello` per proto/arkforge.proto. Proto3 defaults (0, false, empty) are omitted; fields are written in field number order; repeated message fields are one tag per element.",
+  "input": {
+    "message": "Hello"
+  },
+  "expected": {
+    "hex": "08011801",
+    "roundTrip": true
+  },
+  "files": {
+    "message.pb": {
+      "bytes": 4,
+      "sha256": "d211a73fcc94673d08bcacea3bfd588db5619c532c427218f3484ceef99c99ac"
+    }
+  }
+}

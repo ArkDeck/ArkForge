@@ -1,0 +1,16 @@
+{
+  "id": "AF-CONF-HMAC-008",
+  "suite": "hmac-sha256",
+  "title": "empty key and empty message",
+  "kind": "digest",
+  "requirements": ["AF-DIG-002"],
+  "description": "HMAC-SHA-256(key, data), lowercase hex.",
+  "input": {
+    "keyHex": "",
+    "dataHex": ""
+  },
+  "expected": {
+    "tag": "b613679a0814d9ec772f95d778c35fc5ff1697c493715653c6c712144292c5ad"
+  },
+  "files": {}
+}

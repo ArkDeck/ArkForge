@@ -1,0 +1,95 @@
+{
+  "id": "AF-CONF-CRASH-012",
+  "suite": "crash",
+  "title": "concluded succeeded",
+  "kind": "derive",
+  "requirements": ["AF-CRASH-002", "AF-AUTH-P-001", "AF-CRASH-R-007"],
+  "description": "Replay the records (subject JOB-1 unless a jobId fact says otherwise; atEpochMs 1010, 1020, …; jobRevision 1), then derive the crash disposition for job JOB-1 and the permit ledger. `journal-frames.bin` holds the same records framed as on disk, without the file magic.",
+  "input": {
+    "jobId": "JOB-1",
+    "records": [
+      {
+        "kind": "jobCreated",
+        "facts": {
+          "jobId": "JOB-1"
+        }
+      },
+      {
+        "kind": "stepPermitAccepted",
+        "facts": {
+          "jobId": "JOB-1",
+          "stepId": "STEP-1",
+          "permitId": "PERMIT-1"
+        }
+      },
+      {
+        "kind": "stepIntentRecorded",
+        "facts": {
+          "jobId": "JOB-1",
+          "stepId": "STEP-1",
+          "permitId": "PERMIT-1"
+        }
+      },
+      {
+        "kind": "permitConsuming",
+        "facts": {
+          "jobId": "JOB-1",
+          "permitId": "PERMIT-1"
+        }
+      },
+      {
+        "kind": "semanticReceiptRecorded",
+        "facts": {
+          "jobId": "JOB-1",
+          "permitId": "PERMIT-1",
+          "receiptDigest": "abc123"
+        }
+      },
+      {
+        "kind": "permitConsumed",
+        "facts": {
+          "jobId": "JOB-1",
+          "permitId": "PERMIT-1",
+          "receiptDigest": "abc123"
+        }
+      },
+      {
+        "kind": "stepCheckpointed",
+        "facts": {
+          "jobId": "JOB-1",
+          "stepId": "STEP-1",
+          "permitId": "PERMIT-1"
+        }
+      },
+      {
+        "kind": "outcomeClassified",
+        "facts": {
+          "jobId": "JOB-1",
+          "outcome": "succeeded"
+        }
+      }
+    ]
+  },
+  "expected": {
+    "crashDisposition": {
+      "row": "concluded",
+      "permitsExternalEffect": false,
+      "state": "succeeded"
+    },
+    "permitLedger": [
+      {
+        "permitId": "PERMIT-1",
+        "disposition": "consumed",
+        "permitsDispatch": false,
+        "receiptDigest": "abc123"
+      }
+    ],
+    "unresolvedPermits": []
+  },
+  "files": {
+    "journal-frames.bin": {
+      "bytes": 2029,
+      "sha256": "a724cd3022e1832202d6f824787aea7e466e583f25774579ab1ccff1b74ad89f"
+    }
+  }
+}

@@ -1,0 +1,21 @@
+{
+  "id": "AF-CONF-PB-011",
+  "suite": "protobuf",
+  "title": "SubmitStepPermitResponse accepted (only field 1)",
+  "kind": "encode",
+  "requirements": ["AF-IPC-010", "AF-IPC-011"],
+  "description": "Encoding of `arkforge.ipc.v1.SubmitStepPermitResponse` per proto/arkforge.proto. Proto3 defaults (0, false, empty) are omitted; fields are written in field number order; repeated message fields are one tag per element.",
+  "input": {
+    "message": "SubmitStepPermitResponse"
+  },
+  "expected": {
+    "hex": "0801",
+    "roundTrip": true
+  },
+  "files": {
+    "message.pb": {
+      "bytes": 2,
+      "sha256": "fb8da7eb5b1b399e7321179dac9e9f65773d7331e1e30554e3911e4325e1ef19"
+    }
+  }
+}

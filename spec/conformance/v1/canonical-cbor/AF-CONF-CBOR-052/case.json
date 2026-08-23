@@ -1,0 +1,16 @@
+{
+  "id": "AF-CONF-CBOR-052",
+  "suite": "canonical-cbor",
+  "title": "indefinite-length map",
+  "kind": "decode",
+  "requirements": ["AF-DIG-007"],
+  "description": "A canonical decoder MUST reject these bytes. `errorClass` is the class the reference implementation reports; a port MUST reject and SHOULD report the same class.",
+  "input": {
+    "hex": "bf616101ff"
+  },
+  "expected": {
+    "result": "reject",
+    "errorClass": "CBOR_INDEFINITE_LENGTH"
+  },
+  "files": {}
+}

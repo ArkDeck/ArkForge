@@ -1,0 +1,21 @@
+{
+  "id": "AF-CONF-PB-022",
+  "suite": "protobuf",
+  "title": "explicit zero for a required enum is the same as absent",
+  "kind": "decode",
+  "requirements": ["AF-IPC-014"],
+  "description": "Decode the bytes as `Hello`.",
+  "input": {
+    "decoder": "Hello",
+    "hex": "0801"
+  },
+  "expected": {
+    "result": "reject",
+    "code": "PB_MISSING_FIELD",
+    "detail": {
+      "message": "Hello",
+      "field": 3
+    }
+  },
+  "files": {}
+}

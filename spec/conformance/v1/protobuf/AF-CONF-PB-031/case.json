@@ -1,0 +1,45 @@
+{
+  "id": "AF-CONF-PB-031",
+  "suite": "protobuf",
+  "title": "frame = u32 big-endian length + message",
+  "kind": "encode",
+  "requirements": ["AF-IPC-001", "AF-IPC-002"],
+  "description": "A frame is a 4-byte big-endian length followed by that many bytes. The length is checked against the 16777216-byte bound before any allocation. A clean end of stream between frames is not an error; a cut inside a frame is.",
+  "input": {
+    "message": "AF-CONF-PB-001"
+  },
+  "expected": {
+    "hex": "0000000408011802",
+    "maxFrameBytes": 16777216,
+    "protocolMajor": 1,
+    "protocolMinor": 0,
+    "negotiation": [
+      {
+        "peerMajor": 1,
+        "peerMinor": 0,
+        "accepted": true
+      },
+      {
+        "peerMajor": 1,
+        "peerMinor": 7,
+        "accepted": true
+      },
+      {
+        "peerMajor": 2,
+        "peerMinor": 0,
+        "accepted": false
+      },
+      {
+        "peerMajor": 0,
+        "peerMinor": 0,
+        "accepted": false
+      }
+    ]
+  },
+  "files": {
+    "frame.bin": {
+      "bytes": 8,
+      "sha256": "f78b6d0539a58040c1f1d2b77877d820e7adaf2964ab5df5144f7e6072869b1a"
+    }
+  }
+}

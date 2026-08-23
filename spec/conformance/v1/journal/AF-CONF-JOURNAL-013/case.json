@@ -1,0 +1,25 @@
+{
+  "id": "AF-CONF-JOURNAL-013",
+  "suite": "journal",
+  "title": "a record missing a field is malformed by name, never defaulted",
+  "kind": "replay",
+  "requirements": ["AF-JRN-017"],
+  "description": "Open `journal.bin`. A journal that no longer proves its own history is refused; recovery must not reason from it.",
+  "input": {
+    "basedOn": "AF-CONF-JOURNAL-003",
+    "mutation": "record 1 without fsyncPolicy"
+  },
+  "expected": {
+    "result": "reject",
+    "code": "JOURNAL_RECORD_MALFORMED",
+    "detail": {
+      "field": "fsyncPolicy"
+    }
+  },
+  "files": {
+    "journal.bin": {
+      "bytes": 1218,
+      "sha256": "e34ede29bba2f19dab15b3bf2dbb817f9e849c1b0879ba2f728e5703bc73e02c"
+    }
+  }
+}

@@ -1,0 +1,160 @@
+{
+  "id": "AF-CONF-PB-018",
+  "suite": "protobuf",
+  "title": "enum wire values and their text spellings",
+  "kind": "table",
+  "requirements": ["AF-IPC-012"],
+  "description": "Zero is UNSPECIFIED for every enum and is never accepted on a required enum field. Any other unknown value is a hard error.",
+  "input": {},
+  "expected": {
+    "SessionKind": [
+      {
+        "wire": 1,
+        "text": "public"
+      },
+      {
+        "wire": 2,
+        "text": "controller"
+      }
+    ],
+    "Api": [
+      {
+        "wire": 1,
+        "text": "importArtifact"
+      },
+      {
+        "wire": 2,
+        "text": "inspectArtifact"
+      },
+      {
+        "wire": 3,
+        "text": "discoverDevices"
+      },
+      {
+        "wire": 4,
+        "text": "probeDevice"
+      },
+      {
+        "wire": 5,
+        "text": "materializePlan"
+      },
+      {
+        "wire": 6,
+        "text": "startExecution"
+      },
+      {
+        "wire": 7,
+        "text": "watchJob"
+      },
+      {
+        "wire": 8,
+        "text": "cancelJob"
+      },
+      {
+        "wire": 9,
+        "text": "reconcileJob"
+      },
+      {
+        "wire": 10,
+        "text": "planSupersedingRecovery"
+      },
+      {
+        "wire": 11,
+        "text": "getRecoveryGuide"
+      },
+      {
+        "wire": 12,
+        "text": "submitStepPermit"
+      },
+      {
+        "wire": 13,
+        "text": "submitManagedControlReceipt"
+      },
+      {
+        "wire": 14,
+        "text": "getJob"
+      },
+      {
+        "wire": 15,
+        "text": "listJobs"
+      }
+    ],
+    "Status": [
+      {
+        "wire": 1,
+        "text": "ok"
+      },
+      {
+        "wire": 2,
+        "text": "refused"
+      },
+      {
+        "wire": 3,
+        "text": "unavailable"
+      },
+      {
+        "wire": 4,
+        "text": "invalidArgument"
+      },
+      {
+        "wire": 5,
+        "text": "notFound"
+      },
+      {
+        "wire": 6,
+        "text": "internal"
+      }
+    ],
+    "JobEventKind": [
+      {
+        "wire": 1
+      },
+      {
+        "wire": 2
+      },
+      {
+        "wire": 3
+      },
+      {
+        "wire": 4
+      },
+      {
+        "wire": 5
+      },
+      {
+        "wire": 6
+      },
+      {
+        "wire": 7
+      },
+      {
+        "wire": 8
+      },
+      {
+        "wire": 9
+      }
+    ],
+    "ManagedControlAction": [
+      {
+        "wire": 1,
+        "text": "enter-updater"
+      },
+      {
+        "wire": 2,
+        "text": "reboot-to-normal"
+      },
+      {
+        "wire": 3,
+        "text": "read-product-facts"
+      },
+      {
+        "wire": 4,
+        "text": "read-build-facts"
+      }
+    ],
+    "publicSessionMayCall": ["inspectArtifact", "discoverDevices", "probeDevice", "materializePlan", "watchJob", "getRecoveryGuide", "getJob", "listJobs"],
+    "controllerOnly": ["importArtifact", "startExecution", "cancelJob", "reconcileJob", "planSupersedingRecovery", "submitStepPermit", "submitManagedControlReceipt"],
+    "forbiddenControlReceiptFacts": ["connectKey", "hdcExecutablePath", "hdcEndpoint", "argv", "shell", "serverLifecycleAction"]
+  },
+  "files": {}
+}

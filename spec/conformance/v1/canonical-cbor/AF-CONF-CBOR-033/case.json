@@ -1,0 +1,34 @@
+{
+  "id": "AF-CONF-CBOR-033",
+  "suite": "canonical-cbor",
+  "title": "array of three unsigned",
+  "kind": "encode",
+  "requirements": ["AF-DIG-003", "AF-DIG-004", "AF-DIG-005"],
+  "description": "The value encodes to exactly `expected.hex` and decodes back to the same value. `input.diag` is RFC 8949 §8 notation; `input.value` is the typed JSON form.",
+  "input": {
+    "diag": "[1, 2, 3]",
+    "value": {
+      "array": [
+        {
+          "uint": 1
+        },
+        {
+          "uint": 2
+        },
+        {
+          "uint": 3
+        }
+      ]
+    }
+  },
+  "expected": {
+    "hex": "83010203",
+    "roundTrip": true
+  },
+  "files": {
+    "encoded.cbor": {
+      "bytes": 4,
+      "sha256": "4abc31137ce738d9aceb8a1d1d51f15cad42c2b08dcb7ed179f737a194b355e7"
+    }
+  }
+}

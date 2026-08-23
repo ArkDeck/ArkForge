@@ -1,0 +1,21 @@
+{
+  "id": "AF-CONF-PB-001",
+  "suite": "protobuf",
+  "title": "Hello (controller)",
+  "kind": "encode",
+  "requirements": ["AF-IPC-010", "AF-IPC-011"],
+  "description": "Encoding of `arkforge.ipc.v1.Hello` per proto/arkforge.proto. Proto3 defaults (0, false, empty) are omitted; fields are written in field number order; repeated message fields are one tag per element.",
+  "input": {
+    "message": "Hello"
+  },
+  "expected": {
+    "hex": "08011802",
+    "roundTrip": true
+  },
+  "files": {
+    "message.pb": {
+      "bytes": 4,
+      "sha256": "cb4b481f21f63da679ab55c3d79f7033ea70410148164e8b4cbd5c22999e9dca"
+    }
+  }
+}

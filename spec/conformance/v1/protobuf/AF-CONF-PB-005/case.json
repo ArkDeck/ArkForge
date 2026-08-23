@@ -1,0 +1,21 @@
+{
+  "id": "AF-CONF-PB-005",
+  "suite": "protobuf",
+  "title": "Request with empty payload (field 3 omitted)",
+  "kind": "encode",
+  "requirements": ["AF-IPC-010", "AF-IPC-011"],
+  "description": "Encoding of `arkforge.ipc.v1.Request` per proto/arkforge.proto. Proto3 defaults (0, false, empty) are omitted; fields are written in field number order; repeated message fields are one tag per element.",
+  "input": {
+    "message": "Request"
+  },
+  "expected": {
+    "hex": "0a055245512d311003",
+    "roundTrip": true
+  },
+  "files": {
+    "message.pb": {
+      "bytes": 9,
+      "sha256": "66013267b5a35fe1319470a0a3e1ce1065b1ea6d13dbfdc958915bbf99de2924"
+    }
+  }
+}

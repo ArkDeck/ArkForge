@@ -1,0 +1,41 @@
+{
+  "id": "AF-CONF-CBOR-040",
+  "suite": "canonical-cbor",
+  "title": "map: multibyte UTF-8 key sorts after ASCII key of same char count",
+  "kind": "encode",
+  "requirements": ["AF-DIG-003", "AF-DIG-004", "AF-DIG-005"],
+  "description": "The value encodes to exactly `expected.hex` and decodes back to the same value. `input.diag` is RFC 8949 §8 notation; `input.value` is the typed JSON form.",
+  "input": {
+    "diag": "{\"e\": 2, \"é\": 1}",
+    "value": {
+      "map": [
+        [
+          {
+            "text": "é"
+          },
+          {
+            "uint": 1
+          }
+        ],
+        [
+          {
+            "text": "e"
+          },
+          {
+            "uint": 2
+          }
+        ]
+      ]
+    }
+  },
+  "expected": {
+    "hex": "a261650262c3a901",
+    "roundTrip": true
+  },
+  "files": {
+    "encoded.cbor": {
+      "bytes": 8,
+      "sha256": "da2c46f839d4f5676f5d75347a367b39d6b3a17a7ccd95489b29fc9835047cd8"
+    }
+  }
+}

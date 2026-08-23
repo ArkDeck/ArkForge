@@ -1,0 +1,53 @@
+{
+  "id": "AF-CONF-PERMIT-003",
+  "suite": "permit",
+  "title": "signing body and tag for STEP-RESET",
+  "kind": "encode",
+  "requirements": ["AF-AUTH-010", "AF-AUTH-011", "AF-AUTH-012"],
+  "description": "Build the signing body (deterministic CBOR map, no tag), then tag = HMAC-SHA-256(pairingSecret, body). Decoding `signing-body.cbor` and re-encoding MUST reproduce it byte for byte.",
+  "input": {
+    "pairingSecretAscii": "arkforge-arkdeck-permit-vector-secret",
+    "pairingEpoch": 1,
+    "fields": {
+      "permitId": "PERMIT-STEP-RESET",
+      "authorityNamespace": "arkdeck",
+      "controllerSessionId": "SESSION-VECTOR",
+      "jobId": "JOB-VECTOR",
+      "planId": "PLAN-VECTOR",
+      "planDigest": "sha256(\"plan-vector\")",
+      "stepId": "STEP-RESET",
+      "attemptId": "ATTEMPT-2",
+      "publicStepDigest": "sha256(\"public-step-vector\")",
+      "privateActionDigest": "sha256(\"reset-device\")",
+      "effectSetDigest": "sha256(\"effect-set-vector\")",
+      "authorityBinding": {
+        "authorityNamespace": "arkdeck",
+        "bindingId": "BINDING-VECTOR",
+        "bindingRevision": 3,
+        "stableIdentityDigest": "sha256(\"stable-identity-vector\")"
+      },
+      "admittedDeviceFactsDigest": "sha256(\"admitted-facts-vector\")",
+      "issuedAtEpochMs": 1770000000000,
+      "expiresAtEpochMs": 1770000060000,
+      "singleUse": true
+    },
+    "note": "sha256(\"x\") means the SHA-256 of the ASCII bytes of x, carried as a 32-byte CBOR byte string. The signing body does not contain the tag."
+  },
+  "expected": {
+    "signingBodySha256": "cea82597e94d8a47092ef11c7ff91af63e6d9a890292f5407eeeab60960d65f8",
+    "signingBodyLength": 629,
+    "integrityTag": "86805a7585615edaed931ac3ac005e445529ba5de7495292d6fae10e2d9029ec",
+    "integrityTagEpoch": 1,
+    "diag": "{\"jobId\": \"JOB-VECTOR\", \"planId\": \"PLAN-VECTOR\", \"stepId\": \"STEP-RESET\", \"permitId\": \"PERMIT-STEP-RESET\", \"attemptId\": \"ATTEMPT-2\", \"singleUse\": true, \"planDigest\": h'99eabe796385e792ea122de891eba93bfaccf1a1600e745007e8bcaa3821bc94', \"effectSetDigest\": h'6d01d80f815cd113b3169db08219658068577bd6da7aea5dea56cf9a60185b73', \"issuedAtEpochMs\": 1770000000000, \"authorityBinding\": {\"bindingId\": \"BINDING-VECTOR\", \"bindingRevision\": 3, \"authorityNamespace\": \"arkdeck\", \"stableIdentityDigest\": h'ebd711e7cfb6d1fa699f96e2eef4a005767d3c389cbb43ef35235ffb532cb300'}, \"expiresAtEpochMs\": 1770000060000, \"publicStepDigest\": h'0942444ed717911d5f913e78ea7b8dec7aee96bea37236505a212297337ac855', \"authorityNamespace\": \"arkdeck\", \"controllerSessionId\": \"SESSION-VECTOR\", \"privateActionDigest\": h'080eb1e405f1a978ac1c2cc9d9ede0b9181ae5c8baef2ad8cca7053d899d40fc', \"admittedDeviceFactsDigest\": h'0ff97f732588138265188c17879c4092c5a1ac251d76dc4c04f2254c3767f951'}"
+  },
+  "files": {
+    "signing-body.cbor": {
+      "bytes": 629,
+      "sha256": "cea82597e94d8a47092ef11c7ff91af63e6d9a890292f5407eeeab60960d65f8"
+    },
+    "integrity-tag.hex": {
+      "bytes": 65,
+      "sha256": "93f3232d1f58673ec38551aec307ab02bbc274dfc617355e02c115e2c24c700b"
+    }
+  }
+}

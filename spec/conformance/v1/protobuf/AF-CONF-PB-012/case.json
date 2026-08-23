@@ -1,0 +1,21 @@
+{
+  "id": "AF-CONF-PB-012",
+  "suite": "protobuf",
+  "title": "SubmitStepPermitResponse rejected (accepted=false is omitted)",
+  "kind": "encode",
+  "requirements": ["AF-IPC-010", "AF-IPC-011"],
+  "description": "Encoding of `arkforge.ipc.v1.SubmitStepPermitResponse` per proto/arkforge.proto. Proto3 defaults (0, false, empty) are omitted; fields are written in field number order; repeated message fields are one tag per element.",
+  "input": {
+    "message": "SubmitStepPermitResponse"
+  },
+  "expected": {
+    "hex": "120f5045524d49545f52454a45435445441a137374616c652070616972696e672065706f6368",
+    "roundTrip": true
+  },
+  "files": {
+    "message.pb": {
+      "bytes": 38,
+      "sha256": "6c4da05c301347738a6a1cd45565017c330ee9e7186d49b1f9bbfc8301c8617f"
+    }
+  }
+}

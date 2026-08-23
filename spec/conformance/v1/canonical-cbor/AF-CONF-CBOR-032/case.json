@@ -1,0 +1,24 @@
+{
+  "id": "AF-CONF-CBOR-032",
+  "suite": "canonical-cbor",
+  "title": "empty array",
+  "kind": "encode",
+  "requirements": ["AF-DIG-003", "AF-DIG-004", "AF-DIG-005"],
+  "description": "The value encodes to exactly `expected.hex` and decodes back to the same value. `input.diag` is RFC 8949 §8 notation; `input.value` is the typed JSON form.",
+  "input": {
+    "diag": "[]",
+    "value": {
+      "array": []
+    }
+  },
+  "expected": {
+    "hex": "80",
+    "roundTrip": true
+  },
+  "files": {
+    "encoded.cbor": {
+      "bytes": 1,
+      "sha256": "76be8b528d0075f7aae98d6fa57a6d3c83ae480a8469e668d7b0af968995ac71"
+    }
+  }
+}

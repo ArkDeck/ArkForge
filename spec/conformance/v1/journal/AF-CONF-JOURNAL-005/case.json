@@ -1,0 +1,25 @@
+{
+  "id": "AF-CONF-JOURNAL-005",
+  "suite": "journal",
+  "title": "a byte edited inside a record body breaks that record's digest",
+  "kind": "replay",
+  "requirements": ["AF-JRN-013"],
+  "description": "Open `journal.bin`. A journal that no longer proves its own history is refused; recovery must not reason from it.",
+  "input": {
+    "basedOn": "AF-CONF-JOURNAL-003",
+    "mutation": "record 2 atEpochMs low byte xor 1"
+  },
+  "expected": {
+    "result": "reject",
+    "code": "JOURNAL_RECORD_TAMPERED",
+    "detail": {
+      "atSequence": 2
+    }
+  },
+  "files": {
+    "journal.bin": {
+      "bytes": 1238,
+      "sha256": "0f1923a24797f40bbd8e0bbac2242bff0f3a2a48e6143bdc5862db39085e2190"
+    }
+  }
+}

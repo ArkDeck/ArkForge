@@ -1,0 +1,18 @@
+{
+  "id": "AF-CONF-PB-026",
+  "suite": "protobuf",
+  "title": "varint longer than 10 bytes",
+  "kind": "decode",
+  "requirements": ["AF-IPC-015"],
+  "description": "Decode the bytes as `Hello`.",
+  "input": {
+    "decoder": "Hello",
+    "hex": "08ffffffffffffffffffff01"
+  },
+  "expected": {
+    "result": "reject",
+    "code": "PB_VARINT_TOO_LONG",
+    "detail": {}
+  },
+  "files": {}
+}

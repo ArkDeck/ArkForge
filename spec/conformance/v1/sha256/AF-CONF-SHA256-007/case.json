@@ -1,0 +1,17 @@
+{
+  "id": "AF-CONF-SHA256-007",
+  "suite": "sha256",
+  "title": "NIST one million 'a'",
+  "kind": "digest",
+  "requirements": ["AF-DIG-001"],
+  "description": "SHA-256 of the input bytes, lowercase hex.",
+  "input": {
+    "repeatByte": 97,
+    "count": 1000000,
+    "note": "input is generated, not stored: `count` copies of `repeatByte`"
+  },
+  "expected": {
+    "sha256": "cdc76e5c9914fb9281a1c7e284d73e67f1809a48a497200e046d39ccc7112cd0"
+  },
+  "files": {}
+}

@@ -1,0 +1,20 @@
+{
+  "id": "AF-CONF-PB-029",
+  "suite": "protobuf",
+  "title": "a string field with invalid UTF-8 is refused",
+  "kind": "decode",
+  "requirements": ["AF-IPC-016"],
+  "description": "Decode the bytes as `Request`.",
+  "input": {
+    "decoder": "Request",
+    "hex": "0a02c3281003"
+  },
+  "expected": {
+    "result": "reject",
+    "code": "PB_INVALID_UTF8",
+    "detail": {
+      "field": 1
+    }
+  },
+  "files": {}
+}

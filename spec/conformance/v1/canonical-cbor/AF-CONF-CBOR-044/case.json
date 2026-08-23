@@ -1,0 +1,35 @@
+{
+  "id": "AF-CONF-CBOR-044",
+  "suite": "canonical-cbor",
+  "title": "encoder refuses a map with duplicate keys",
+  "kind": "encode",
+  "requirements": ["AF-DIG-006"],
+  "description": "A value with two equal keys has no canonical encoding; the encoder MUST refuse rather than keep either entry.",
+  "input": {
+    "value": {
+      "map": [
+        [
+          {
+            "text": "a"
+          },
+          {
+            "uint": 1
+          }
+        ],
+        [
+          {
+            "text": "a"
+          },
+          {
+            "uint": 2
+          }
+        ]
+      ]
+    }
+  },
+  "expected": {
+    "result": "reject",
+    "errorClass": "CBOR_DUPLICATE_MAP_KEY"
+  },
+  "files": {}
+}

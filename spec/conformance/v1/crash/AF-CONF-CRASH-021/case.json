@@ -1,0 +1,13 @@
+{
+  "id": "AF-CONF-CRASH-021",
+  "suite": "crash",
+  "title": "terminal outcomes an outcomeClassified record may name",
+  "kind": "table",
+  "requirements": ["AF-CRASH-R-007"],
+  "description": "Only these `outcome` fact values conclude a job on replay.",
+  "input": {},
+  "expected": {
+    "terminal": ["succeeded", "confirmedFailed", "cancelledSafe", "recoveryAssessable"]
+  },
+  "files": {}
+}

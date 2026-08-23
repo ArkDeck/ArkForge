@@ -1,0 +1,21 @@
+{
+  "id": "AF-CONF-PB-013",
+  "suite": "protobuf",
+  "title": "ManagedControlRequest enter-updater",
+  "kind": "encode",
+  "requirements": ["AF-IPC-010", "AF-IPC-011"],
+  "description": "Encoding of `arkforge.ipc.v1.ManagedControlRequest` per proto/arkforge.proto. Proto3 defaults (0, false, empty) are omitted; fields are written in field number order; repeated message fields are one tag per element.",
+  "input": {
+    "message": "ManagedControlRequest"
+  },
+  "expected": {
+    "hex": "0a054a4f422d311206535445502d311a0543544c2d3120012a085045524d49542d3138e09ce6e1c133",
+    "roundTrip": true
+  },
+  "files": {
+    "message.pb": {
+      "bytes": 41,
+      "sha256": "5e0c0c8675ee175ea9c3beae961a5cdc271566f855fbfa5582cccdccb88989fc"
+    }
+  }
+}

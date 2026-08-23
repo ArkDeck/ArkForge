@@ -1,0 +1,23 @@
+{
+  "id": "AF-CONF-PERMIT-045",
+  "suite": "permit",
+  "title": "a body that is not a map is refused",
+  "kind": "decode",
+  "requirements": ["AF-AUTH-021", "AF-AUTH-022"],
+  "description": "StepPermit::from_canonical_bytes(bytes). Every field is required and typed; the decoded value re-encoded MUST equal the input bytes, otherwise the bytes are not what a tag could have covered.",
+  "input": {
+    "basedOn": "AF-CONF-PERMIT-001",
+    "mutation": "empty array",
+    "hex": "80"
+  },
+  "expected": {
+    "result": "reject",
+    "code": "PERMIT_DECODE_NOT_A_MAP"
+  },
+  "files": {
+    "body.cbor": {
+      "bytes": 1,
+      "sha256": "76be8b528d0075f7aae98d6fa57a6d3c83ae480a8469e668d7b0af968995ac71"
+    }
+  }
+}

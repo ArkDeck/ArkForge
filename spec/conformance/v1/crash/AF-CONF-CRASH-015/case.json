@@ -1,0 +1,63 @@
+{
+  "id": "AF-CONF-CRASH-015",
+  "suite": "crash",
+  "title": "concluded recoveryAssessable",
+  "kind": "derive",
+  "requirements": ["AF-CRASH-002", "AF-AUTH-P-001", "AF-CRASH-R-007"],
+  "description": "Replay the records (subject JOB-1 unless a jobId fact says otherwise; atEpochMs 1010, 1020, …; jobRevision 1), then derive the crash disposition for job JOB-1 and the permit ledger. `journal-frames.bin` holds the same records framed as on disk, without the file magic.",
+  "input": {
+    "jobId": "JOB-1",
+    "records": [
+      {
+        "kind": "jobCreated",
+        "facts": {
+          "jobId": "JOB-1"
+        }
+      },
+      {
+        "kind": "stepPermitAccepted",
+        "facts": {
+          "jobId": "JOB-1",
+          "stepId": "STEP-1",
+          "permitId": "PERMIT-1"
+        }
+      },
+      {
+        "kind": "stepIntentRecorded",
+        "facts": {
+          "jobId": "JOB-1",
+          "stepId": "STEP-1",
+          "permitId": "PERMIT-1"
+        }
+      },
+      {
+        "kind": "outcomeClassified",
+        "facts": {
+          "jobId": "JOB-1",
+          "outcome": "recoveryAssessable"
+        }
+      }
+    ]
+  },
+  "expected": {
+    "crashDisposition": {
+      "row": "concluded",
+      "permitsExternalEffect": false,
+      "state": "recoveryAssessable"
+    },
+    "permitLedger": [
+      {
+        "permitId": "PERMIT-1",
+        "disposition": "intentDurable",
+        "permitsDispatch": true
+      }
+    ],
+    "unresolvedPermits": []
+  },
+  "files": {
+    "journal-frames.bin": {
+      "bytes": 998,
+      "sha256": "3d89f84769a9aca516945fc14a7355e246b1a1ded5ad87c06fac9567f7d43810"
+    }
+  }
+}

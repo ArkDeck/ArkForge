@@ -1,0 +1,15 @@
+{
+  "id": "AF-CONF-STATEMACHINE-004",
+  "suite": "state-machine",
+  "title": "recoveryAssessable is terminal and is not success",
+  "kind": "table",
+  "requirements": ["AF-ENG-007"],
+  "description": "A named invariant over the edge set of AF-CONF-STATEMACHINE-001.",
+  "input": {},
+  "expected": {
+    "state": "recoveryAssessable",
+    "terminal": true,
+    "isSuccess": false
+  },
+  "files": {}
+}

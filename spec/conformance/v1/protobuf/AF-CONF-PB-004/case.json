@@ -1,0 +1,21 @@
+{
+  "id": "AF-CONF-PB-004",
+  "suite": "protobuf",
+  "title": "HelloAck refusing the handshake",
+  "kind": "encode",
+  "requirements": ["AF-IPC-010", "AF-IPC-011"],
+  "description": "Encoding of `arkforge.ipc.v1.HelloAck` per proto/arkforge.proto. Proto3 defaults (0, false, empty) are omitted; fields are written in field number order; repeated message fields are one tag per element.",
+  "input": {
+    "message": "HelloAck"
+  },
+  "expected": {
+    "hex": "080118012205302e312e302a2970726f746f636f6c206d616a6f722032206973206e6f7420636f6d70617469626c6520776974682031",
+    "roundTrip": true
+  },
+  "files": {
+    "message.pb": {
+      "bytes": 54,
+      "sha256": "e4076a78625861f6df0e3f8eeef110b698bfb112818d05ccf49891e730e616f2"
+    }
+  }
+}

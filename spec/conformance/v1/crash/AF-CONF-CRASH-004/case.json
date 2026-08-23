@@ -1,0 +1,46 @@
+{
+  "id": "AF-CONF-CRASH-004",
+  "suite": "crash",
+  "title": "preflight observed, admission requested, no permit: safe to cancel",
+  "kind": "derive",
+  "requirements": ["AF-CRASH-002", "AF-AUTH-P-001", "AF-CRASH-R-002"],
+  "description": "Replay the records (subject JOB-1 unless a jobId fact says otherwise; atEpochMs 1010, 1020, …; jobRevision 1), then derive the crash disposition for job JOB-1 and the permit ledger. `journal-frames.bin` holds the same records framed as on disk, without the file magic.",
+  "input": {
+    "jobId": "JOB-1",
+    "records": [
+      {
+        "kind": "jobCreated",
+        "facts": {
+          "jobId": "JOB-1"
+        }
+      },
+      {
+        "kind": "preflightObserved",
+        "facts": {
+          "jobId": "JOB-1"
+        }
+      },
+      {
+        "kind": "stepAdmissionRequested",
+        "facts": {
+          "jobId": "JOB-1",
+          "stepId": "STEP-1"
+        }
+      }
+    ]
+  },
+  "expected": {
+    "crashDisposition": {
+      "row": "safeToCancel",
+      "permitsExternalEffect": false
+    },
+    "permitLedger": [],
+    "unresolvedPermits": []
+  },
+  "files": {
+    "journal-frames.bin": {
+      "bytes": 698,
+      "sha256": "95baf2d7186b0e3bdc949adac636f7c6608336176f54c18a14ebbc0fdb203ac8"
+    }
+  }
+}

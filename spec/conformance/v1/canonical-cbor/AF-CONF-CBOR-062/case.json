@@ -1,0 +1,16 @@
+{
+  "id": "AF-CONF-CBOR-062",
+  "suite": "canonical-cbor",
+  "title": "truncated: array declares 3 items, has 2",
+  "kind": "decode",
+  "requirements": ["AF-DIG-007"],
+  "description": "A canonical decoder MUST reject these bytes. `errorClass` is the class the reference implementation reports; a port MUST reject and SHOULD report the same class.",
+  "input": {
+    "hex": "830102"
+  },
+  "expected": {
+    "result": "reject",
+    "errorClass": "CBOR_TRUNCATED"
+  },
+  "files": {}
+}

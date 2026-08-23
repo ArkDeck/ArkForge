@@ -1,0 +1,41 @@
+{
+  "id": "AF-CONF-CRASH-013",
+  "suite": "crash",
+  "title": "concluded confirmedFailed",
+  "kind": "derive",
+  "requirements": ["AF-CRASH-002", "AF-AUTH-P-001", "AF-CRASH-R-007"],
+  "description": "Replay the records (subject JOB-1 unless a jobId fact says otherwise; atEpochMs 1010, 1020, …; jobRevision 1), then derive the crash disposition for job JOB-1 and the permit ledger. `journal-frames.bin` holds the same records framed as on disk, without the file magic.",
+  "input": {
+    "jobId": "JOB-1",
+    "records": [
+      {
+        "kind": "jobCreated",
+        "facts": {
+          "jobId": "JOB-1"
+        }
+      },
+      {
+        "kind": "outcomeClassified",
+        "facts": {
+          "jobId": "JOB-1",
+          "outcome": "confirmedFailed"
+        }
+      }
+    ]
+  },
+  "expected": {
+    "crashDisposition": {
+      "row": "concluded",
+      "permitsExternalEffect": false,
+      "state": "confirmedFailed"
+    },
+    "permitLedger": [],
+    "unresolvedPermits": []
+  },
+  "files": {
+    "journal-frames.bin": {
+      "bytes": 473,
+      "sha256": "b4c3ba5d653a33da819737ad875fb84e96df6020f2246f9b7b9aa886c31d8cba"
+    }
+  }
+}

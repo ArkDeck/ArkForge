@@ -1,0 +1,21 @@
+{
+  "id": "AF-CONF-YAML-032",
+  "suite": "strict-yaml",
+  "title": "unexpected indentation inside a sequence",
+  "kind": "decode",
+  "requirements": ["AF-YAML-015"],
+  "description": "Parse `input.yaml` with the strict subset reader. The value tree has only scalars (text), sequences, mappings and null; typing happens in the consumer. `message` on a rejection is informative.",
+  "input": {
+    "yaml": "a:\n  - x\n    - y\n"
+  },
+  "expected": {
+    "result": "reject",
+    "message": "line 3: unexpected indentation inside a sequence"
+  },
+  "files": {
+    "input.yaml": {
+      "bytes": 17,
+      "sha256": "0331e7d6d9c12148f13eec945593903946997e53ff356dcc1630d0764131e498"
+    }
+  }
+}

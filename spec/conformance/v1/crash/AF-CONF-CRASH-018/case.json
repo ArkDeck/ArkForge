@@ -1,0 +1,116 @@
+{
+  "id": "AF-CONF-CRASH-018",
+  "suite": "crash",
+  "title": "two permits: the newest decides, and it is unsettled",
+  "kind": "derive",
+  "requirements": ["AF-CRASH-002", "AF-AUTH-P-001", "AF-CRASH-R-008"],
+  "description": "Replay the records (subject JOB-1 unless a jobId fact says otherwise; atEpochMs 1010, 1020, …; jobRevision 1), then derive the crash disposition for job JOB-1 and the permit ledger. `journal-frames.bin` holds the same records framed as on disk, without the file magic.",
+  "input": {
+    "jobId": "JOB-1",
+    "records": [
+      {
+        "kind": "jobCreated",
+        "facts": {
+          "jobId": "JOB-1"
+        }
+      },
+      {
+        "kind": "stepPermitAccepted",
+        "facts": {
+          "jobId": "JOB-1",
+          "stepId": "STEP-1",
+          "permitId": "PERMIT-1"
+        }
+      },
+      {
+        "kind": "stepIntentRecorded",
+        "facts": {
+          "jobId": "JOB-1",
+          "stepId": "STEP-1",
+          "permitId": "PERMIT-1"
+        }
+      },
+      {
+        "kind": "permitConsuming",
+        "facts": {
+          "jobId": "JOB-1",
+          "permitId": "PERMIT-1"
+        }
+      },
+      {
+        "kind": "externalDispatchStarted",
+        "facts": {
+          "jobId": "JOB-1",
+          "permitId": "PERMIT-1"
+        }
+      },
+      {
+        "kind": "semanticReceiptRecorded",
+        "facts": {
+          "jobId": "JOB-1",
+          "permitId": "PERMIT-1",
+          "receiptDigest": "abc123"
+        }
+      },
+      {
+        "kind": "permitConsumed",
+        "facts": {
+          "jobId": "JOB-1",
+          "permitId": "PERMIT-1",
+          "receiptDigest": "abc123"
+        }
+      },
+      {
+        "kind": "stepCheckpointed",
+        "facts": {
+          "jobId": "JOB-1",
+          "stepId": "STEP-1",
+          "permitId": "PERMIT-1"
+        }
+      },
+      {
+        "kind": "stepPermitAccepted",
+        "facts": {
+          "jobId": "JOB-1",
+          "stepId": "STEP-2",
+          "permitId": "PERMIT-2"
+        }
+      },
+      {
+        "kind": "stepIntentRecorded",
+        "facts": {
+          "jobId": "JOB-1",
+          "stepId": "STEP-2",
+          "permitId": "PERMIT-2"
+        }
+      }
+    ]
+  },
+  "expected": {
+    "crashDisposition": {
+      "row": "outcomeUnknown",
+      "permitsExternalEffect": false,
+      "permitId": "PERMIT-2"
+    },
+    "permitLedger": [
+      {
+        "permitId": "PERMIT-1",
+        "disposition": "consumed",
+        "permitsDispatch": false,
+        "receiptDigest": "abc123"
+      },
+      {
+        "permitId": "PERMIT-2",
+        "disposition": "intentDurable",
+        "permitsDispatch": true
+      }
+    ],
+    "unresolvedPermits": []
+  },
+  "files": {
+    "journal-frames.bin": {
+      "bytes": 2557,
+      "sha256": "4c2e9058206bb2935805d2e47009ce79545d32197bcd3a41d25368e8aba4392d"
+    }
+  }
+}

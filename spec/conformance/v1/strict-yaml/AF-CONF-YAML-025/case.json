@@ -1,0 +1,21 @@
+{
+  "id": "AF-CONF-YAML-025",
+  "suite": "strict-yaml",
+  "title": "flow mapping",
+  "kind": "decode",
+  "requirements": ["AF-YAML-013"],
+  "description": "Parse `input.yaml` with the strict subset reader. The value tree has only scalars (text), sequences, mappings and null; typing happens in the consumer. `message` on a rejection is informative.",
+  "input": {
+    "yaml": "a: {b: 1}\n"
+  },
+  "expected": {
+    "result": "reject",
+    "message": "line 1: flow mappings are not permitted; use a block mapping"
+  },
+  "files": {
+    "input.yaml": {
+      "bytes": 10,
+      "sha256": "4091a98457d9ba73c08cfb846b1ba0bd8a3b33185925271febf3cd15763aca7d"
+    }
+  }
+}

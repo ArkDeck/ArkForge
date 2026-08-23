@@ -1,0 +1,54 @@
+{
+  "id": "AF-CONF-REBIND-011",
+  "suite": "rebind",
+  "title": "identity weaker than before the transition stops even above the floor",
+  "kind": "derive",
+  "requirements": ["AF-TRN-016"],
+  "description": "evaluate_rebind(expectation, previous, observations) over the observations in the order they were made. The tolerance window is measured from the first observation's timestamp.",
+  "input": {
+    "expectation": {
+      "fromMode": "hdc-normal",
+      "toMode": "rockusb-loader",
+      "toModeAliases": [],
+      "serialPolicy": "may-change",
+      "topologyPolicy": "may-change",
+      "identityStrengthFloor": "classOnly",
+      "toleranceWindowMs": 30000,
+      "tolerateTransientMalformed": true
+    },
+    "previous": {
+      "observationId": "OBS-PREV",
+      "observedAtEpochMs": 1000,
+      "mode": "hdc-normal",
+      "topologyDigest": "sha256(\"port-A\")",
+      "descriptorDigest": "sha256(\"desc-normal\")",
+      "serialEvidence": {
+        "kind": "descriptor",
+        "digest": "sha256(\"SERIAL-1\")"
+      },
+      "identityStrength": "protocolConfirmed",
+      "malformedDescriptor": false
+    },
+    "observations": [
+      {
+        "observationId": "OBS-1",
+        "observedAtEpochMs": 2000,
+        "mode": "rockusb-loader",
+        "topologyDigest": "sha256(\"port-B\")",
+        "descriptorDigest": "sha256(\"desc-loader\")",
+        "serialEvidence": {
+          "kind": "descriptor",
+          "digest": "sha256(\"SERIAL-2\")"
+        },
+        "identityStrength": "serialAndTopology",
+        "malformedDescriptor": false
+      }
+    ]
+  },
+  "expected": {
+    "outcome": "identityWeakened",
+    "before": "protocolConfirmed",
+    "after": "serialAndTopology"
+  },
+  "files": {}
+}

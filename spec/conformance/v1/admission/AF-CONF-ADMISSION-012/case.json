@@ -1,0 +1,27 @@
+{
+  "id": "AF-CONF-ADMISSION-012",
+  "suite": "admission",
+  "title": "artifact facts digest changed",
+  "kind": "derive",
+  "requirements": ["AF-AUTH-003", "AF-AUTH-004", "AF-AUTH-005"],
+  "description": "evaluate_freshness(snapshot, currentFacts). Digests are compared for equality only; their preimages are labels here.",
+  "input": {
+    "snapshot": "AF-CONF-ADMISSION-001",
+    "current": {
+      "nowEpochMs": 1770000119999,
+      "sawDetachSinceSnapshot": false,
+      "transportSessionDigest": "3f3af1ecebbd1410ab417ec0d27bbfcb5d340e177ae159b59fc8626c2dfd9175",
+      "deviceFactsDigest": "8e288de11c642fe7ef473e9a1e9fc13b7db646cc3c9218261812eb5139e52b2c",
+      "providerFactsDigest": "c75368aead326187a92311dab41bcf61bb202baf39d599ed35231ad7dc873e9c",
+      "toolchainFactsDigest": "cd11d7d43a0c360cd0046e34ad9e69b0298a1ed1f7fddd546756c56cc1f82da6",
+      "artifactFactsDigest": "d10928f35c7f4a5a39ea4bcbb21fb6ef486f960e8092188be362db21fe45c0b3"
+    }
+  },
+  "expected": {
+    "verdict": "continuityBroken",
+    "reason": "artifactFactsChanged",
+    "permitsDispatch": false,
+    "retryableWithoutDeviceBlame": false
+  },
+  "files": {}
+}

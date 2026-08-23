@@ -1,0 +1,15 @@
+{
+  "id": "AF-CONF-STATEMACHINE-003",
+  "suite": "state-machine",
+  "title": "reconciling may conclude but may not dispatch",
+  "kind": "table",
+  "requirements": ["AF-ENG-006"],
+  "description": "A named invariant over the edge set of AF-CONF-STATEMACHINE-001.",
+  "input": {},
+  "expected": {
+    "from": "reconciling",
+    "allowedTargets": ["succeeded", "confirmedFailed", "outcomeUnknown"],
+    "forbiddenTargets": ["dispatching", "stepIntentDurable"]
+  },
+  "files": {}
+}

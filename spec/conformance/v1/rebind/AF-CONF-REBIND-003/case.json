@@ -1,0 +1,66 @@
+{
+  "id": "AF-CONF-REBIND-003",
+  "suite": "rebind",
+  "title": "two stable candidates in the expected mode: ambiguous, never first-match",
+  "kind": "derive",
+  "requirements": ["AF-TRN-012"],
+  "description": "evaluate_rebind(expectation, previous, observations) over the observations in the order they were made. The tolerance window is measured from the first observation's timestamp.",
+  "input": {
+    "expectation": {
+      "fromMode": "hdc-normal",
+      "toMode": "rockusb-loader",
+      "toModeAliases": [],
+      "serialPolicy": "may-change",
+      "topologyPolicy": "may-change",
+      "identityStrengthFloor": "serialAndTopology",
+      "toleranceWindowMs": 30000,
+      "tolerateTransientMalformed": true
+    },
+    "previous": {
+      "observationId": "OBS-PREV",
+      "observedAtEpochMs": 1000,
+      "mode": "hdc-normal",
+      "topologyDigest": "sha256(\"port-A\")",
+      "descriptorDigest": "sha256(\"desc-normal\")",
+      "serialEvidence": {
+        "kind": "descriptor",
+        "digest": "sha256(\"SERIAL-1\")"
+      },
+      "identityStrength": "serialAndTopology",
+      "malformedDescriptor": false
+    },
+    "observations": [
+      {
+        "observationId": "OBS-1",
+        "observedAtEpochMs": 2000,
+        "mode": "rockusb-loader",
+        "topologyDigest": "sha256(\"port-B\")",
+        "descriptorDigest": "sha256(\"desc-loader\")",
+        "serialEvidence": {
+          "kind": "descriptor",
+          "digest": "sha256(\"SERIAL-2\")"
+        },
+        "identityStrength": "serialAndTopology",
+        "malformedDescriptor": false
+      },
+      {
+        "observationId": "OBS-2",
+        "observedAtEpochMs": 2100,
+        "mode": "rockusb-loader",
+        "topologyDigest": "sha256(\"port-C\")",
+        "descriptorDigest": "sha256(\"desc-loader-other\")",
+        "serialEvidence": {
+          "kind": "descriptor",
+          "digest": "sha256(\"SERIAL-3\")"
+        },
+        "identityStrength": "serialAndTopology",
+        "malformedDescriptor": false
+      }
+    ]
+  },
+  "expected": {
+    "outcome": "ambiguous",
+    "count": 2
+  },
+  "files": {}
+}

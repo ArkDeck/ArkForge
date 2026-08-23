@@ -1,0 +1,42 @@
+{
+  "id": "AF-CONF-YAML-013",
+  "suite": "strict-yaml",
+  "title": "hex and underscore integers stay text for the parser",
+  "kind": "decode",
+  "requirements": ["AF-YAML-006"],
+  "description": "Parse `input.yaml` with the strict subset reader. The value tree has only scalars (text), sequences, mappings and null; typing happens in the consumer. `message` on a rejection is informative.",
+  "input": {
+    "yaml": "vendorId: 0x2207\nfiller: 0xCC\nbig: 1_000\n"
+  },
+  "expected": {
+    "result": "accept",
+    "value": {
+      "mapping": [
+        [
+          "vendorId",
+          {
+            "scalar": "0x2207"
+          }
+        ],
+        [
+          "filler",
+          {
+            "scalar": "0xCC"
+          }
+        ],
+        [
+          "big",
+          {
+            "scalar": "1_000"
+          }
+        ]
+      ]
+    }
+  },
+  "files": {
+    "input.yaml": {
+      "bytes": 41,
+      "sha256": "c3852fe12fd0ecc7da53af9bed0b499ad0742c656ab43902519a6824fb236a14"
+    }
+  }
+}

@@ -1,0 +1,16 @@
+{
+  "id": "AF-CONF-CBOR-060",
+  "suite": "canonical-cbor",
+  "title": "map keys unsorted: longer key before shorter ({\"aa\":1,\"b\":2})",
+  "kind": "decode",
+  "requirements": ["AF-DIG-007"],
+  "description": "A canonical decoder MUST reject these bytes. `errorClass` is the class the reference implementation reports; a port MUST reject and SHOULD report the same class.",
+  "input": {
+    "hex": "a262616101616202"
+  },
+  "expected": {
+    "result": "reject",
+    "errorClass": "CBOR_UNSORTED_MAP_KEYS"
+  },
+  "files": {}
+}

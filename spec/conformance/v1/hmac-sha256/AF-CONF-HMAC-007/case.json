@@ -1,0 +1,16 @@
+{
+  "id": "AF-CONF-HMAC-007",
+  "suite": "hmac-sha256",
+  "title": "key of exactly one block (64 bytes) is used as-is",
+  "kind": "digest",
+  "requirements": ["AF-DIG-002"],
+  "description": "HMAC-SHA-256(key, data), lowercase hex.",
+  "input": {
+    "keyHex": "42424242424242424242424242424242424242424242424242424242424242424242424242424242424242424242424242424242424242424242424242424242",
+    "dataHex": "61726b666f726765"
+  },
+  "expected": {
+    "tag": "1b9658b4783286b2020a195b227ce6ea557a4ea50ada347e9c6bf347b3ab4019"
+  },
+  "files": {}
+}

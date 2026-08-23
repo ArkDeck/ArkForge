@@ -1,0 +1,21 @@
+{
+  "id": "AF-CONF-PB-020",
+  "suite": "protobuf",
+  "title": "an unknown enum value is a hard error, not a default",
+  "kind": "decode",
+  "requirements": ["AF-IPC-014"],
+  "description": "Decode the bytes as `Hello`.",
+  "input": {
+    "decoder": "Hello",
+    "hex": "08011807"
+  },
+  "expected": {
+    "result": "reject",
+    "code": "PB_UNKNOWN_ENUM_VALUE",
+    "detail": {
+      "field": 3,
+      "value": 7
+    }
+  },
+  "files": {}
+}

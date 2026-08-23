@@ -1,0 +1,38 @@
+{
+  "id": "AF-CONF-REBIND-002",
+  "suite": "rebind",
+  "title": "no observation at all: no candidate",
+  "kind": "derive",
+  "requirements": ["AF-TRN-011"],
+  "description": "evaluate_rebind(expectation, previous, observations) over the observations in the order they were made. The tolerance window is measured from the first observation's timestamp.",
+  "input": {
+    "expectation": {
+      "fromMode": "hdc-normal",
+      "toMode": "rockusb-loader",
+      "toModeAliases": [],
+      "serialPolicy": "may-change",
+      "topologyPolicy": "may-change",
+      "identityStrengthFloor": "serialAndTopology",
+      "toleranceWindowMs": 30000,
+      "tolerateTransientMalformed": true
+    },
+    "previous": {
+      "observationId": "OBS-PREV",
+      "observedAtEpochMs": 1000,
+      "mode": "hdc-normal",
+      "topologyDigest": "sha256(\"port-A\")",
+      "descriptorDigest": "sha256(\"desc-normal\")",
+      "serialEvidence": {
+        "kind": "descriptor",
+        "digest": "sha256(\"SERIAL-1\")"
+      },
+      "identityStrength": "serialAndTopology",
+      "malformedDescriptor": false
+    },
+    "observations": []
+  },
+  "expected": {
+    "outcome": "noCandidate"
+  },
+  "files": {}
+}

@@ -1,0 +1,21 @@
+{
+  "id": "AF-CONF-PB-007",
+  "suite": "protobuf",
+  "title": "Error body",
+  "kind": "encode",
+  "requirements": ["AF-IPC-010", "AF-IPC-011"],
+  "description": "Encoding of `arkforge.ipc.v1.Error` per proto/arkforge.proto. Proto3 defaults (0, false, empty) are omitted; fields are written in field number order; repeated message fields are one tag per element.",
+  "input": {
+    "message": "Error"
+  },
+  "expected": {
+    "hex": "0a14504c414e5f4449474553545f4d49534d415443481233706c616e20504c414e2d313a2063616c6c657220657870656374732064696765737420612c2073746f726520686f6c64732062",
+    "roundTrip": true
+  },
+  "files": {
+    "message.pb": {
+      "bytes": 75,
+      "sha256": "792f7259cca9babdea083c9df25a3c3d4ed302fe667bcab93362f3936e5e2980"
+    }
+  }
+}

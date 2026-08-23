@@ -1,0 +1,24 @@
+{
+  "id": "AF-CONF-CBOR-024",
+  "suite": "canonical-cbor",
+  "title": "text with 3-byte UTF-8 (中文)",
+  "kind": "encode",
+  "requirements": ["AF-DIG-003", "AF-DIG-004", "AF-DIG-005"],
+  "description": "The value encodes to exactly `expected.hex` and decodes back to the same value. `input.diag` is RFC 8949 §8 notation; `input.value` is the typed JSON form.",
+  "input": {
+    "diag": "\"中文\"",
+    "value": {
+      "text": "中文"
+    }
+  },
+  "expected": {
+    "hex": "66e4b8ade69687",
+    "roundTrip": true
+  },
+  "files": {
+    "encoded.cbor": {
+      "bytes": 7,
+      "sha256": "0b230ed08b8154cff91c204bedb05ff85abce334db0a699013a8467e750f83f8"
+    }
+  }
+}

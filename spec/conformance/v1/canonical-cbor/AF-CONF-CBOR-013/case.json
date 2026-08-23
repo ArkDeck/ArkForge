@@ -1,0 +1,24 @@
+{
+  "id": "AF-CONF-CBOR-013",
+  "suite": "canonical-cbor",
+  "title": "negative -24 (largest immediate)",
+  "kind": "encode",
+  "requirements": ["AF-DIG-003", "AF-DIG-004", "AF-DIG-005"],
+  "description": "The value encodes to exactly `expected.hex` and decodes back to the same value. `input.diag` is RFC 8949 §8 notation; `input.value` is the typed JSON form.",
+  "input": {
+    "diag": "-24",
+    "value": {
+      "nint": -24
+    }
+  },
+  "expected": {
+    "hex": "37",
+    "roundTrip": true
+  },
+  "files": {
+    "encoded.cbor": {
+      "bytes": 1,
+      "sha256": "7902699be42c8a8e46fbbb4501726517e86b22c56a189f7625a6da49081b2451"
+    }
+  }
+}

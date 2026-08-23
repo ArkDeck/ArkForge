@@ -1,0 +1,63 @@
+{
+  "id": "AF-CONF-YAML-003",
+  "suite": "strict-yaml",
+  "title": "sequence items that are mappings",
+  "kind": "decode",
+  "requirements": ["AF-YAML-001"],
+  "description": "Parse `input.yaml` with the strict subset reader. The value tree has only scalars (text), sequences, mappings and null; typing happens in the consumer. `message` on a rejection is informative.",
+  "input": {
+    "yaml": "providers:\n  - id: a\n    backend: b\n  - id: c\n    backend: d\n"
+  },
+  "expected": {
+    "result": "accept",
+    "value": {
+      "mapping": [
+        [
+          "providers",
+          {
+            "sequence": [
+              {
+                "mapping": [
+                  [
+                    "id",
+                    {
+                      "scalar": "a"
+                    }
+                  ],
+                  [
+                    "backend",
+                    {
+                      "scalar": "b"
+                    }
+                  ]
+                ]
+              },
+              {
+                "mapping": [
+                  [
+                    "id",
+                    {
+                      "scalar": "c"
+                    }
+                  ],
+                  [
+                    "backend",
+                    {
+                      "scalar": "d"
+                    }
+                  ]
+                ]
+              }
+            ]
+          }
+        ]
+      ]
+    }
+  },
+  "files": {
+    "input.yaml": {
+      "bytes": 61,
+      "sha256": "7cee09ea9173da3b98ba1b77dae370faff800cc908d479e6e6fdf24fb17c2993"
+    }
+  }
+}

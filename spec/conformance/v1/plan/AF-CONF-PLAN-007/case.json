@@ -1,0 +1,222 @@
+{
+  "id": "AF-CONF-PLAN-007",
+  "suite": "plan",
+  "title": "projection digests and their preimages",
+  "kind": "digest",
+  "requirements": ["AF-PROJ-010", "AF-PROJ-011", "AF-PROJ-012"],
+  "description": "providerExecutionPlanDigest = SHA-256(domainA || d1 || d2 || …) over the ordered private action digests (`ordered-digests.bin` is the concatenation). publicProjectionDigest = SHA-256(domainB || deterministic_cbor(array of bindings)) (`mapping.cbor`).",
+  "input": {
+    "planId": "PLAN-CONF-001"
+  },
+  "expected": {
+    "providerExecutionPlanDomain": "arkforge/v1/provider-execution-plan\\0",
+    "providerExecutionPlanDigest": "8725aa86163d2fd6fb775414e4a91076102c0d2a40f1f7f337d128183b7c0982",
+    "publicProjectionDomain": "arkforge/v1/public-projection\\0",
+    "publicProjectionDigest": "f3b5dbcf6eb3a2aa4aa9e0a9a703f78be4ea8ca9f49875a4375fe341fb5fadeb",
+    "bindings": [
+      {
+        "stepId": "STEP-001",
+        "actionId": "ACT-001",
+        "role": "primaryEffect",
+        "privateActionDigest": "d2f335be72286d19ec7d96401b334cad801d7be80a2c23031195133e5ac64080"
+      },
+      {
+        "stepId": "STEP-002",
+        "actionId": "ACT-002",
+        "role": "primaryEffect",
+        "privateActionDigest": "6c836bad99969a7dff01522b98cc5b63da5700e523f144b30b55119dbc3eb8f4"
+      },
+      {
+        "stepId": "STEP-003",
+        "actionId": "ACT-003",
+        "role": "primaryEffect",
+        "privateActionDigest": "d5e52eca1946714e9c9fbdcef39898ed3cea7cb3116b9fdc0bc28f5a5bad0c56"
+      },
+      {
+        "stepId": "STEP-004",
+        "actionId": "ACT-004",
+        "role": "primaryEffect",
+        "privateActionDigest": "69b5e174dd04aa902e990039d6b6577d75f53844c505c6796d07455d9d1ce153"
+      },
+      {
+        "stepId": "STEP-005",
+        "actionId": "ACT-005",
+        "role": "primaryEffect",
+        "privateActionDigest": "b8440f6b59e0da891fa21bcb908f3f5b02777a964ef5a0cb25e45c5dccc3b5a2"
+      },
+      {
+        "stepId": "STEP-006",
+        "actionId": "ACT-006",
+        "role": "primaryEffect",
+        "privateActionDigest": "d2b8cfe03a07cbff814e19672eb2121170a52f24e8b3e8240e2a301b1788d2db"
+      },
+      {
+        "stepId": "STEP-007",
+        "actionId": "ACT-007",
+        "role": "primaryEffect",
+        "privateActionDigest": "2b1689ed5bfc6497aa94059c8feb6ebbb3db00151e844c95eed247c36f18a609"
+      },
+      {
+        "stepId": "STEP-008",
+        "actionId": "ACT-008",
+        "role": "primaryEffect",
+        "privateActionDigest": "cf9dc9a9fba4afed70aebec908fe72ef6f33b673976ce213e0545b2efc6b8b2a"
+      },
+      {
+        "stepId": "STEP-009",
+        "actionId": "ACT-009",
+        "role": "primaryEffect",
+        "privateActionDigest": "4ff579ab29eb045b0e2f482dfe147f74f9ca4e69655a7f172030af0cb0e50acf"
+      },
+      {
+        "stepId": "STEP-010",
+        "actionId": "ACT-010",
+        "role": "primaryEffect",
+        "privateActionDigest": "fb9382fddac52859309552a3271bd396e631c753399139f9a8f84d3a4eff30d2"
+      },
+      {
+        "stepId": "STEP-011",
+        "actionId": "ACT-011",
+        "role": "primaryEffect",
+        "privateActionDigest": "733ff336c0d3a2bdfa89d2cea209489dfe27a3bb4c0c4ff7a0db59093b9a4b26"
+      },
+      {
+        "stepId": "STEP-012",
+        "actionId": "ACT-012",
+        "role": "primaryEffect",
+        "privateActionDigest": "f3e2db80516607607e10337933e3f6fb241ea9acc5f7041b0a83c0a6462304c2"
+      },
+      {
+        "stepId": "STEP-013",
+        "actionId": "ACT-013",
+        "role": "primaryEffect",
+        "privateActionDigest": "c1f45a8a2782414678402aecf1d1690896639602990bbedebedcfbda2457eda4"
+      },
+      {
+        "stepId": "STEP-013",
+        "actionId": "SUB-013",
+        "role": "readOnlyTransportSubAction",
+        "privateActionDigest": "a5dca2c65c7310d7aac370375c5606ff1f85a9c436dc1945ac751a79a9cc5f9e"
+      },
+      {
+        "stepId": "STEP-014",
+        "actionId": "ACT-014",
+        "role": "primaryEffect",
+        "privateActionDigest": "cbc6d2575ef41eb2cabd05387047e3e6713d8dfd1dae1b0df66a7313623d4e42"
+      },
+      {
+        "stepId": "STEP-014",
+        "actionId": "SUB-014",
+        "role": "readOnlyTransportSubAction",
+        "privateActionDigest": "31f0723828fd7bbd306f84dc50c048c2dcb1f64ba9cab26ab1d782d13cc42571"
+      },
+      {
+        "stepId": "STEP-015",
+        "actionId": "ACT-015",
+        "role": "primaryEffect",
+        "privateActionDigest": "ccf3ee0572342ae177225adf2246564210e143d126169bcc046b8f4c558f4065"
+      },
+      {
+        "stepId": "STEP-015",
+        "actionId": "SUB-015",
+        "role": "readOnlyTransportSubAction",
+        "privateActionDigest": "e5a588a6abd3d5b08c5339ba9b6b7bbe3b658c1bd0df66be907f89cab7c2a946"
+      },
+      {
+        "stepId": "STEP-016",
+        "actionId": "ACT-016",
+        "role": "primaryEffect",
+        "privateActionDigest": "75e7c2684e0900d74b6145db34877965b59637e188c2bb0f25ca7f5a6918c7c0"
+      },
+      {
+        "stepId": "STEP-016",
+        "actionId": "SUB-016",
+        "role": "readOnlyTransportSubAction",
+        "privateActionDigest": "45e0e2b1ee31a6716f6b659cd33f6c40e4222c964aaf50844848e6270ac76c9c"
+      },
+      {
+        "stepId": "STEP-017",
+        "actionId": "ACT-017",
+        "role": "primaryEffect",
+        "privateActionDigest": "c1c187f9b3e359c13191e275fbf92f18c1c0e0ea0e59edbc07e539ff4fb6e7ba"
+      },
+      {
+        "stepId": "STEP-017",
+        "actionId": "SUB-017",
+        "role": "readOnlyTransportSubAction",
+        "privateActionDigest": "16cfb919920297ce226133f70ae8715520497331382c9462f21c9914e0d39662"
+      },
+      {
+        "stepId": "STEP-018",
+        "actionId": "ACT-018",
+        "role": "primaryEffect",
+        "privateActionDigest": "3f82f9087bd22ee976f2887b98c65733c2054e5b64b04cb68b5544a02e7d167b"
+      },
+      {
+        "stepId": "STEP-018",
+        "actionId": "SUB-018",
+        "role": "readOnlyTransportSubAction",
+        "privateActionDigest": "29376af6a1d2525f7affecee65faf54e008bdb2b56562a7348904374b3470a33"
+      },
+      {
+        "stepId": "STEP-019",
+        "actionId": "ACT-019",
+        "role": "primaryEffect",
+        "privateActionDigest": "e000205e60756b837f413f21ffb48891c25fbef34175a9863ed3548d1fddb513"
+      },
+      {
+        "stepId": "STEP-019",
+        "actionId": "SUB-019",
+        "role": "readOnlyTransportSubAction",
+        "privateActionDigest": "ccd384be56c319de467e30acc9d4d90bf3173c92bf564f17c371acb223b68117"
+      },
+      {
+        "stepId": "STEP-020",
+        "actionId": "ACT-020",
+        "role": "primaryEffect",
+        "privateActionDigest": "a31cc0cd3b25c03ee1a0b9a13b3243e77a88a152ec5febaf2240700b3fcb0973"
+      },
+      {
+        "stepId": "STEP-020",
+        "actionId": "SUB-020",
+        "role": "readOnlyTransportSubAction",
+        "privateActionDigest": "c1b2db56599fb3849560fce1363653ab73482f558db034c0d1501b19328cd895"
+      },
+      {
+        "stepId": "STEP-021",
+        "actionId": "ACT-021",
+        "role": "primaryEffect",
+        "privateActionDigest": "5a1723eabeed7dc4a93e037de708e70885125f5cbf16be7095ebc0f57a7a074d"
+      },
+      {
+        "stepId": "STEP-021",
+        "actionId": "SUB-021",
+        "role": "readOnlyTransportSubAction",
+        "privateActionDigest": "7788a1e3a9e9096059f3df1e1a5b157960c6edf8aba44e0213ed0537f81e7a2d"
+      },
+      {
+        "stepId": "STEP-022",
+        "actionId": "ACT-022",
+        "role": "primaryEffect",
+        "privateActionDigest": "99a450dedcd1413ad1b16251082109d6501081cb3b0a9c85d2d4ba744fce6e8d"
+      },
+      {
+        "stepId": "STEP-023",
+        "actionId": "ACT-023",
+        "role": "primaryEffect",
+        "privateActionDigest": "755da25d7a899f0f7b81b9fde5747d60cbcca4b0a8fd93213712010bd970c96f"
+      }
+    ],
+    "mappingDiag": "[{\"role\": \"primaryEffect\", \"stepId\": \"STEP-001\", \"actionId\": \"ACT-001\", \"privateActionDigest\": h'd2f335be72286d19ec7d96401b334cad801d7be80a2c23031195133e5ac64080'}, {\"role\": \"primaryEffect\", \"stepId\": \"STEP-002\", \"actionId\": \"ACT-002\", \"privateActionDigest\": h'6c836bad99969a7dff01522b98cc5b63da5700e523f144b30b55119dbc3eb8f4'}, {\"role\": \"primaryEffect\", \"stepId\": \"STEP-003\", \"actionId\": \"ACT-003\", \"privateActionDigest\": h'd5e52eca1946714e9c9fbdcef39898ed3cea7cb3116b9fdc0bc28f5a5bad0c56'}, {\"role\": \"primaryEffect\", \"stepId\": \"STEP-004\", \"actionId\": \"ACT-004\", \"privateActionDigest\": h'69b5e174dd04aa902e990039d6b6577d75f53844c505c6796d07455d9d1ce153'}, {\"role\": \"primaryEffect\", \"stepId\": \"STEP-005\", \"actionId\": \"ACT-005\", \"privateActionDigest\": h'b8440f6b59e0da891fa21bcb908f3f5b02777a964ef5a0cb25e45c5dccc3b5a2'}, {\"role\": \"primaryEffect\", \"stepId\": \"STEP-006\", \"actionId\": \"ACT-006\", \"privateActionDigest\": h'd2b8cfe03a07cbff814e19672eb2121170a52f24e8b3e8240e2a301b1788d2db'}, {\"role\": \"primaryEffect\", \"stepId\": \"STEP-007\", \"actionId\": \"ACT-007\", \"privateActionDigest\": h'2b1689ed5bfc6497aa94059c8feb6ebbb3db00151e844c95eed247c36f18a609'}, {\"role\": \"primaryEffect\", \"stepId\": \"STEP-008\", \"actionId\": \"ACT-008\", \"privateActionDigest\": h'cf9dc9a9fba4afed70aebec908fe72ef6f33b673976ce213e0545b2efc6b8b2a'}, {\"role\": \"primaryEffect\", \"stepId\": \"STEP-009\", \"actionId\": \"ACT-009\", \"privateActionDigest\": h'4ff579ab29eb045b0e2f482dfe147f74f9ca4e69655a7f172030af0cb0e50acf'}, {\"role\": \"primaryEffect\", \"stepId\": \"STEP-010\", \"actionId\": \"ACT-010\", \"privateActionDigest\": h'fb9382fddac52859309552a3271bd396e631c753399139f9a8f84d3a4eff30d2'}, {\"role\": \"primaryEffect\", \"stepId\": \"STEP-011\", \"actionId\": \"ACT-011\", \"privateActionDigest\": h'733ff336c0d3a2bdfa89d2cea209489dfe27a3bb4c0c4ff7a0db59093b9a4b26'}, {\"role\": \"primaryEffect\", \"stepId\": \"STEP-012\", \"actionId\": \"ACT-012\", \"privateActionDigest\": h'f3e2db80516607607e10337933e3f6fb241ea9acc5f7041b0a83c0a6462304c2'}, {\"role\": \"primaryEffect\", \"stepId\": \"STEP-013\", \"actionId\": \"ACT-013\", \"privateActionDigest\": h'c1f45a8a2782414678402aecf1d1690896639602990bbedebedcfbda2457eda4'}, {\"role\": \"readOnlyTransportSubAction\", \"stepId\": \"STEP-013\", \"actionId\": \"SUB-013\", \"privateActionDigest\": h'a5dca2c65c7310d7aac370375c5606ff1f85a9c436dc1945ac751a79a9cc5f9e'}, {\"role\": \"primaryEffect\", \"stepId\": \"STEP-014\", \"actionId\": \"ACT-014\", \"privateActionDigest\": h'cbc6d2575ef41eb2cabd05387047e3e6713d8dfd1dae1b0df66a7313623d4e42'}, {\"role\": \"readOnlyTransportSubAction\", \"stepId\": \"STEP-014\", \"actionId\": \"SUB-014\", \"privateActionDigest\": h'31f0723828fd7bbd306f84dc50c048c2dcb1f64ba9cab26ab1d782d13cc42571'}, {\"role\": \"primaryEffect\", \"stepId\": \"STEP-015\", \"actionId\": \"ACT-015\", \"privateActionDigest\": h'ccf3ee0572342ae177225adf2246564210e143d126169bcc046b8f4c558f4065'}, {\"role\": \"readOnlyTransportSubAction\", \"stepId\": \"STEP-015\", \"actionId\": \"SUB-015\", \"privateActionDigest\": h'e5a588a6abd3d5b08c5339ba9b6b7bbe3b658c1bd0df66be907f89cab7c2a946'}, {\"role\": \"primaryEffect\", \"stepId\": \"STEP-016\", \"actionId\": \"ACT-016\", \"privateActionDigest\": h'75e7c2684e0900d74b6145db34877965b59637e188c2bb0f25ca7f5a6918c7c0'}, {\"role\": \"readOnlyTransportSubAction\", \"stepId\": \"STEP-016\", \"actionId\": \"SUB-016\", \"privateActionDigest\": h'45e0e2b1ee31a6716f6b659cd33f6c40e4222c964aaf50844848e6270ac76c9c'}, {\"role\": \"primaryEffect\", \"stepId\": \"STEP-017\", \"actionId\": \"ACT-017\", \"privateActionDigest\": h'c1c187f9b3e359c13191e275fbf92f18c1c0e0ea0e59edbc07e539ff4fb6e7ba'}, {\"role\": \"readOnlyTransportSubAction\", \"stepId\": \"STEP-017\", \"actionId\": \"SUB-017\", \"privateActionDigest\": h'16cfb919920297ce226133f70ae8715520497331382c9462f21c9914e0d39662'}, {\"role\": \"primaryEffect\", \"stepId\": \"STEP-018\", \"actionId\": \"ACT-018\", \"privateActionDigest\": h'3f82f9087bd22ee976f2887b98c65733c2054e5b64b04cb68b5544a02e7d167b'}, {\"role\": \"readOnlyTransportSubAction\", \"stepId\": \"STEP-018\", \"actionId\": \"SUB-018\", \"privateActionDigest\": h'29376af6a1d2525f7affecee65faf54e008bdb2b56562a7348904374b3470a33'}, {\"role\": \"primaryEffect\", \"stepId\": \"STEP-019\", \"actionId\": \"ACT-019\", \"privateActionDigest\": h'e000205e60756b837f413f21ffb48891c25fbef34175a9863ed3548d1fddb513'}, {\"role\": \"readOnlyTransportSubAction\", \"stepId\": \"STEP-019\", \"actionId\": \"SUB-019\", \"privateActionDigest\": h'ccd384be56c319de467e30acc9d4d90bf3173c92bf564f17c371acb223b68117'}, {\"role\": \"primaryEffect\", \"stepId\": \"STEP-020\", \"actionId\": \"ACT-020\", \"privateActionDigest\": h'a31cc0cd3b25c03ee1a0b9a13b3243e77a88a152ec5febaf2240700b3fcb0973'}, {\"role\": \"readOnlyTransportSubAction\", \"stepId\": \"STEP-020\", \"actionId\": \"SUB-020\", \"privateActionDigest\": h'c1b2db56599fb3849560fce1363653ab73482f558db034c0d1501b19328cd895'}, {\"role\": \"primaryEffect\", \"stepId\": \"STEP-021\", \"actionId\": \"ACT-021\", \"privateActionDigest\": h'5a1723eabeed7dc4a93e037de708e70885125f5cbf16be7095ebc0f57a7a074d'}, {\"role\": \"readOnlyTransportSubAction\", \"stepId\": \"STEP-021\", \"actionId\": \"SUB-021\", \"privateActionDigest\": h'7788a1e3a9e9096059f3df1e1a5b157960c6edf8aba44e0213ed0537f81e7a2d'}, {\"role\": \"primaryEffect\", \"stepId\": \"STEP-022\", \"actionId\": \"ACT-022\", \"privateActionDigest\": h'99a450dedcd1413ad1b16251082109d6501081cb3b0a9c85d2d4ba744fce6e8d'}, {\"role\": \"primaryEffect\", \"stepId\": \"STEP-023\", \"actionId\": \"ACT-023\", \"privateActionDigest\": h'755da25d7a899f0f7b81b9fde5747d60cbcca4b0a8fd93213712010bd970c96f'}]"
+  },
+  "files": {
+    "ordered-digests.bin": {
+      "bytes": 1024,
+      "sha256": "12a55f8c9f8363917937178f3cc030b2b1a45772b8e35b9b964f917ad0d0760a"
+    },
+    "mapping.cbor": {
+      "bytes": 3552,
+      "sha256": "e986ed3169c61d4b765c505b316c5e7ce11280b66f4ca4d2e674ebed26d11a8c"
+    }
+  }
+}

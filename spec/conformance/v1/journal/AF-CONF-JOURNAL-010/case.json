@@ -1,0 +1,24 @@
+{
+  "id": "AF-CONF-JOURNAL-010",
+  "suite": "journal",
+  "title": "a zero frame length is not a torn write; it is refused",
+  "kind": "replay",
+  "requirements": ["AF-JRN-011"],
+  "description": "Open `journal.bin`. A journal that no longer proves its own history is refused; recovery must not reason from it.",
+  "input": {
+    "basedOn": "AF-CONF-JOURNAL-003",
+    "mutation": "frame 2 length := 0"
+  },
+  "expected": {
+    "result": "reject",
+    "code": "JOURNAL_FRAME_LENGTH_INVALID",
+    "atOffset": 232,
+    "length": 0
+  },
+  "files": {
+    "journal.bin": {
+      "bytes": 1238,
+      "sha256": "0921ba6f5a372ed35fb0920e7817fcdd7503e25ea26fe3daee2f6ee30b221077"
+    }
+  }
+}

@@ -1,0 +1,21 @@
+{
+  "id": "AF-CONF-YAML-019",
+  "suite": "strict-yaml",
+  "title": "duplicate key",
+  "kind": "decode",
+  "requirements": ["AF-YAML-010"],
+  "description": "Parse `input.yaml` with the strict subset reader. The value tree has only scalars (text), sequences, mappings and null; typing happens in the consumer. `message` on a rejection is informative.",
+  "input": {
+    "yaml": "a: 1\na: 2\n"
+  },
+  "expected": {
+    "result": "reject",
+    "message": "line 2: duplicate key \"a\""
+  },
+  "files": {
+    "input.yaml": {
+      "bytes": 10,
+      "sha256": "db2e99c8225d56560ecdf70a39e6d1e7623b17e52679454c71914b7341d31045"
+    }
+  }
+}

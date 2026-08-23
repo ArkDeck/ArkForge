@@ -251,6 +251,16 @@ impl FlashPlanEnvelope {
     /// its bytes is corruption, and corruption fails closed rather than
     /// executing (architecture.md 6.3).
     pub fn recompute_digest(&self) -> Result<Sha256Digest, PlanError> {
+        let bytes = self.digest_body_bytes()?;
+        Ok(digest_in_domain(Domain::Plan, &bytes))
+    }
+
+    /// The deterministic CBOR bytes `plan_digest` is computed over, without
+    /// the domain prefix: `plan_digest = SHA-256(Domain::Plan || bytes)`.
+    ///
+    /// Exposed so a conformance fixture can publish the exact preimage a
+    /// second implementation has to reproduce (spec/conformance/v1/plan).
+    pub fn digest_body_bytes(&self) -> Result<Vec<u8>, PlanError> {
         let input = PlanSealInput {
             schema_version: self.schema_version,
             plan_id: self.plan_id.clone(),
@@ -275,10 +285,9 @@ impl FlashPlanEnvelope {
             created_at_epoch_ms: self.created_at_epoch_ms,
             expires_at_epoch_ms: self.expires_at_epoch_ms,
         };
-        let bytes = plan_digest_body(&input)
+        plan_digest_body(&input)
             .to_canonical_bytes()
-            .map_err(PlanError::Cbor)?;
-        Ok(digest_in_domain(Domain::Plan, &bytes))
+            .map_err(PlanError::Cbor)
     }
 
     pub fn verify_self_digest(&self) -> Result<(), PlanError> {

@@ -1,0 +1,41 @@
+{
+  "id": "AF-CONF-CBOR-038",
+  "suite": "canonical-cbor",
+  "title": "map: integer key 10 sorts before text key \"a\" (major type order)",
+  "kind": "encode",
+  "requirements": ["AF-DIG-003", "AF-DIG-004", "AF-DIG-005"],
+  "description": "The value encodes to exactly `expected.hex` and decodes back to the same value. `input.diag` is RFC 8949 §8 notation; `input.value` is the typed JSON form.",
+  "input": {
+    "diag": "{10: 2, \"a\": 1}",
+    "value": {
+      "map": [
+        [
+          {
+            "text": "a"
+          },
+          {
+            "uint": 1
+          }
+        ],
+        [
+          {
+            "uint": 10
+          },
+          {
+            "uint": 2
+          }
+        ]
+      ]
+    }
+  },
+  "expected": {
+    "hex": "a20a02616101",
+    "roundTrip": true
+  },
+  "files": {
+    "encoded.cbor": {
+      "bytes": 6,
+      "sha256": "3b44f3b9ffbb16b46ba11e4909a2948c28bb939ab1b788f3ffcad391c0af8aef"
+    }
+  }
+}

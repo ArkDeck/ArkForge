@@ -1,0 +1,26 @@
+{
+  "id": "AF-CONF-JOURNAL-006",
+  "suite": "journal",
+  "title": "a removed middle frame breaks the sequence",
+  "kind": "replay",
+  "requirements": ["AF-JRN-014"],
+  "description": "Open `journal.bin`. A journal that no longer proves its own history is refused; recovery must not reason from it.",
+  "input": {
+    "basedOn": "AF-CONF-JOURNAL-003",
+    "mutation": "frame 2 removed"
+  },
+  "expected": {
+    "result": "reject",
+    "code": "JOURNAL_SEQUENCE_BROKEN",
+    "detail": {
+      "expected": 2,
+      "found": 3
+    }
+  },
+  "files": {
+    "journal.bin": {
+      "bytes": 1003,
+      "sha256": "b000af5e39e8c50f651260ba74fd2c952e0ab074fa255dd4b6f8d16352e371e8"
+    }
+  }
+}

@@ -135,6 +135,21 @@ fn the_dependency_direction_matches_the_architecture() {
             "arkforge-arkdeck-adapter",
             BTreeSet::from(["arkforge-core", "arkforge-authority-api", "arkforge-ipc"]),
         ),
+        // spec/ tooling: generates and checks the language-neutral conformance
+        // fixtures from the reference implementation (AFD-0005). It may read
+        // every boundary it pins and nothing depends on it.
+        (
+            "arkforge-conformance",
+            BTreeSet::from([
+                "arkforge-core",
+                "arkforge-authority-api",
+                "arkforge-artifact",
+                "arkforge-transport",
+                "arkforge-provider",
+                "arkforge-engine",
+                "arkforge-ipc",
+            ]),
+        ),
         (
             "arkforge-standalone",
             BTreeSet::from([

@@ -1,0 +1,98 @@
+{
+  "id": "AF-CONF-JOURNAL-002",
+  "suite": "journal",
+  "title": "fsync policy per record kind",
+  "kind": "table",
+  "requirements": ["AF-JRN-005", "AF-JRN-006"],
+  "description": "The policy is a function of the kind. A record declaring a weaker policy than its kind requires is tampering.",
+  "input": {},
+  "expected": {
+    "kinds": [
+      {
+        "kind": "planStored",
+        "fsyncPolicy": "durable"
+      },
+      {
+        "kind": "jobCreated",
+        "fsyncPolicy": "durable"
+      },
+      {
+        "kind": "localExecutorLeaseAcquired",
+        "fsyncPolicy": "durable"
+      },
+      {
+        "kind": "preflightObserved",
+        "fsyncPolicy": "buffered"
+      },
+      {
+        "kind": "stepAdmissionRequested",
+        "fsyncPolicy": "buffered"
+      },
+      {
+        "kind": "stepPermitAccepted",
+        "fsyncPolicy": "durable"
+      },
+      {
+        "kind": "stepIntentRecorded",
+        "fsyncPolicy": "durable"
+      },
+      {
+        "kind": "permitConsuming",
+        "fsyncPolicy": "durable"
+      },
+      {
+        "kind": "externalDispatchStarted",
+        "fsyncPolicy": "durable"
+      },
+      {
+        "kind": "transportEvidenceRecorded",
+        "fsyncPolicy": "buffered"
+      },
+      {
+        "kind": "semanticReceiptRecorded",
+        "fsyncPolicy": "durable"
+      },
+      {
+        "kind": "permitConsumed",
+        "fsyncPolicy": "durable"
+      },
+      {
+        "kind": "stepCheckpointed",
+        "fsyncPolicy": "durable"
+      },
+      {
+        "kind": "rebindObserved",
+        "fsyncPolicy": "buffered"
+      },
+      {
+        "kind": "cancellationRequested",
+        "fsyncPolicy": "durable"
+      },
+      {
+        "kind": "postflightRecorded",
+        "fsyncPolicy": "durable"
+      },
+      {
+        "kind": "outcomeClassified",
+        "fsyncPolicy": "durable"
+      },
+      {
+        "kind": "possibleEffectSetRecorded",
+        "fsyncPolicy": "durable"
+      },
+      {
+        "kind": "recoveryAssessmentPublished",
+        "fsyncPolicy": "durable"
+      },
+      {
+        "kind": "recoveryGuidePublished",
+        "fsyncPolicy": "durable"
+      },
+      {
+        "kind": "readOnlyObservationRecorded",
+        "fsyncPolicy": "buffered"
+      }
+    ]
+  },
+  "files": {}
+}

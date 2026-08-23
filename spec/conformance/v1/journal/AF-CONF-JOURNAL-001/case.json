@@ -1,0 +1,132 @@
+{
+  "id": "AF-CONF-JOURNAL-001",
+  "suite": "journal",
+  "title": "five-record chain: bodies, digests and links",
+  "kind": "encode",
+  "requirements": ["AF-JRN-001", "AF-JRN-002", "AF-JRN-003", "AF-JRN-004"],
+  "description": "recordDigest = SHA-256(\"arkforge/v1/journal-record\\0\" || deterministic_cbor(body without recordDigest)). The stored record is the body plus `recordDigest`. Record 1 links to the 32-zero-byte chain origin. fsyncPolicy is the policy the kind requires.",
+  "input": {
+    "schemaVersion": 1,
+    "chainOrigin": "0000000000000000000000000000000000000000000000000000000000000000",
+    "records": [
+      {
+        "kind": "planStored",
+        "atEpochMs": 1000,
+        "jobRevision": 1,
+        "subject": "PLAN-1",
+        "facts": {
+          "planId": "PLAN-1"
+        }
+      },
+      {
+        "kind": "jobCreated",
+        "atEpochMs": 1010,
+        "jobRevision": 1,
+        "subject": "JOB-1",
+        "facts": {
+          "jobId": "JOB-1",
+          "planId": "PLAN-1"
+        }
+      },
+      {
+        "kind": "preflightObserved",
+        "atEpochMs": 1020,
+        "jobRevision": 1,
+        "subject": "JOB-1",
+        "facts": {
+          "jobId": "JOB-1",
+          "mode": "rockusb-loader"
+        }
+      },
+      {
+        "kind": "stepPermitAccepted",
+        "atEpochMs": 1030,
+        "jobRevision": 1,
+        "subject": "JOB-1",
+        "facts": {
+          "jobId": "JOB-1",
+          "stepId": "STEP-1",
+          "permitId": "PERMIT-1"
+        }
+      },
+      {
+        "kind": "stepIntentRecorded",
+        "atEpochMs": 1040,
+        "jobRevision": 1,
+        "subject": "JOB-1",
+        "facts": {
+          "jobId": "JOB-1",
+          "stepId": "STEP-1",
+          "permitId": "PERMIT-1"
+        }
+      }
+    ]
+  },
+  "expected": {
+    "records": [
+      {
+        "sequence": 1,
+        "kind": "planStored",
+        "fsyncPolicy": "durable",
+        "previousDigest": "0000000000000000000000000000000000000000000000000000000000000000",
+        "recordDigest": "556e07ebd56fd44e75699e6c4086e8f6b410c6a533811579043702895c6751c2",
+        "diag": "{\"kind\": \"planStored\", \"facts\": {\"planId\": \"PLAN-1\"}, \"subject\": \"PLAN-1\", \"sequence\": 1, \"atEpochMs\": 1000, \"fsyncPolicy\": \"durable\", \"jobRevision\": 1, \"recordDigest\": h'556e07ebd56fd44e75699e6c4086e8f6b410c6a533811579043702895c6751c2', \"schemaVersion\": 1, \"previousDigest\": h'0000000000000000000000000000000000000000000000000000000000000000'}"
+      },
+      {
+        "sequence": 2,
+        "kind": "jobCreated",
+        "fsyncPolicy": "durable",
+        "previousDigest": "556e07ebd56fd44e75699e6c4086e8f6b410c6a533811579043702895c6751c2",
+        "recordDigest": "d24f3f6283880246f52a89c46fb67e7051c5a6b75f8b9fd74e22f85768110be1",
+        "diag": "{\"kind\": \"jobCreated\", \"facts\": {\"jobId\": \"JOB-1\", \"planId\": \"PLAN-1\"}, \"subject\": \"JOB-1\", \"sequence\": 2, \"atEpochMs\": 1010, \"fsyncPolicy\": \"durable\", \"jobRevision\": 1, \"recordDigest\": h'd24f3f6283880246f52a89c46fb67e7051c5a6b75f8b9fd74e22f85768110be1', \"schemaVersion\": 1, \"previousDigest\": h'556e07ebd56fd44e75699e6c4086e8f6b410c6a533811579043702895c6751c2'}"
+      },
+      {
+        "sequence": 3,
+        "kind": "preflightObserved",
+        "fsyncPolicy": "buffered",
+        "previousDigest": "d24f3f6283880246f52a89c46fb67e7051c5a6b75f8b9fd74e22f85768110be1",
+        "recordDigest": "05e75920e131def7b51bb35a4316078bf14df7e05ef57292f0a1ec9039e24488",
+        "diag": "{\"kind\": \"preflightObserved\", \"facts\": {\"mode\": \"rockusb-loader\", \"jobId\": \"JOB-1\"}, \"subject\": \"JOB-1\", \"sequence\": 3, \"atEpochMs\": 1020, \"fsyncPolicy\": \"buffered\", \"jobRevision\": 1, \"recordDigest\": h'05e75920e131def7b51bb35a4316078bf14df7e05ef57292f0a1ec9039e24488', \"schemaVersion\": 1, \"previousDigest\": h'd24f3f6283880246f52a89c46fb67e7051c5a6b75f8b9fd74e22f85768110be1'}"
+      },
+      {
+        "sequence": 4,
+        "kind": "stepPermitAccepted",
+        "fsyncPolicy": "durable",
+        "previousDigest": "05e75920e131def7b51bb35a4316078bf14df7e05ef57292f0a1ec9039e24488",
+        "recordDigest": "8de2391352ed3c780c8a5a7a17034a3a9327732d6d577a44a159133445c48084",
+        "diag": "{\"kind\": \"stepPermitAccepted\", \"facts\": {\"jobId\": \"JOB-1\", \"stepId\": \"STEP-1\", \"permitId\": \"PERMIT-1\"}, \"subject\": \"JOB-1\", \"sequence\": 4, \"atEpochMs\": 1030, \"fsyncPolicy\": \"durable\", \"jobRevision\": 1, \"recordDigest\": h'8de2391352ed3c780c8a5a7a17034a3a9327732d6d577a44a159133445c48084', \"schemaVersion\": 1, \"previousDigest\": h'05e75920e131def7b51bb35a4316078bf14df7e05ef57292f0a1ec9039e24488'}"
+      },
+      {
+        "sequence": 5,
+        "kind": "stepIntentRecorded",
+        "fsyncPolicy": "durable",
+        "previousDigest": "8de2391352ed3c780c8a5a7a17034a3a9327732d6d577a44a159133445c48084",
+        "recordDigest": "bedae7109c9d357ae089763cc0adabfecd861a4f0b051a5e2bd83464260c908a",
+        "diag": "{\"kind\": \"stepIntentRecorded\", \"facts\": {\"jobId\": \"JOB-1\", \"stepId\": \"STEP-1\", \"permitId\": \"PERMIT-1\"}, \"subject\": \"JOB-1\", \"sequence\": 5, \"atEpochMs\": 1040, \"fsyncPolicy\": \"durable\", \"jobRevision\": 1, \"recordDigest\": h'bedae7109c9d357ae089763cc0adabfecd861a4f0b051a5e2bd83464260c908a', \"schemaVersion\": 1, \"previousDigest\": h'8de2391352ed3c780c8a5a7a17034a3a9327732d6d577a44a159133445c48084'}"
+      }
+    ],
+    "headDigest": "bedae7109c9d357ae089763cc0adabfecd861a4f0b051a5e2bd83464260c908a"
+  },
+  "files": {
+    "record-1.cbor": {
+      "bytes": 220,
+      "sha256": "47b9d77a1110ed9883c59d0c192746f2060108b74ed72b0ad261d32ce150c31e"
+    },
+    "record-2.cbor": {
+      "bytes": 231,
+      "sha256": "f94fb24c4ae22aa9647391f8a6f5076d259d134ed5a6601d4b7899e17dc792ef"
+    },
+    "record-3.cbor": {
+      "bytes": 245,
+      "sha256": "1547153346059d069de9fe16dc03605ae053981d5afa94cb4cb5f2b7e7277581"
+    },
+    "record-4.cbor": {
+      "bytes": 257,
+      "sha256": "e8ba89f63792738ed9a5bf83b220b8307c3fd94ad25b45f76835b500b1bfe17e"
+    },
+    "record-5.cbor": {
+      "bytes": 257,
+      "sha256": "92db68af46b38c9d22d49907006656df0d0358cfdfadf75b24ba253e5e8161df"
+    }
+  }
+}

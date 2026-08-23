@@ -1,0 +1,21 @@
+{
+  "id": "AF-CONF-YAML-027",
+  "suite": "strict-yaml",
+  "title": "folded block scalar",
+  "kind": "decode",
+  "requirements": ["AF-YAML-014"],
+  "description": "Parse `input.yaml` with the strict subset reader. The value tree has only scalars (text), sequences, mappings and null; typing happens in the consumer. `message` on a rejection is informative.",
+  "input": {
+    "yaml": "a: >\n  text\n"
+  },
+  "expected": {
+    "result": "reject",
+    "message": "line 1: multi-line scalars are not permitted"
+  },
+  "files": {
+    "input.yaml": {
+      "bytes": 12,
+      "sha256": "62574abaa4240fe8e4adfcb29b3c8e1e45037073dd8b6e7727f315f74e07bbb5"
+    }
+  }
+}

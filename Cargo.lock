@@ -49,6 +49,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "arkforge-conformance"
+version = "0.1.0"
+dependencies = [
+ "arkforge-artifact",
+ "arkforge-authority-api",
+ "arkforge-core",
+ "arkforge-engine",
+ "arkforge-ipc",
+ "arkforge-provider",
+ "arkforge-transport",
+]
+
+[[package]]
 name = "arkforge-core"
 version = "0.1.0"
 dependencies = [

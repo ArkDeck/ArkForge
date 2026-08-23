@@ -1,0 +1,16 @@
+{
+  "id": "AF-CONF-HMAC-005",
+  "suite": "hmac-sha256",
+  "title": "RFC 4231 case 6 (key longer than block size is hashed first)",
+  "kind": "digest",
+  "requirements": ["AF-DIG-002"],
+  "description": "HMAC-SHA-256(key, data), lowercase hex.",
+  "input": {
+    "keyHex": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "dataHex": "54657374205573696e67204c6172676572205468616e20426c6f636b2d53697a65204b6579202d2048617368204b6579204669727374"
+  },
+  "expected": {
+    "tag": "60e431591ee0b67f0d8a26aacbf5b77f8e0bc6213728c5140546040f0ee37f54"
+  },
+  "files": {}
+}

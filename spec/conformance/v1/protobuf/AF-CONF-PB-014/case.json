@@ -1,0 +1,21 @@
+{
+  "id": "AF-CONF-PB-014",
+  "suite": "protobuf",
+  "title": "SubmitManagedControlReceiptRequest with a build fact",
+  "kind": "encode",
+  "requirements": ["AF-IPC-010", "AF-IPC-011"],
+  "description": "Encoding of `arkforge.ipc.v1.SubmitManagedControlReceiptRequest` per proto/arkforge.proto. Proto3 defaults (0, false, empty) are omitted; fields are written in field number order; repeated message fields are one tag per element.",
+  "input": {
+    "message": "SubmitManagedControlReceiptRequest"
+  },
+  "expected": {
+    "hex": "0a054a4f422d31120543544c2d31180420012a2a0a126f686f732e6275696c642e76657273696f6e12144f70656e4861726d6f6e792d372e302e302e33373220cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+    "roundTrip": true
+  },
+  "files": {
+    "message.pb": {
+      "bytes": 96,
+      "sha256": "3089478beccad954a1bc71f869dbbf517b4b788e359169795ee1adeb316b36f9"
+    }
+  }
+}

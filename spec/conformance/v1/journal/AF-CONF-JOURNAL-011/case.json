@@ -1,0 +1,24 @@
+{
+  "id": "AF-CONF-JOURNAL-011",
+  "suite": "journal",
+  "title": "a frame length above the bound is refused before allocation",
+  "kind": "replay",
+  "requirements": ["AF-JRN-011"],
+  "description": "Open `journal.bin`. A journal that no longer proves its own history is refused; recovery must not reason from it.",
+  "input": {
+    "basedOn": "AF-CONF-JOURNAL-003",
+    "mutation": "frame 2 length := 2^20 + 1"
+  },
+  "expected": {
+    "result": "reject",
+    "code": "JOURNAL_FRAME_LENGTH_INVALID",
+    "atOffset": 232,
+    "length": 1048577
+  },
+  "files": {
+    "journal.bin": {
+      "bytes": 1238,
+      "sha256": "8fded25531243ed3831261faa7c249d93098027c75b4609ba8edc74f75eb6f7d"
+    }
+  }
+}

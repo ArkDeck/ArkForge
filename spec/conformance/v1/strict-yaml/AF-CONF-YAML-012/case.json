@@ -1,0 +1,36 @@
+{
+  "id": "AF-CONF-YAML-012",
+  "suite": "strict-yaml",
+  "title": "quotes are stripped, escapes are not processed",
+  "kind": "decode",
+  "requirements": ["AF-YAML-005"],
+  "description": "Parse `input.yaml` with the strict subset reader. The value tree has only scalars (text), sequences, mappings and null; typing happens in the consumer. `message` on a rejection is informative.",
+  "input": {
+    "yaml": "a: 'it''s'\nb: \"back\\\\slash\"\n"
+  },
+  "expected": {
+    "result": "accept",
+    "value": {
+      "mapping": [
+        [
+          "a",
+          {
+            "scalar": "it''s"
+          }
+        ],
+        [
+          "b",
+          {
+            "scalar": "back\\\\slash"
+          }
+        ]
+      ]
+    }
+  },
+  "files": {
+    "input.yaml": {
+      "bytes": 28,
+      "sha256": "c252de6befee81371d83b3913b8a94ad111c3284c4730ba375130c5536cd1aaf"
+    }
+  }
+}

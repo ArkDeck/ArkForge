@@ -1,0 +1,24 @@
+{
+  "id": "AF-CONF-CBOR-020",
+  "suite": "canonical-cbor",
+  "title": "byte string of length 24 (head switches to 1-byte argument)",
+  "kind": "encode",
+  "requirements": ["AF-DIG-003", "AF-DIG-004", "AF-DIG-005"],
+  "description": "The value encodes to exactly `expected.hex` and decodes back to the same value. `input.diag` is RFC 8949 §8 notation; `input.value` is the typed JSON form.",
+  "input": {
+    "diag": "h'abababababababababababababababababababababababab'",
+    "value": {
+      "bytes": "abababababababababababababababababababababababab"
+    }
+  },
+  "expected": {
+    "hex": "5818abababababababababababababababababababababababab",
+    "roundTrip": true
+  },
+  "files": {
+    "encoded.cbor": {
+      "bytes": 26,
+      "sha256": "047b3134310510d7cec6b4f147e5f85050c6104665d06fef929c3cb1985ac83d"
+    }
+  }
+}

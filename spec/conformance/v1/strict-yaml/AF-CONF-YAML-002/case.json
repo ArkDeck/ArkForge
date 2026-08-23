@@ -1,0 +1,37 @@
+{
+  "id": "AF-CONF-YAML-002",
+  "suite": "strict-yaml",
+  "title": "block sequence of scalars",
+  "kind": "decode",
+  "requirements": ["AF-YAML-001"],
+  "description": "Parse `input.yaml` with the strict subset reader. The value tree has only scalars (text), sequences, mappings and null; typing happens in the consumer. `message` on a rejection is informative.",
+  "input": {
+    "yaml": "items:\n  - one\n  - two\n"
+  },
+  "expected": {
+    "result": "accept",
+    "value": {
+      "mapping": [
+        [
+          "items",
+          {
+            "sequence": [
+              {
+                "scalar": "one"
+              },
+              {
+                "scalar": "two"
+              }
+            ]
+          }
+        ]
+      ]
+    }
+  },
+  "files": {
+    "input.yaml": {
+      "bytes": 23,
+      "sha256": "9c626d7bea81e54d0724cc8d161425bc5988c9c587807ab9cba21f835158cfef"
+    }
+  }
+}

@@ -1,0 +1,30 @@
+{
+  "id": "AF-CONF-YAML-014",
+  "suite": "strict-yaml",
+  "title": "a scalar containing a colon without a following space",
+  "kind": "decode",
+  "requirements": ["AF-YAML-001"],
+  "description": "Parse `input.yaml` with the strict subset reader. The value tree has only scalars (text), sequences, mappings and null; typing happens in the consumer. `message` on a rejection is informative.",
+  "input": {
+    "yaml": "url: a:b:c\n"
+  },
+  "expected": {
+    "result": "accept",
+    "value": {
+      "mapping": [
+        [
+          "url",
+          {
+            "scalar": "a:b:c"
+          }
+        ]
+      ]
+    }
+  },
+  "files": {
+    "input.yaml": {
+      "bytes": 11,
+      "sha256": "183532d1046f5d699cad2e982e7ad263818c50cd91ad7c958f1deb37bc3027d9"
+    }
+  }
+}

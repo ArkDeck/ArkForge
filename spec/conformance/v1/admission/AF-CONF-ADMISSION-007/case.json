@@ -1,0 +1,27 @@
+{
+  "id": "AF-CONF-ADMISSION-007",
+  "suite": "admission",
+  "title": "transport session digest changed",
+  "kind": "derive",
+  "requirements": ["AF-AUTH-003", "AF-AUTH-004", "AF-AUTH-005"],
+  "description": "evaluate_freshness(snapshot, currentFacts). Digests are compared for equality only; their preimages are labels here.",
+  "input": {
+    "snapshot": "AF-CONF-ADMISSION-001",
+    "current": {
+      "nowEpochMs": 1770000119999,
+      "sawDetachSinceSnapshot": false,
+      "transportSessionDigest": "b497a4d3ecc208a5c54a57007d23827123c569e48e192b8c4a3c1afa1f40e0b0",
+      "deviceFactsDigest": "8e288de11c642fe7ef473e9a1e9fc13b7db646cc3c9218261812eb5139e52b2c",
+      "providerFactsDigest": "c75368aead326187a92311dab41bcf61bb202baf39d599ed35231ad7dc873e9c",
+      "toolchainFactsDigest": "cd11d7d43a0c360cd0046e34ad9e69b0298a1ed1f7fddd546756c56cc1f82da6",
+      "artifactFactsDigest": "9a188cc02191baf16e43ab5ddbfe0179c5c735a96145782fa34e068253129f66"
+    }
+  },
+  "expected": {
+    "verdict": "continuityBroken",
+    "reason": "sessionChanged",
+    "permitsDispatch": false,
+    "retryableWithoutDeviceBlame": false
+  },
+  "files": {}
+}

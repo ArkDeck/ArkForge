@@ -1,0 +1,21 @@
+[package]
+name = "arkforge-conformance"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Generates and checks the language-neutral conformance fixtures under spec/conformance/v1 from the Rust reference implementation."
+
+[dependencies]
+arkforge-core = { path = "../arkforge-core" }
+arkforge-authority-api = { path = "../arkforge-authority-api" }
+arkforge-engine = { path = "../arkforge-engine" }
+arkforge-ipc = { path = "../arkforge-ipc" }
+arkforge-artifact = { path = "../arkforge-artifact" }
+arkforge-provider = { path = "../arkforge-provider" }
+arkforge-transport = { path = "../arkforge-transport" }
+
+[[bin]]
+name = "arkforge-conformance"
+path = "src/main.rs"

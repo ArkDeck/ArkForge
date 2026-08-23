@@ -1,0 +1,21 @@
+{
+  "id": "AF-CONF-SHA256-004",
+  "suite": "sha256",
+  "title": "FIPS 180-4 four-block message (112 bytes)",
+  "kind": "digest",
+  "requirements": ["AF-DIG-001"],
+  "description": "SHA-256 of the input bytes, lowercase hex.",
+  "input": {
+    "ascii": "abcdefghbcdefghicdefghijdefghijkefghijklfghijklmghijklmnhijklmnoijklmnopjklmnopqklmnopqrlmnopqrsmnopqrstnopqrstu",
+    "length": 112
+  },
+  "expected": {
+    "sha256": "cf5b16a778af8380036ce59e7b0492370b249b11e8f07a51afac45037afee9d1"
+  },
+  "files": {
+    "input.bin": {
+      "bytes": 112,
+      "sha256": "cf5b16a778af8380036ce59e7b0492370b249b11e8f07a51afac45037afee9d1"
+    }
+  }
+}

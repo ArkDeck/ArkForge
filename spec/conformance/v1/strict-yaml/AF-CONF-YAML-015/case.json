@@ -1,0 +1,61 @@
+{
+  "id": "AF-CONF-YAML-015",
+  "suite": "strict-yaml",
+  "title": "deeper nesting",
+  "kind": "decode",
+  "requirements": ["AF-YAML-001"],
+  "description": "Parse `input.yaml` with the strict subset reader. The value tree has only scalars (text), sequences, mappings and null; typing happens in the consumer. `message` on a rejection is informative.",
+  "input": {
+    "yaml": "a:\n  b:\n    c:\n      - d: 1\n        e: 2\n"
+  },
+  "expected": {
+    "result": "accept",
+    "value": {
+      "mapping": [
+        [
+          "a",
+          {
+            "mapping": [
+              [
+                "b",
+                {
+                  "mapping": [
+                    [
+                      "c",
+                      {
+                        "sequence": [
+                          {
+                            "mapping": [
+                              [
+                                "d",
+                                {
+                                  "scalar": "1"
+                                }
+                              ],
+                              [
+                                "e",
+                                {
+                                  "scalar": "2"
+                                }
+                              ]
+                            ]
+                          }
+                        ]
+                      }
+                    ]
+                  ]
+                }
+              ]
+            ]
+          }
+        ]
+      ]
+    }
+  },
+  "files": {
+    "input.yaml": {
+      "bytes": 41,
+      "sha256": "6a51469694a1fae5d63efb8b8fc8e6299c75000110d8c01e111aa97170026af4"
+    }
+  }
+}

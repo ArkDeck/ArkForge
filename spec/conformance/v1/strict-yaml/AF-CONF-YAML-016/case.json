@@ -1,0 +1,41 @@
+{
+  "id": "AF-CONF-YAML-016",
+  "suite": "strict-yaml",
+  "title": "sequence item with an indented child block",
+  "kind": "decode",
+  "requirements": ["AF-YAML-001"],
+  "description": "Parse `input.yaml` with the strict subset reader. The value tree has only scalars (text), sequences, mappings and null; typing happens in the consumer. `message` on a rejection is informative.",
+  "input": {
+    "yaml": "a:\n  -\n    k: v\n"
+  },
+  "expected": {
+    "result": "accept",
+    "value": {
+      "mapping": [
+        [
+          "a",
+          {
+            "sequence": [
+              {
+                "mapping": [
+                  [
+                    "k",
+                    {
+                      "scalar": "v"
+                    }
+                  ]
+                ]
+              }
+            ]
+          }
+        ]
+      ]
+    }
+  },
+  "files": {
+    "input.yaml": {
+      "bytes": 16,
+      "sha256": "33b43170d0356c487678384aa6428adcae00f9e8cd7038ee962d5ca5714d2ce7"
+    }
+  }
+}

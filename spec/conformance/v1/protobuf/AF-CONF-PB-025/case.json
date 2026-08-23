@@ -1,0 +1,20 @@
+{
+  "id": "AF-CONF-PB-025",
+  "suite": "protobuf",
+  "title": "end-group wire type (4) is not in the subset",
+  "kind": "decode",
+  "requirements": ["AF-IPC-015"],
+  "description": "Decode the bytes as `Hello`.",
+  "input": {
+    "decoder": "Hello",
+    "hex": "0c"
+  },
+  "expected": {
+    "result": "reject",
+    "code": "PB_UNSUPPORTED_WIRE_TYPE",
+    "detail": {
+      "wireType": 4
+    }
+  },
+  "files": {}
+}

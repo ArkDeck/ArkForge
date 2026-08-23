@@ -1,0 +1,280 @@
+{
+  "id": "AF-CONF-CBOR-043",
+  "suite": "canonical-cbor",
+  "title": "array nested 64 deep (the maximum accepted depth)",
+  "kind": "encode",
+  "requirements": ["AF-DIG-003", "AF-DIG-004", "AF-DIG-005"],
+  "description": "The value encodes to exactly `expected.hex` and decodes back to the same value. `input.diag` is RFC 8949 §8 notation; `input.value` is the typed JSON form.",
+  "input": {
+    "diag": "[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[1]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]",
+    "value": {
+      "array": [
+        {
+          "array": [
+            {
+              "array": [
+                {
+                  "array": [
+                    {
+                      "array": [
+                        {
+                          "array": [
+                            {
+                              "array": [
+                                {
+                                  "array": [
+                                    {
+                                      "array": [
+                                        {
+                                          "array": [
+                                            {
+                                              "array": [
+                                                {
+                                                  "array": [
+                                                    {
+                                                      "array": [
+                                                        {
+                                                          "array": [
+                                                            {
+                                                              "array": [
+                                                                {
+                                                                  "array": [
+                                                                    {
+                                                                      "array": [
+                                                                        {
+                                                                          "array": [
+                                                                            {
+                                                                              "array": [
+                                                                                {
+                                                                                  "array": [
+                                                                                    {
+                                                                                      "array": [
+                                                                                        {
+                                                                                          "array": [
+                                                                                            {
+                                                                                              "array": [
+                                                                                                {
+                                                                                                  "array": [
+                                                                                                    {
+                                                                                                      "array": [
+                                                                                                        {
+                                                                                                          "array": [
+                                                                                                            {
+                                                                                                              "array": [
+                                                                                                                {
+                                                                                                                  "array": [
+                                                                                                                    {
+                                                                                                                      "array": [
+                                                                                                                        {
+                                                                                                                          "array": [
+                                                                                                                            {
+                                                                                                                              "array": [
+                                                                                                                                {
+                                                                                                                                  "array": [
+                                                                                                                                    {
+                                                                                                                                      "array": [
+                                                                                                                                        {
+                                                                                                                                          "array": [
+                                                                                                                                            {
+                                                                                                                                              "array": [
+                                                                                                                                                {
+                                                                                                                                                  "array": [
+                                                                                                                                                    {
+                                                                                                                                                      "array": [
+                                                                                                                                                        {
+                                                                                                                                                          "array": [
+                                                                                                                                                            {
+                                                                                                                                                              "array": [
+                                                                                                                                                                {
+                                                                                                                                                                  "array": [
+                                                                                                                                                                    {
+                                                                                                                                                                      "array": [
+                                                                                                                                                                        {
+                                                                                                                                                                          "array": [
+                                                                                                                                                                            {
+                                                                                                                                                                              "array": [
+                                                                                                                                                                                {
+                                                                                                                                                                                  "array": [
+                                                                                                                                                                                    {
+                                                                                                                                                                                      "array": [
+                                                                                                                                                                                        {
+                                                                                                                                                                                          "array": [
+                                                                                                                                                                                            {
+                                                                                                                                                                                              "array": [
+                                                                                                                                                                                                {
+                                                                                                                                                                                                  "array": [
+                                                                                                                                                                                                    {
+                                                                                                                                                                                                      "array": [
+                                                                                                                                                                                                        {
+                                                                                                                                                                                                          "array": [
+                                                                                                                                                                                                            {
+                                                                                                                                                                                                              "array": [
+                                                                                                                                                                                                                {
+                                                                                                                                                                                                                  "array": [
+                                                                                                                                                                                                                    {
+                                                                                                                                                                                                                      "array": [
+                                                                                                                                                                                                                        {
+                                                                                                                                                                                                                          "array": [
+                                                                                                                                                                                                                            {
+                                                                                                                                                                                                                              "array": [
+                                                                                                                                                                                                                                {
+                                                                                                                                                                                                                                  "array": [
+                                                                                                                                                                                                                                    {
+                                                                                                                                                                                                                                      "array": [
+                                                                                                                                                                                                                                        {
+                                                                                                                                                                                                                                          "array": [
+                                                                                                                                                                                                                                            {
+                                                                                                                                                                                                                                              "array": [
+                                                                                                                                                                                                                                                {
+                                                                                                                                                                                                                                                  "array": [
+                                                                                                                                                                                                                                                    {
+                                                                                                                                                                                                                                                      "array": [
+                                                                                                                                                                                                                                                        {
+                                                                                                                                                                                                                                                          "array": [
+                                                                                                                                                                                                                                                            {
+                                                                                                                                                                                                                                                              "array": [
+                                                                                                                                                                                                                                                                {
+                                                                                                                                                                                                                                                                  "array": [
+                                                                                                                                                                                                                                                                    {
+                                                                                                                                                                                                                                                                      "uint": 1
+                                                                                                                                                                                                                                                                    }
+                                                                                                                                                                                                                                                                  ]
+                                                                                                                                                                                                                                                                }
+                                                                                                                                                                                                                                                              ]
+                                                                                                                                                                                                                                                            }
+                                                                                                                                                                                                                                                          ]
+                                                                                                                                                                                                                                                        }
+                                                                                                                                                                                                                                                      ]
+                                                                                                                                                                                                                                                    }
+                                                                                                                                                                                                                                                  ]
+                                                                                                                                                                                                                                                }
+                                                                                                                                                                                                                                              ]
+                                                                                                                                                                                                                                            }
+                                                                                                                                                                                                                                          ]
+                                                                                                                                                                                                                                        }
+                                                                                                                                                                                                                                      ]
+                                                                                                                                                                                                                                    }
+                                                                                                                                                                                                                                  ]
+                                                                                                                                                                                                                                }
+                                                                                                                                                                                                                              ]
+                                                                                                                                                                                                                            }
+                                                                                                                                                                                                                          ]
+                                                                                                                                                                                                                        }
+                                                                                                                                                                                                                      ]
+                                                                                                                                                                                                                    }
+                                                                                                                                                                                                                  ]
+                                                                                                                                                                                                                }
+                                                                                                                                                                                                              ]
+                                                                                                                                                                                                            }
+                                                                                                                                                                                                          ]
+                                                                                                                                                                                                        }
+                                                                                                                                                                                                      ]
+                                                                                                                                                                                                    }
+                                                                                                                                                                                                  ]
+                                                                                                                                                                                                }
+                                                                                                                                                                                              ]
+                                                                                                                                                                                            }
+                                                                                                                                                                                          ]
+                                                                                                                                                                                        }
+                                                                                                                                                                                      ]
+                                                                                                                                                                                    }
+                                                                                                                                                                                  ]
+                                                                                                                                                                                }
+                                                                                                                                                                              ]
+                                                                                                                                                                            }
+                                                                                                                                                                          ]
+                                                                                                                                                                        }
+                                                                                                                                                                      ]
+                                                                                                                                                                    }
+                                                                                                                                                                  ]
+                                                                                                                                                                }
+                                                                                                                                                              ]
+                                                                                                                                                            }
+                                                                                                                                                          ]
+                                                                                                                                                        }
+                                                                                                                                                      ]
+                                                                                                                                                    }
+                                                                                                                                                  ]
+                                                                                                                                                }
+                                                                                                                                              ]
+                                                                                                                                            }
+                                                                                                                                          ]
+                                                                                                                                        }
+                                                                                                                                      ]
+                                                                                                                                    }
+                                                                                                                                  ]
+                                                                                                                                }
+                                                                                                                              ]
+                                                                                                                            }
+                                                                                                                          ]
+                                                                                                                        }
+                                                                                                                      ]
+                                                                                                                    }
+                                                                                                                  ]
+                                                                                                                }
+                                                                                                              ]
+                                                                                                            }
+                                                                                                          ]
+                                                                                                        }
+                                                                                                      ]
+                                                                                                    }
+                                                                                                  ]
+                                                                                                }
+                                                                                              ]
+                                                                                            }
+                                                                                          ]
+                                                                                        }
+                                                                                      ]
+                                                                                    }
+                                                                                  ]
+                                                                                }
+                                                                              ]
+                                                                            }
+                                                                          ]
+                                                                        }
+                                                                      ]
+                                                                    }
+                                                                  ]
+                                                                }
+                                                              ]
+                                                            }
+                                                          ]
+                                                        }
+                                                      ]
+                                                    }
+                                                  ]
+                                                }
+                                              ]
+                                            }
+                                          ]
+                                        }
+                                      ]
+                                    }
+                                  ]
+                                }
+                              ]
+                            }
+                          ]
+                        }
+                      ]
+                    }
+                  ]
+                }
+              ]
+            }
+          ]
+        }
+      ]
+    }
+  },
+  "expected": {
+    "hex": "8181818181818181818181818181818181818181818181818181818181818181818181818181818181818181818181818181818181818181818181818181818101",
+    "roundTrip": true
+  },
+  "files": {
+    "encoded.cbor": {
+      "bytes": 65,
+      "sha256": "2c62883864b2362a935b4c54a9c252d14d89c1e7f5511d3eedbdfa457f998eb5"
+    }
+  }
+}

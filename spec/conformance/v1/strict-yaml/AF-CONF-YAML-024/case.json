@@ -1,0 +1,30 @@
+{
+  "id": "AF-CONF-YAML-024",
+  "suite": "strict-yaml",
+  "title": "tag inside a value is kept as literal text, never interpreted",
+  "kind": "decode",
+  "requirements": ["AF-YAML-012"],
+  "description": "Parse `input.yaml` with the strict subset reader. The value tree has only scalars (text), sequences, mappings and null; typing happens in the consumer. `message` on a rejection is informative.",
+  "input": {
+    "yaml": "a: !!str 1\n"
+  },
+  "expected": {
+    "result": "accept",
+    "value": {
+      "mapping": [
+        [
+          "a",
+          {
+            "scalar": "!!str 1"
+          }
+        ]
+      ]
+    }
+  },
+  "files": {
+    "input.yaml": {
+      "bytes": 11,
+      "sha256": "5760f0b3f574d73fdaefdc34f2faf31071029c35d517ed69d5bed02378b3af3a"
+    }
+  }
+}

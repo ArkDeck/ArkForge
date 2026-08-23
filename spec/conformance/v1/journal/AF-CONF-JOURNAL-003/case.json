@@ -1,0 +1,29 @@
+{
+  "id": "AF-CONF-JOURNAL-003",
+  "suite": "journal",
+  "title": "on-disk framing: magic, then 4-byte big-endian length + record",
+  "kind": "encode",
+  "requirements": ["AF-JRN-010", "AF-JRN-011"],
+  "description": "The file begins with the 8-byte magic `ARKFJRN1`. Each frame is a u32 big-endian length followed by exactly that many bytes of the canonical record. Length and body are written in one call.",
+  "input": {
+    "records": "AF-CONF-JOURNAL-001"
+  },
+  "expected": {
+    "magicAscii": "ARKFJRN1",
+    "fileLength": 1238,
+    "maxFrameBytes": 1048576,
+    "recordDigests": [
+      "556e07ebd56fd44e75699e6c4086e8f6b410c6a533811579043702895c6751c2",
+      "d24f3f6283880246f52a89c46fb67e7051c5a6b75f8b9fd74e22f85768110be1",
+      "05e75920e131def7b51bb35a4316078bf14df7e05ef57292f0a1ec9039e24488",
+      "8de2391352ed3c780c8a5a7a17034a3a9327732d6d577a44a159133445c48084",
+      "bedae7109c9d357ae089763cc0adabfecd861a4f0b051a5e2bd83464260c908a"
+    ]
+  },
+  "files": {
+    "journal.bin": {
+      "bytes": 1238,
+      "sha256": "ce2391fe68831a6a95c4caf286d5b4399dbfa71c43a89eb326be4f9aa943d0a3"
+    }
+  }
+}

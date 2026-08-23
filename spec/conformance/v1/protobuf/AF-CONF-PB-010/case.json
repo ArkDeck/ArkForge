@@ -1,0 +1,21 @@
+{
+  "id": "AF-CONF-PB-010",
+  "suite": "protobuf",
+  "title": "SubmitStepPermitRequest carrying a refusal",
+  "kind": "encode",
+  "requirements": ["AF-IPC-010", "AF-IPC-011"],
+  "description": "Encoding of `arkforge.ipc.v1.SubmitStepPermitRequest` per proto/arkforge.proto. Proto3 defaults (0, false, empty) are omitted; fields are written in field number order; repeated message fields are one tag per element.",
+  "input": {
+    "message": "SubmitStepPermitRequest"
+  },
+  "expected": {
+    "hex": "0a054a4f422d31120541444d2d31321662696e64696e67207265766973696f6e206d6f766564",
+    "roundTrip": true
+  },
+  "files": {
+    "message.pb": {
+      "bytes": 38,
+      "sha256": "265f5418b8065a6fe722f0df11948df9e52b72bda7e8a606a84bfc83a3907529"
+    }
+  }
+}

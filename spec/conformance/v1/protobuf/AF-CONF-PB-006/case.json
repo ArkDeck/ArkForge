@@ -1,0 +1,21 @@
+{
+  "id": "AF-CONF-PB-006",
+  "suite": "protobuf",
+  "title": "Response on a stream",
+  "kind": "encode",
+  "requirements": ["AF-IPC-010", "AF-IPC-011"],
+  "description": "Encoding of `arkforge.ipc.v1.Response` per proto/arkforge.proto. Proto3 defaults (0, false, empty) are omitted; fields are written in field number order; repeated message fields are one tag per element.",
+  "input": {
+    "message": "Response"
+  },
+  "expected": {
+    "hex": "0a055245512d31100718012202dead28073001",
+    "roundTrip": true
+  },
+  "files": {
+    "message.pb": {
+      "bytes": 19,
+      "sha256": "bf92e1f41cd1e1d7b4e4be50e077ba15567e660b0d36cb208bfefd4bc32bcff3"
+    }
+  }
+}

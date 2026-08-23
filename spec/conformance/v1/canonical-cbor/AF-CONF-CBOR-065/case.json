@@ -1,0 +1,16 @@
+{
+  "id": "AF-CONF-CBOR-065",
+  "suite": "canonical-cbor",
+  "title": "trailing bytes after a complete value",
+  "kind": "decode",
+  "requirements": ["AF-DIG-007"],
+  "description": "A canonical decoder MUST reject these bytes. `errorClass` is the class the reference implementation reports; a port MUST reject and SHOULD report the same class.",
+  "input": {
+    "hex": "0102"
+  },
+  "expected": {
+    "result": "reject",
+    "errorClass": "CBOR_TRAILING_BYTES"
+  },
+  "files": {}
+}

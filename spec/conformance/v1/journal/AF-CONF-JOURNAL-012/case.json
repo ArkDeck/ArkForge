@@ -1,0 +1,22 @@
+{
+  "id": "AF-CONF-JOURNAL-012",
+  "suite": "journal",
+  "title": "a different magic is not a journal this build may append to",
+  "kind": "replay",
+  "requirements": ["AF-JRN-010"],
+  "description": "Open `journal.bin`. A journal that no longer proves its own history is refused; recovery must not reason from it.",
+  "input": {
+    "basedOn": "AF-CONF-JOURNAL-003",
+    "mutation": "magic := ARKFJRN2"
+  },
+  "expected": {
+    "result": "reject",
+    "code": "JOURNAL_NOT_A_JOURNAL"
+  },
+  "files": {
+    "journal.bin": {
+      "bytes": 1238,
+      "sha256": "523444ff42a066194f1f855469af38d6a8db27c79f9ec348f0a12d998bb60f60"
+    }
+  }
+}

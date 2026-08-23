@@ -1,0 +1,21 @@
+{
+  "id": "AF-CONF-SHA256-002",
+  "suite": "sha256",
+  "title": "FIPS 180-4 'abc'",
+  "kind": "digest",
+  "requirements": ["AF-DIG-001"],
+  "description": "SHA-256 of the input bytes, lowercase hex.",
+  "input": {
+    "ascii": "abc",
+    "length": 3
+  },
+  "expected": {
+    "sha256": "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad"
+  },
+  "files": {
+    "input.bin": {
+      "bytes": 3,
+      "sha256": "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad"
+    }
+  }
+}

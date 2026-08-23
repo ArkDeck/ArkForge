@@ -1,0 +1,30 @@
+{
+  "id": "AF-CONF-YAML-009",
+  "suite": "strict-yaml",
+  "title": "comment after a value",
+  "kind": "decode",
+  "requirements": ["AF-YAML-004"],
+  "description": "Parse `input.yaml` with the strict subset reader. The value tree has only scalars (text), sequences, mappings and null; typing happens in the consumer. `message` on a rejection is informative.",
+  "input": {
+    "yaml": "a: x # comment\n"
+  },
+  "expected": {
+    "result": "accept",
+    "value": {
+      "mapping": [
+        [
+          "a",
+          {
+            "scalar": "x"
+          }
+        ]
+      ]
+    }
+  },
+  "files": {
+    "input.yaml": {
+      "bytes": 15,
+      "sha256": "fdd8011190c1a4a5f482f4061688444f27c792f1ede6571edc5d9b040b368c8a"
+    }
+  }
+}

@@ -1,0 +1,16 @@
+{
+  "id": "AF-CONF-CBOR-047",
+  "suite": "canonical-cbor",
+  "title": "non-shortest head: 0x1a 0000ffff for 65535",
+  "kind": "decode",
+  "requirements": ["AF-DIG-007"],
+  "description": "A canonical decoder MUST reject these bytes. `errorClass` is the class the reference implementation reports; a port MUST reject and SHOULD report the same class.",
+  "input": {
+    "hex": "1a0000ffff"
+  },
+  "expected": {
+    "result": "reject",
+    "errorClass": "CBOR_NON_CANONICAL_HEAD"
+  },
+  "files": {}
+}

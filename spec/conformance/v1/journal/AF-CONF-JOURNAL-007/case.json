@@ -1,0 +1,25 @@
+{
+  "id": "AF-CONF-JOURNAL-007",
+  "suite": "journal",
+  "title": "a re-linked, re-digested record still breaks the chain",
+  "kind": "replay",
+  "requirements": ["AF-JRN-015"],
+  "description": "Open `journal.bin`. A journal that no longer proves its own history is refused; recovery must not reason from it.",
+  "input": {
+    "basedOn": "AF-CONF-JOURNAL-003",
+    "mutation": "record 3 previousDigest := record 1 digest, digest recomputed"
+  },
+  "expected": {
+    "result": "reject",
+    "code": "JOURNAL_CHAIN_BROKEN",
+    "detail": {
+      "atSequence": 3
+    }
+  },
+  "files": {
+    "journal.bin": {
+      "bytes": 1238,
+      "sha256": "d834e452a1ec3f73c432849623e74e7a6a77a5338550d15ba24376341755204c"
+    }
+  }
+}

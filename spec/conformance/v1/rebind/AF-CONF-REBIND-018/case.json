@@ -1,0 +1,64 @@
+{
+  "id": "AF-CONF-REBIND-018",
+  "suite": "rebind",
+  "title": "a malformed observation exactly at the window edge is still tolerated; with no stable follow-up the window is exhausted",
+  "kind": "derive",
+  "requirements": ["AF-TRN-013"],
+  "description": "evaluate_rebind(expectation, previous, observations) over the observations in the order they were made. The tolerance window is measured from the first observation's timestamp.",
+  "input": {
+    "expectation": {
+      "fromMode": "hdc-normal",
+      "toMode": "rockusb-loader",
+      "toModeAliases": [],
+      "serialPolicy": "may-change",
+      "topologyPolicy": "may-change",
+      "identityStrengthFloor": "serialAndTopology",
+      "toleranceWindowMs": 30000,
+      "tolerateTransientMalformed": true
+    },
+    "previous": {
+      "observationId": "OBS-PREV",
+      "observedAtEpochMs": 1000,
+      "mode": "hdc-normal",
+      "topologyDigest": "sha256(\"port-A\")",
+      "descriptorDigest": "sha256(\"desc-normal\")",
+      "serialEvidence": {
+        "kind": "descriptor",
+        "digest": "sha256(\"SERIAL-1\")"
+      },
+      "identityStrength": "serialAndTopology",
+      "malformedDescriptor": false
+    },
+    "observations": [
+      {
+        "observationId": "OBS-1",
+        "observedAtEpochMs": 2000,
+        "mode": "rockusb-loader",
+        "topologyDigest": "sha256(\"port-B\")",
+        "descriptorDigest": "sha256(\"desc-loader\")",
+        "serialEvidence": {
+          "kind": "absent"
+        },
+        "identityStrength": "classOnly",
+        "malformedDescriptor": true
+      },
+      {
+        "observationId": "OBS-2",
+        "observedAtEpochMs": 32000,
+        "mode": "rockusb-loader",
+        "topologyDigest": "sha256(\"port-B\")",
+        "descriptorDigest": "sha256(\"desc-loader\")",
+        "serialEvidence": {
+          "kind": "absent"
+        },
+        "identityStrength": "classOnly",
+        "malformedDescriptor": true
+      }
+    ]
+  },
+  "expected": {
+    "outcome": "toleranceWindowExhausted",
+    "transientObservations": 2
+  },
+  "files": {}
+}

@@ -1,0 +1,272 @@
+{
+  "id": "AF-CONF-PLAN-006",
+  "suite": "plan",
+  "title": "public steps: bodies and digests, in execution order",
+  "kind": "digest",
+  "requirements": ["AF-PLAN-010", "AF-PLAN-011"],
+  "description": "publicStepDigest = SHA-256(domain || deterministic_cbor(step)). Each step binds the digest of the private action that implements it.",
+  "input": {
+    "planId": "PLAN-CONF-001"
+  },
+  "expected": {
+    "domain": "arkforge/v1/public-step\\0",
+    "stepCount": 23,
+    "steps": [
+      {
+        "stepId": "STEP-001",
+        "kind": "ensureMode",
+        "publicStepDigest": "55c3d8630a5fdd3041aabb675d011186fea343bce67afde3e85f3a48189d8478",
+        "privateActionDigest": "d2f335be72286d19ec7d96401b334cad801d7be80a2c23031195133e5ac64080",
+        "diag": "{\"kind\": \"ensureMode\", \"effect\": \"mutating\", \"stepId\": \"STEP-001\", \"binding\": \"exactBoundTargetWithModeLineage\", \"cancellation\": \"cancellableAtBoundary\", \"contentDigest\": null, \"semanticTarget\": {\"device\": null}, \"expectedModeAfter\": \"rockusb-loader\", \"expectedModeBefore\": \"hdc-normal\", \"privateActionDigest\": h'd2f335be72286d19ec7d96401b334cad801d7be80a2c23031195133e5ac64080'}"
+      },
+      {
+        "stepId": "STEP-002",
+        "kind": "probeDevice",
+        "publicStepDigest": "80f9d95c4bbb8cb27b063fe6327fc3342830bc4bb70c8836ce3b1457a07487fb",
+        "privateActionDigest": "6c836bad99969a7dff01522b98cc5b63da5700e523f144b30b55119dbc3eb8f4",
+        "diag": "{\"kind\": \"probeDevice\", \"effect\": \"readOnly\", \"stepId\": \"STEP-002\", \"binding\": \"exactBoundTargetWithModeLineage\", \"cancellation\": \"cancellableImmediately\", \"contentDigest\": null, \"semanticTarget\": {\"device\": null}, \"expectedModeAfter\": \"rockusb-loader\", \"expectedModeBefore\": \"rockusb-loader\", \"privateActionDigest\": h'6c836bad99969a7dff01522b98cc5b63da5700e523f144b30b55119dbc3eb8f4'}"
+      },
+      {
+        "stepId": "STEP-003",
+        "kind": "validateLayout",
+        "publicStepDigest": "02d9384b23724ebd34ca5477e2c6529528635ed821a0fb72d949efda3c49deff",
+        "privateActionDigest": "d5e52eca1946714e9c9fbdcef39898ed3cea7cb3116b9fdc0bc28f5a5bad0c56",
+        "diag": "{\"kind\": \"validateLayout\", \"effect\": \"readOnly\", \"stepId\": \"STEP-003\", \"binding\": \"exactBoundTarget\", \"cancellation\": \"cancellableImmediately\", \"contentDigest\": null, \"semanticTarget\": {\"device\": null}, \"expectedModeAfter\": \"rockusb-loader\", \"expectedModeBefore\": \"rockusb-loader\", \"privateActionDigest\": h'd5e52eca1946714e9c9fbdcef39898ed3cea7cb3116b9fdc0bc28f5a5bad0c56'}"
+      },
+      {
+        "stepId": "STEP-004",
+        "kind": "writeTarget",
+        "publicStepDigest": "5464cab5edd61ffd7b0c06e9146ae3452dc83bd19900059cb391f640af608db2",
+        "privateActionDigest": "69b5e174dd04aa902e990039d6b6577d75f53844c505c6796d07455d9d1ce153",
+        "diag": "{\"kind\": \"writeTarget\", \"effect\": \"destructive\", \"stepId\": \"STEP-004\", \"binding\": \"exactBoundTargetWithModeLineage\", \"cancellation\": \"nonInterruptible\", \"contentDigest\": h'575cba872c422e3d477e0835e909701acb4beb0b1c1e81e077b487c4b9309ad8', \"semanticTarget\": {\"partition\": \"uboot\"}, \"expectedModeAfter\": \"rockusb-loader\", \"expectedModeBefore\": \"rockusb-loader\", \"privateActionDigest\": h'69b5e174dd04aa902e990039d6b6577d75f53844c505c6796d07455d9d1ce153'}"
+      },
+      {
+        "stepId": "STEP-005",
+        "kind": "writeTarget",
+        "publicStepDigest": "1033d4f3c2974a59bdb000fca58c6653368c6a3f9dbad777c65c967696c75818",
+        "privateActionDigest": "b8440f6b59e0da891fa21bcb908f3f5b02777a964ef5a0cb25e45c5dccc3b5a2",
+        "diag": "{\"kind\": \"writeTarget\", \"effect\": \"destructive\", \"stepId\": \"STEP-005\", \"binding\": \"exactBoundTargetWithModeLineage\", \"cancellation\": \"nonInterruptible\", \"contentDigest\": h'3b094bdb46dc7c0ae62dccdea727679437745ee934bf644da5ba707f3817f21b', \"semanticTarget\": {\"partition\": \"resource\"}, \"expectedModeAfter\": \"rockusb-loader\", \"expectedModeBefore\": \"rockusb-loader\", \"privateActionDigest\": h'b8440f6b59e0da891fa21bcb908f3f5b02777a964ef5a0cb25e45c5dccc3b5a2'}"
+      },
+      {
+        "stepId": "STEP-006",
+        "kind": "writeTarget",
+        "publicStepDigest": "f6da2d280a3716ce63b5cd6a5c8076a8436613b318ffd8e8d06aceed6858d9c9",
+        "privateActionDigest": "d2b8cfe03a07cbff814e19672eb2121170a52f24e8b3e8240e2a301b1788d2db",
+        "diag": "{\"kind\": \"writeTarget\", \"effect\": \"destructive\", \"stepId\": \"STEP-006\", \"binding\": \"exactBoundTargetWithModeLineage\", \"cancellation\": \"nonInterruptible\", \"contentDigest\": h'f187737e611a46ce7a3a1059766d35085e8ba65bdb07fd21425c4977d2f172a8', \"semanticTarget\": {\"partition\": \"boot_linux\"}, \"expectedModeAfter\": \"rockusb-loader\", \"expectedModeBefore\": \"rockusb-loader\", \"privateActionDigest\": h'd2b8cfe03a07cbff814e19672eb2121170a52f24e8b3e8240e2a301b1788d2db'}"
+      },
+      {
+        "stepId": "STEP-007",
+        "kind": "writeTarget",
+        "publicStepDigest": "c774892db8b9a39f10f6e524a3559d9a00fb83f73e38e61b007988f78ed36b24",
+        "privateActionDigest": "2b1689ed5bfc6497aa94059c8feb6ebbb3db00151e844c95eed247c36f18a609",
+        "diag": "{\"kind\": \"writeTarget\", \"effect\": \"destructive\", \"stepId\": \"STEP-007\", \"binding\": \"exactBoundTargetWithModeLineage\", \"cancellation\": \"nonInterruptible\", \"contentDigest\": h'ce9bc9f0fbded8931f65093447c339b5689d1841eddf01f55cde95ea8c1f8958', \"semanticTarget\": {\"partition\": \"ramdisk\"}, \"expectedModeAfter\": \"rockusb-loader\", \"expectedModeBefore\": \"rockusb-loader\", \"privateActionDigest\": h'2b1689ed5bfc6497aa94059c8feb6ebbb3db00151e844c95eed247c36f18a609'}"
+      },
+      {
+        "stepId": "STEP-008",
+        "kind": "writeTarget",
+        "publicStepDigest": "fb2e0a11cb1ecf00f153dbe46f7751b2794951affa337b17ba3e0801ac22b2b7",
+        "privateActionDigest": "cf9dc9a9fba4afed70aebec908fe72ef6f33b673976ce213e0545b2efc6b8b2a",
+        "diag": "{\"kind\": \"writeTarget\", \"effect\": \"destructive\", \"stepId\": \"STEP-008\", \"binding\": \"exactBoundTargetWithModeLineage\", \"cancellation\": \"nonInterruptible\", \"contentDigest\": h'0c9a06efc5825e8bd2e68d8a223dc6fa751b0732d53e508e91819692897c1711', \"semanticTarget\": {\"partition\": \"system\"}, \"expectedModeAfter\": \"rockusb-loader\", \"expectedModeBefore\": \"rockusb-loader\", \"privateActionDigest\": h'cf9dc9a9fba4afed70aebec908fe72ef6f33b673976ce213e0545b2efc6b8b2a'}"
+      },
+      {
+        "stepId": "STEP-009",
+        "kind": "writeTarget",
+        "publicStepDigest": "8f23b48cb90964fa009ba53e8c94391995c1978deaf931a244d3288083806a57",
+        "privateActionDigest": "4ff579ab29eb045b0e2f482dfe147f74f9ca4e69655a7f172030af0cb0e50acf",
+        "diag": "{\"kind\": \"writeTarget\", \"effect\": \"destructive\", \"stepId\": \"STEP-009\", \"binding\": \"exactBoundTargetWithModeLineage\", \"cancellation\": \"nonInterruptible\", \"contentDigest\": h'46b890d21325786c61ab9014e0abf6d4bf73f207e5c568ab5e5ce879d689384b', \"semanticTarget\": {\"partition\": \"vendor\"}, \"expectedModeAfter\": \"rockusb-loader\", \"expectedModeBefore\": \"rockusb-loader\", \"privateActionDigest\": h'4ff579ab29eb045b0e2f482dfe147f74f9ca4e69655a7f172030af0cb0e50acf'}"
+      },
+      {
+        "stepId": "STEP-010",
+        "kind": "writeTarget",
+        "publicStepDigest": "bcbfefdec30607efea7421da68614a1ce71a3d23b5c296ea18c3f3c884bbd56f",
+        "privateActionDigest": "fb9382fddac52859309552a3271bd396e631c753399139f9a8f84d3a4eff30d2",
+        "diag": "{\"kind\": \"writeTarget\", \"effect\": \"destructive\", \"stepId\": \"STEP-010\", \"binding\": \"exactBoundTargetWithModeLineage\", \"cancellation\": \"nonInterruptible\", \"contentDigest\": h'02691d83d26a58eb3a594a816d676b8bbb707ba108f065f025a5adbd1663d520', \"semanticTarget\": {\"partition\": \"updater\"}, \"expectedModeAfter\": \"rockusb-loader\", \"expectedModeBefore\": \"rockusb-loader\", \"privateActionDigest\": h'fb9382fddac52859309552a3271bd396e631c753399139f9a8f84d3a4eff30d2'}"
+      },
+      {
+        "stepId": "STEP-011",
+        "kind": "writeTarget",
+        "publicStepDigest": "4b3595e853c4ab55bde1a36b7abaf2cfd282761f9d86557ab9318c5b99a0e1d1",
+        "privateActionDigest": "733ff336c0d3a2bdfa89d2cea209489dfe27a3bb4c0c4ff7a0db59093b9a4b26",
+        "diag": "{\"kind\": \"writeTarget\", \"effect\": \"destructive\", \"stepId\": \"STEP-011\", \"binding\": \"exactBoundTargetWithModeLineage\", \"cancellation\": \"nonInterruptible\", \"contentDigest\": h'a1a392b7f280118b79838a28ed594ec22b3d0caeb1bfd00911c3358cc77d27bb', \"semanticTarget\": {\"partition\": \"chip_ckm\"}, \"expectedModeAfter\": \"rockusb-loader\", \"expectedModeBefore\": \"rockusb-loader\", \"privateActionDigest\": h'733ff336c0d3a2bdfa89d2cea209489dfe27a3bb4c0c4ff7a0db59093b9a4b26'}"
+      },
+      {
+        "stepId": "STEP-012",
+        "kind": "writeTarget",
+        "publicStepDigest": "9a26108adb0dd0006cce7656f4d2229c3e7ffbecf4fce432dbb37594a0acefdc",
+        "privateActionDigest": "f3e2db80516607607e10337933e3f6fb241ea9acc5f7041b0a83c0a6462304c2",
+        "diag": "{\"kind\": \"writeTarget\", \"effect\": \"destructive\", \"stepId\": \"STEP-012\", \"binding\": \"exactBoundTargetWithModeLineage\", \"cancellation\": \"nonInterruptible\", \"contentDigest\": h'b06596cb5b43bc0a38bca5a63d90d991aa4682e8d29119ea984062240f67d733', \"semanticTarget\": {\"partition\": \"userdata\"}, \"expectedModeAfter\": \"rockusb-loader\", \"expectedModeBefore\": \"rockusb-loader\", \"privateActionDigest\": h'f3e2db80516607607e10337933e3f6fb241ea9acc5f7041b0a83c0a6462304c2'}"
+      },
+      {
+        "stepId": "STEP-013",
+        "kind": "verifyTarget",
+        "publicStepDigest": "d2295548879b88a2ab42b3d68e3d56b01a899ff9acaa9400d2592b7360dae7e3",
+        "privateActionDigest": "c1f45a8a2782414678402aecf1d1690896639602990bbedebedcfbda2457eda4",
+        "diag": "{\"kind\": \"verifyTarget\", \"effect\": \"readOnly\", \"stepId\": \"STEP-013\", \"binding\": \"exactBoundTargetWithModeLineage\", \"cancellation\": \"cancellableImmediately\", \"contentDigest\": h'575cba872c422e3d477e0835e909701acb4beb0b1c1e81e077b487c4b9309ad8', \"semanticTarget\": {\"partition\": \"uboot\"}, \"expectedModeAfter\": \"rockusb-loader\", \"expectedModeBefore\": \"rockusb-loader\", \"privateActionDigest\": h'c1f45a8a2782414678402aecf1d1690896639602990bbedebedcfbda2457eda4'}"
+      },
+      {
+        "stepId": "STEP-014",
+        "kind": "verifyTarget",
+        "publicStepDigest": "ae80f2c4c50588288f2a873bee7c1eda18c5a7d8ee266c086abf4e9357bf0b2f",
+        "privateActionDigest": "cbc6d2575ef41eb2cabd05387047e3e6713d8dfd1dae1b0df66a7313623d4e42",
+        "diag": "{\"kind\": \"verifyTarget\", \"effect\": \"readOnly\", \"stepId\": \"STEP-014\", \"binding\": \"exactBoundTargetWithModeLineage\", \"cancellation\": \"cancellableImmediately\", \"contentDigest\": h'3b094bdb46dc7c0ae62dccdea727679437745ee934bf644da5ba707f3817f21b', \"semanticTarget\": {\"partition\": \"resource\"}, \"expectedModeAfter\": \"rockusb-loader\", \"expectedModeBefore\": \"rockusb-loader\", \"privateActionDigest\": h'cbc6d2575ef41eb2cabd05387047e3e6713d8dfd1dae1b0df66a7313623d4e42'}"
+      },
+      {
+        "stepId": "STEP-015",
+        "kind": "verifyTarget",
+        "publicStepDigest": "3662b815061ce87108b59d1fc7b7fb2ec8088966f9014d6094bb6087d5bf549c",
+        "privateActionDigest": "ccf3ee0572342ae177225adf2246564210e143d126169bcc046b8f4c558f4065",
+        "diag": "{\"kind\": \"verifyTarget\", \"effect\": \"readOnly\", \"stepId\": \"STEP-015\", \"binding\": \"exactBoundTargetWithModeLineage\", \"cancellation\": \"cancellableImmediately\", \"contentDigest\": h'f187737e611a46ce7a3a1059766d35085e8ba65bdb07fd21425c4977d2f172a8', \"semanticTarget\": {\"partition\": \"boot_linux\"}, \"expectedModeAfter\": \"rockusb-loader\", \"expectedModeBefore\": \"rockusb-loader\", \"privateActionDigest\": h'ccf3ee0572342ae177225adf2246564210e143d126169bcc046b8f4c558f4065'}"
+      },
+      {
+        "stepId": "STEP-016",
+        "kind": "verifyTarget",
+        "publicStepDigest": "e66dc1700d78fd49c6a1d16f7e24b6e82890d8db2919ec6df7223349629c1898",
+        "privateActionDigest": "75e7c2684e0900d74b6145db34877965b59637e188c2bb0f25ca7f5a6918c7c0",
+        "diag": "{\"kind\": \"verifyTarget\", \"effect\": \"readOnly\", \"stepId\": \"STEP-016\", \"binding\": \"exactBoundTargetWithModeLineage\", \"cancellation\": \"cancellableImmediately\", \"contentDigest\": h'ce9bc9f0fbded8931f65093447c339b5689d1841eddf01f55cde95ea8c1f8958', \"semanticTarget\": {\"partition\": \"ramdisk\"}, \"expectedModeAfter\": \"rockusb-loader\", \"expectedModeBefore\": \"rockusb-loader\", \"privateActionDigest\": h'75e7c2684e0900d74b6145db34877965b59637e188c2bb0f25ca7f5a6918c7c0'}"
+      },
+      {
+        "stepId": "STEP-017",
+        "kind": "verifyTarget",
+        "publicStepDigest": "f1ba835025ced91954e23a43995e0ed71348a408e551c560c5099f082a87b923",
+        "privateActionDigest": "c1c187f9b3e359c13191e275fbf92f18c1c0e0ea0e59edbc07e539ff4fb6e7ba",
+        "diag": "{\"kind\": \"verifyTarget\", \"effect\": \"readOnly\", \"stepId\": \"STEP-017\", \"binding\": \"exactBoundTargetWithModeLineage\", \"cancellation\": \"cancellableImmediately\", \"contentDigest\": h'0c9a06efc5825e8bd2e68d8a223dc6fa751b0732d53e508e91819692897c1711', \"semanticTarget\": {\"partition\": \"system\"}, \"expectedModeAfter\": \"rockusb-loader\", \"expectedModeBefore\": \"rockusb-loader\", \"privateActionDigest\": h'c1c187f9b3e359c13191e275fbf92f18c1c0e0ea0e59edbc07e539ff4fb6e7ba'}"
+      },
+      {
+        "stepId": "STEP-018",
+        "kind": "verifyTarget",
+        "publicStepDigest": "0f900989c9df8a5cc87657f39fe0346c93002251fd79afa2c5bb5deb08949ba1",
+        "privateActionDigest": "3f82f9087bd22ee976f2887b98c65733c2054e5b64b04cb68b5544a02e7d167b",
+        "diag": "{\"kind\": \"verifyTarget\", \"effect\": \"readOnly\", \"stepId\": \"STEP-018\", \"binding\": \"exactBoundTargetWithModeLineage\", \"cancellation\": \"cancellableImmediately\", \"contentDigest\": h'46b890d21325786c61ab9014e0abf6d4bf73f207e5c568ab5e5ce879d689384b', \"semanticTarget\": {\"partition\": \"vendor\"}, \"expectedModeAfter\": \"rockusb-loader\", \"expectedModeBefore\": \"rockusb-loader\", \"privateActionDigest\": h'3f82f9087bd22ee976f2887b98c65733c2054e5b64b04cb68b5544a02e7d167b'}"
+      },
+      {
+        "stepId": "STEP-019",
+        "kind": "verifyTarget",
+        "publicStepDigest": "de2f910d5e1d321b477825b700b31315b80ae85aaef71d16262a329d4d008f92",
+        "privateActionDigest": "e000205e60756b837f413f21ffb48891c25fbef34175a9863ed3548d1fddb513",
+        "diag": "{\"kind\": \"verifyTarget\", \"effect\": \"readOnly\", \"stepId\": \"STEP-019\", \"binding\": \"exactBoundTargetWithModeLineage\", \"cancellation\": \"cancellableImmediately\", \"contentDigest\": h'02691d83d26a58eb3a594a816d676b8bbb707ba108f065f025a5adbd1663d520', \"semanticTarget\": {\"partition\": \"updater\"}, \"expectedModeAfter\": \"rockusb-loader\", \"expectedModeBefore\": \"rockusb-loader\", \"privateActionDigest\": h'e000205e60756b837f413f21ffb48891c25fbef34175a9863ed3548d1fddb513'}"
+      },
+      {
+        "stepId": "STEP-020",
+        "kind": "verifyTarget",
+        "publicStepDigest": "b10af5b73cefd36bc735767aa6dbad3d9ada1e898360137f4bd2a8352a5e3188",
+        "privateActionDigest": "a31cc0cd3b25c03ee1a0b9a13b3243e77a88a152ec5febaf2240700b3fcb0973",
+        "diag": "{\"kind\": \"verifyTarget\", \"effect\": \"readOnly\", \"stepId\": \"STEP-020\", \"binding\": \"exactBoundTargetWithModeLineage\", \"cancellation\": \"cancellableImmediately\", \"contentDigest\": h'a1a392b7f280118b79838a28ed594ec22b3d0caeb1bfd00911c3358cc77d27bb', \"semanticTarget\": {\"partition\": \"chip_ckm\"}, \"expectedModeAfter\": \"rockusb-loader\", \"expectedModeBefore\": \"rockusb-loader\", \"privateActionDigest\": h'a31cc0cd3b25c03ee1a0b9a13b3243e77a88a152ec5febaf2240700b3fcb0973'}"
+      },
+      {
+        "stepId": "STEP-021",
+        "kind": "verifyTarget",
+        "publicStepDigest": "00cae63540da94af92e772254b89b595096ad04c611f8dd00fa7ebf5a266c208",
+        "privateActionDigest": "5a1723eabeed7dc4a93e037de708e70885125f5cbf16be7095ebc0f57a7a074d",
+        "diag": "{\"kind\": \"verifyTarget\", \"effect\": \"readOnly\", \"stepId\": \"STEP-021\", \"binding\": \"exactBoundTargetWithModeLineage\", \"cancellation\": \"cancellableImmediately\", \"contentDigest\": h'b06596cb5b43bc0a38bca5a63d90d991aa4682e8d29119ea984062240f67d733', \"semanticTarget\": {\"partition\": \"userdata\"}, \"expectedModeAfter\": \"rockusb-loader\", \"expectedModeBefore\": \"rockusb-loader\", \"privateActionDigest\": h'5a1723eabeed7dc4a93e037de708e70885125f5cbf16be7095ebc0f57a7a074d'}"
+      },
+      {
+        "stepId": "STEP-022",
+        "kind": "reboot",
+        "publicStepDigest": "92dea05d0e5ef1901935af741125fdf35ceb838c3da3b3489090f734b3bbc08b",
+        "privateActionDigest": "99a450dedcd1413ad1b16251082109d6501081cb3b0a9c85d2d4ba744fce6e8d",
+        "diag": "{\"kind\": \"reboot\", \"effect\": \"mutating\", \"stepId\": \"STEP-022\", \"binding\": \"exactBoundTargetWithModeLineage\", \"cancellation\": \"cancellableAtBoundary\", \"contentDigest\": null, \"semanticTarget\": {\"device\": null}, \"expectedModeAfter\": \"hdc-normal\", \"expectedModeBefore\": \"rockusb-loader\", \"privateActionDigest\": h'99a450dedcd1413ad1b16251082109d6501081cb3b0a9c85d2d4ba744fce6e8d'}"
+      },
+      {
+        "stepId": "STEP-023",
+        "kind": "postflightProbe",
+        "publicStepDigest": "b58b1df2d942163044c9f2df7866ea4d3fd8a555d04f696aa846bac73950dcb0",
+        "privateActionDigest": "755da25d7a899f0f7b81b9fde5747d60cbcca4b0a8fd93213712010bd970c96f",
+        "diag": "{\"kind\": \"postflightProbe\", \"effect\": \"readOnly\", \"stepId\": \"STEP-023\", \"binding\": \"exactBoundTargetWithModeLineage\", \"cancellation\": \"cancellableImmediately\", \"contentDigest\": null, \"semanticTarget\": {\"device\": null}, \"expectedModeAfter\": \"hdc-normal\", \"expectedModeBefore\": \"hdc-normal\", \"privateActionDigest\": h'755da25d7a899f0f7b81b9fde5747d60cbcca4b0a8fd93213712010bd970c96f'}"
+      }
+    ]
+  },
+  "files": {
+    "step-01.cbor": {
+      "bytes": 281,
+      "sha256": "1d2098d82930c768ad16b395f5563f8ea99d537311f7c786019621b6ea4b8298"
+    },
+    "step-02.cbor": {
+      "bytes": 287,
+      "sha256": "75e5ff42095935919d0da5f74ae9be3a5049b2184a46296d313de273439b995e"
+    },
+    "step-03.cbor": {
+      "bytes": 274,
+      "sha256": "531338e766c376800493fc3e68a7eff488c9bd07260d67ef091294cd2e3b5839"
+    },
+    "step-04.cbor": {
+      "bytes": 325,
+      "sha256": "f61a9d424895d29284e8cb91b607aaa896220011348c18625609ce37437a73ae"
+    },
+    "step-05.cbor": {
+      "bytes": 328,
+      "sha256": "afba37269b6abbdb61fee1ea262568496c86c97e592cb14989da86f7b471ad45"
+    },
+    "step-06.cbor": {
+      "bytes": 330,
+      "sha256": "2e033ebbdda80320e46fe6679b4eb8d302d247b1e0378a9d4ca25dfd933d7f36"
+    },
+    "step-07.cbor": {
+      "bytes": 327,
+      "sha256": "e48ba9c602422658351309b5be99e8baa2f12d223e1ba010bdeb3217ccac25cf"
+    },
+    "step-08.cbor": {
+      "bytes": 326,
+      "sha256": "333a234881c002fb097bd765bcc980a728799fec68fb93b75d54e7b52436a387"
+    },
+    "step-09.cbor": {
+      "bytes": 326,
+      "sha256": "054b4107bafdf00aff8ed47ad1d5291c04a603808327bfcf29e8d86d209f220a"
+    },
+    "step-10.cbor": {
+      "bytes": 327,
+      "sha256": "529e52ed036b467cde42e106e94789d1bfc3dbf275f1430017eb8de13e34b389"
+    },
+    "step-11.cbor": {
+      "bytes": 328,
+      "sha256": "f2e8d419b28e076b4c1fce630619ffd9c4a68544a6dcf48bebc412de84e57faa"
+    },
+    "step-12.cbor": {
+      "bytes": 328,
+      "sha256": "440cff9bee046cbad48f2a1dcc1adf8f04b57a399e080372fcddbb6033e90a64"
+    },
+    "step-13.cbor": {
+      "bytes": 329,
+      "sha256": "2c8bee62324edb44ba2b04310874ba5667e0570e062523bcb246082f7e7d6534"
+    },
+    "step-14.cbor": {
+      "bytes": 332,
+      "sha256": "abf7b774810dfb630104e18ed9b52bc51c9f19158e569c460b8d58e3b6d7e3cd"
+    },
+    "step-15.cbor": {
+      "bytes": 334,
+      "sha256": "7194cb60d8431462ecfef30215108b2a8f6e11229278b2d9ceaf6db9b66d1c89"
+    },
+    "step-16.cbor": {
+      "bytes": 331,
+      "sha256": "a671be0259eb0fab2046438acb7d7d6f6e48fad83aecc9e99d1007a1319e5a5e"
+    },
+    "step-17.cbor": {
+      "bytes": 330,
+      "sha256": "6a7f89d0cda0e2659a6cdf527f6dce381f69093cfffa217e3c4f8455c341684f"
+    },
+    "step-18.cbor": {
+      "bytes": 330,
+      "sha256": "df4411f34dc91fbfe50683c37d357a08480653723c78f47bba866043007203e3"
+    },
+    "step-19.cbor": {
+      "bytes": 331,
+      "sha256": "f87600321a6b71e539d1c131d7d30243477379ef0850b4a9d156806811c522cc"
+    },
+    "step-20.cbor": {
+      "bytes": 332,
+      "sha256": "7bae20cd2c9b1c124365bfc37e6d522f9bdc8ec404b1532303fea2fa1c816803"
+    },
+    "step-21.cbor": {
+      "bytes": 332,
+      "sha256": "dac6f64aa62aa2413cbe76e6696ec196edf765d8a7e437f873e148509f5e9556"
+    },
+    "step-22.cbor": {
+      "bytes": 277,
+      "sha256": "e53589801cae5e80f64187e4b68aec04b85d37b9328a1026b12eee9f8bd79226"
+    },
+    "step-23.cbor": {
+      "bytes": 283,
+      "sha256": "03eaad4bbed1f41c52aefdfc97ca00da18b9e66c386d2d792809ded70e14a942"
+    }
+  }
+}

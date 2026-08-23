@@ -1,0 +1,25 @@
+{
+  "id": "AF-CONF-JOURNAL-009",
+  "suite": "journal",
+  "title": "an unknown schema version fails closed",
+  "kind": "replay",
+  "requirements": ["AF-JRN-016"],
+  "description": "Open `journal.bin`. A journal that no longer proves its own history is refused; recovery must not reason from it.",
+  "input": {
+    "basedOn": "AF-CONF-JOURNAL-003",
+    "mutation": "record 1 schemaVersion := 99, digest recomputed"
+  },
+  "expected": {
+    "result": "reject",
+    "code": "JOURNAL_UNKNOWN_SCHEMA_VERSION",
+    "detail": {
+      "version": 99
+    }
+  },
+  "files": {
+    "journal.bin": {
+      "bytes": 1239,
+      "sha256": "b565893ae8a49d52d772cadf138e48bd225b28058bd98a3397b48c221744ab63"
+    }
+  }
+}

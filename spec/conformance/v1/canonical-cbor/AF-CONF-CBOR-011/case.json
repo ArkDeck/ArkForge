@@ -1,0 +1,24 @@
+{
+  "id": "AF-CONF-CBOR-011",
+  "suite": "canonical-cbor",
+  "title": "epoch milliseconds (1770000000000)",
+  "kind": "encode",
+  "requirements": ["AF-DIG-003", "AF-DIG-004", "AF-DIG-005"],
+  "description": "The value encodes to exactly `expected.hex` and decodes back to the same value. `input.diag` is RFC 8949 §8 notation; `input.value` is the typed JSON form.",
+  "input": {
+    "diag": "1770000000000",
+    "value": {
+      "uint": 1770000000000
+    }
+  },
+  "expected": {
+    "hex": "1b0000019c1c38a400",
+    "roundTrip": true
+  },
+  "files": {
+    "encoded.cbor": {
+      "bytes": 9,
+      "sha256": "b8609378796e98cfb4e0bf443c52194d0c1b6b7276bd59bcd1b9a09bf971ff6c"
+    }
+  }
+}

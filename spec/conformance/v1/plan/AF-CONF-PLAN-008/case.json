@@ -1,0 +1,24 @@
+{
+  "id": "AF-CONF-PLAN-008",
+  "suite": "plan",
+  "title": "effect set: body and digest",
+  "kind": "digest",
+  "requirements": ["AF-EFF-001", "AF-EFF-002"],
+  "description": "effectSetDigest = SHA-256(domain || deterministic_cbor(effectSet)). Persistent effects, transient effects and the four data-impact axes.",
+  "input": {
+    "planId": "PLAN-CONF-001"
+  },
+  "expected": {
+    "domain": "arkforge/v1/effect-set\\0",
+    "effectSetDigest": "ddf12a3892e120b4888a02cdc117a4086d259157fea4f36a0ba82f69039ab05b",
+    "persistentCount": 9,
+    "transientCount": 2,
+    "diag": "{\"transient\": [{\"to\": \"rockusb-loader\", \"from\": \"hdc-normal\", \"kind\": \"enterMode\"}, {\"kind\": \"reboot\", \"targetMode\": \"hdc-normal\"}], \"dataImpact\": {\"userdata\": \"overwritten\", \"calibration\": \"preserved\", \"secureStorage\": \"preserved\", \"nonVolatileConfig\": \"preserved\"}, \"persistent\": [{\"kind\": \"writePartition\", \"range\": {\"start\": 4194304, \"length\": 2048}, \"content\": h'575cba872c422e3d477e0835e909701acb4beb0b1c1e81e077b487c4b9309ad8', \"partition\": \"uboot\"}, {\"kind\": \"writePartition\", \"range\": {\"start\": 14680064, \"length\": 2048}, \"content\": h'3b094bdb46dc7c0ae62dccdea727679437745ee934bf644da5ba707f3817f21b', \"partition\": \"resource\"}, {\"kind\": \"writePartition\", \"range\": {\"start\": 20971520, \"length\": 2048}, \"content\": h'f187737e611a46ce7a3a1059766d35085e8ba65bdb07fd21425c4977d2f172a8', \"partition\": \"boot_linux\"}, {\"kind\": \"writePartition\", \"range\": {\"start\": 121634816, \"length\": 2048}, \"content\": h'ce9bc9f0fbded8931f65093447c339b5689d1841eddf01f55cde95ea8c1f8958', \"partition\": \"ramdisk\"}, {\"kind\": \"writePartition\", \"range\": {\"start\": 125829120, \"length\": 8258}, \"content\": h'0c9a06efc5825e8bd2e68d8a223dc6fa751b0732d53e508e91819692897c1711', \"partition\": \"system\"}, {\"kind\": \"writePartition\", \"range\": {\"start\": 2273312768, \"length\": 2048}, \"content\": h'46b890d21325786c61ab9014e0abf6d4bf73f207e5c568ab5e5ce879d689384b', \"partition\": \"vendor\"}, {\"kind\": \"writePartition\", \"range\": {\"start\": 3451912192, \"length\": 2048}, \"content\": h'02691d83d26a58eb3a594a816d676b8bbb707ba108f065f025a5adbd1663d520', \"partition\": \"updater\"}, {\"kind\": \"writePartition\", \"range\": {\"start\": 3552575488, \"length\": 2048}, \"content\": h'a1a392b7f280118b79838a28ed594ec22b3d0caeb1bfd00911c3358cc77d27bb', \"partition\": \"chip_ckm\"}, {\"kind\": \"writePartition\", \"range\": {\"start\": 10217324544, \"length\": 2048}, \"content\": h'b06596cb5b43bc0a38bca5a63d90d991aa4682e8d29119ea984062240f67d733', \"partition\": \"userdata\"}]}"
+  },
+  "files": {
+    "effect-set.cbor": {
+      "bytes": 1203,
+      "sha256": "b59db4123b62352aac2b6994a753e561254ca3f8dd4ebf1bfcd03e583cf1a8c7"
+    }
+  }
+}

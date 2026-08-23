@@ -1,0 +1,16 @@
+{
+  "id": "AF-CONF-CBOR-067",
+  "suite": "canonical-cbor",
+  "title": "negative below i64 min (-2^64)",
+  "kind": "decode",
+  "requirements": ["AF-DIG-007"],
+  "description": "A canonical decoder MUST reject these bytes. `errorClass` is the class the reference implementation reports; a port MUST reject and SHOULD report the same class.",
+  "input": {
+    "hex": "3bffffffffffffffff"
+  },
+  "expected": {
+    "result": "reject",
+    "errorClass": "CBOR_UNSUPPORTED_MAJOR_TYPE"
+  },
+  "files": {}
+}

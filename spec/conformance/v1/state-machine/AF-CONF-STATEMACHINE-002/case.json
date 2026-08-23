@@ -1,0 +1,15 @@
+{
+  "id": "AF-CONF-STATEMACHINE-002",
+  "suite": "state-machine",
+  "title": "no edge from outcomeUnknown reaches a dispatching state",
+  "kind": "table",
+  "requirements": ["AF-ENG-005"],
+  "description": "A named invariant over the edge set of AF-CONF-STATEMACHINE-001.",
+  "input": {},
+  "expected": {
+    "from": "outcomeUnknown",
+    "forbiddenTargets": ["preflight", "awaitingPermit", "stepIntentDurable", "dispatching"],
+    "allowedTargets": ["reconciling", "recoveryAssessable"]
+  },
+  "files": {}
+}

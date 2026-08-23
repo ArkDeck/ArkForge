@@ -1,0 +1,21 @@
+{
+  "id": "AF-CONF-YAML-029",
+  "suite": "strict-yaml",
+  "title": "nested flow collection",
+  "kind": "decode",
+  "requirements": ["AF-YAML-013"],
+  "description": "Parse `input.yaml` with the strict subset reader. The value tree has only scalars (text), sequences, mappings and null; typing happens in the consumer. `message` on a rejection is informative.",
+  "input": {
+    "yaml": "a: [x, [y]]\n"
+  },
+  "expected": {
+    "result": "reject",
+    "message": "line 1: nested flow collections are not permitted"
+  },
+  "files": {
+    "input.yaml": {
+      "bytes": 12,
+      "sha256": "11adc77a117c6daebadafe50053110b23412d2f277d5f55d7ef6a06f5310d738"
+    }
+  }
+}

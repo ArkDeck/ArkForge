@@ -1,0 +1,17 @@
+{
+  "id": "AF-CONF-SHA256-005",
+  "suite": "sha256",
+  "title": "exactly one block (64 bytes)",
+  "kind": "digest",
+  "requirements": ["AF-DIG-001"],
+  "description": "SHA-256 of the input bytes, lowercase hex.",
+  "input": {
+    "repeatByte": 97,
+    "count": 64,
+    "note": "input is generated, not stored: `count` copies of `repeatByte`"
+  },
+  "expected": {
+    "sha256": "ffe054fe7ae0cb6dc65c3af9b61d5209f439851db43d0ba5997337df154668eb"
+  },
+  "files": {}
+}

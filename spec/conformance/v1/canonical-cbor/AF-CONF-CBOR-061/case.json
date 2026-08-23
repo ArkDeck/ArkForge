@@ -1,0 +1,16 @@
+{
+  "id": "AF-CONF-CBOR-061",
+  "suite": "canonical-cbor",
+  "title": "duplicate map key",
+  "kind": "decode",
+  "requirements": ["AF-DIG-007"],
+  "description": "A canonical decoder MUST reject these bytes. `errorClass` is the class the reference implementation reports; a port MUST reject and SHOULD report the same class.",
+  "input": {
+    "hex": "a2616101616102"
+  },
+  "expected": {
+    "result": "reject",
+    "errorClass": "CBOR_UNSORTED_MAP_KEYS"
+  },
+  "files": {}
+}

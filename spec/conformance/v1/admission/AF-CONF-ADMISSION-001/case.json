@@ -1,0 +1,29 @@
+{
+  "id": "AF-CONF-ADMISSION-001",
+  "suite": "admission",
+  "title": "snapshot with a transport session digest",
+  "kind": "digest",
+  "requirements": ["AF-AUTH-001", "AF-AUTH-002"],
+  "description": "digest = SHA-256(\"arkforge/v1/admission-snapshot\\0\" || body). An absent transport session is encoded as CBOR null under its key; the key is never omitted.",
+  "input": {
+    "capturedAtEpochMs": 1770000000000,
+    "freshnessDeadlineEpochMs": 1770000120000,
+    "deviceFactsDigest": "sha256(\"device-facts\")",
+    "transportSessionDigest": "sha256(\"session\")",
+    "providerFactsDigest": "sha256(\"provider-facts\")",
+    "toolchainFactsDigest": "sha256(\"toolchain-facts\")",
+    "artifactFactsDigest": "sha256(\"artifact-facts\")"
+  },
+  "expected": {
+    "domain": "arkforge/v1/admission-snapshot\\0",
+    "bodySha256": "7ce132ebe4347f4112c16d6216b41f9aef8c22bdb834354ab1ea13bc00455ff5",
+    "digest": "0ac30366059d955afb6195789008f348af6a854c56433d8b30e994a8f9abd2bc",
+    "diag": "{\"capturedAtEpochMs\": 1770000000000, \"deviceFactsDigest\": h'8e288de11c642fe7ef473e9a1e9fc13b7db646cc3c9218261812eb5139e52b2c', \"artifactFactsDigest\": h'9a188cc02191baf16e43ab5ddbfe0179c5c735a96145782fa34e068253129f66', \"providerFactsDigest\": h'c75368aead326187a92311dab41bcf61bb202baf39d599ed35231ad7dc873e9c', \"toolchainFactsDigest\": h'cd11d7d43a0c360cd0046e34ad9e69b0298a1ed1f7fddd546756c56cc1f82da6', \"transportSessionDigest\": h'3f3af1ecebbd1410ab417ec0d27bbfcb5d340e177ae159b59fc8626c2dfd9175', \"freshnessDeadlineEpochMs\": 1770000120000}"
+  },
+  "files": {
+    "body.cbor": {
+      "bytes": 335,
+      "sha256": "7ce132ebe4347f4112c16d6216b41f9aef8c22bdb834354ab1ea13bc00455ff5"
+    }
+  }
+}

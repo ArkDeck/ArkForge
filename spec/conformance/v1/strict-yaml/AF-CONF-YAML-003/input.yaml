@@ -1,0 +1,5 @@
+providers:
+  - id: a
+    backend: b
+  - id: c
+    backend: d

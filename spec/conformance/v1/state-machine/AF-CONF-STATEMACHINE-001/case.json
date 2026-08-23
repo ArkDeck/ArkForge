@@ -1,0 +1,152 @@
+{
+  "id": "AF-CONF-STATEMACHINE-001",
+  "suite": "state-machine",
+  "title": "job states, flags and the complete legal-edge set",
+  "kind": "table",
+  "requirements": ["AF-ENG-001", "AF-ENG-002", "AF-ENG-003", "AF-ENG-004"],
+  "description": "Every (from, to) pair not listed in `expected.edges` is an illegal transition and MUST be refused. Exactly one state permits an external dispatch. Terminal states have no successors. No path leads from outcomeUnknown back to a state that can dispatch.",
+  "input": {
+    "stateCount": 17
+  },
+  "expected": {
+    "states": [
+      {
+        "state": "planned",
+        "terminal": false,
+        "permitsExternalDispatch": false,
+        "successors": ["awaitingStart"]
+      },
+      {
+        "state": "awaitingStart",
+        "terminal": false,
+        "permitsExternalDispatch": false,
+        "successors": ["preflight"]
+      },
+      {
+        "state": "preflight",
+        "terminal": false,
+        "permitsExternalDispatch": false,
+        "successors": ["awaitingPermit", "readOnlyDispatch"]
+      },
+      {
+        "state": "awaitingPermit",
+        "terminal": false,
+        "permitsExternalDispatch": false,
+        "successors": ["stepIntentDurable", "cancelledSafe"]
+      },
+      {
+        "state": "stepIntentDurable",
+        "terminal": false,
+        "permitsExternalDispatch": true,
+        "successors": ["dispatching", "outcomeUnknown"]
+      },
+      {
+        "state": "dispatching",
+        "terminal": false,
+        "permitsExternalDispatch": false,
+        "successors": ["receiptDurable", "cancelledSafe", "outcomeUnknown"]
+      },
+      {
+        "state": "receiptDurable",
+        "terminal": false,
+        "permitsExternalDispatch": false,
+        "successors": ["checkpointed", "outcomeUnknown"]
+      },
+      {
+        "state": "checkpointed",
+        "terminal": false,
+        "permitsExternalDispatch": false,
+        "successors": ["preflight", "rebindWait", "postflight", "confirmedFailed", "cancelledSafe"]
+      },
+      {
+        "state": "rebindWait",
+        "terminal": false,
+        "permitsExternalDispatch": false,
+        "successors": ["preflight", "outcomeUnknown"]
+      },
+      {
+        "state": "readOnlyDispatch",
+        "terminal": false,
+        "permitsExternalDispatch": false,
+        "successors": ["preflight", "postflight", "cancelledSafe"]
+      },
+      {
+        "state": "postflight",
+        "terminal": false,
+        "permitsExternalDispatch": false,
+        "successors": ["succeeded", "confirmedFailed"]
+      },
+      {
+        "state": "succeeded",
+        "terminal": true,
+        "permitsExternalDispatch": false,
+        "successors": []
+      },
+      {
+        "state": "confirmedFailed",
+        "terminal": true,
+        "permitsExternalDispatch": false,
+        "successors": []
+      },
+      {
+        "state": "cancelledSafe",
+        "terminal": true,
+        "permitsExternalDispatch": false,
+        "successors": []
+      },
+      {
+        "state": "outcomeUnknown",
+        "terminal": false,
+        "permitsExternalDispatch": false,
+        "successors": ["reconciling", "recoveryAssessable"]
+      },
+      {
+        "state": "reconciling",
+        "terminal": false,
+        "permitsExternalDispatch": false,
+        "successors": ["succeeded", "confirmedFailed", "outcomeUnknown"]
+      },
+      {
+        "state": "recoveryAssessable",
+        "terminal": true,
+        "permitsExternalDispatch": false,
+        "successors": []
+      }
+    ],
+    "edgeCount": 30,
+    "edges": [
+      ["planned", "awaitingStart"],
+      ["awaitingStart", "preflight"],
+      ["preflight", "awaitingPermit"],
+      ["preflight", "readOnlyDispatch"],
+      ["awaitingPermit", "stepIntentDurable"],
+      ["awaitingPermit", "cancelledSafe"],
+      ["stepIntentDurable", "dispatching"],
+      ["stepIntentDurable", "outcomeUnknown"],
+      ["dispatching", "receiptDurable"],
+      ["dispatching", "cancelledSafe"],
+      ["dispatching", "outcomeUnknown"],
+      ["receiptDurable", "checkpointed"],
+      ["receiptDurable", "outcomeUnknown"],
+      ["checkpointed", "preflight"],
+      ["checkpointed", "rebindWait"],
+      ["checkpointed", "postflight"],
+      ["checkpointed", "confirmedFailed"],
+      ["checkpointed", "cancelledSafe"],
+      ["rebindWait", "preflight"],
+      ["rebindWait", "outcomeUnknown"],
+      ["readOnlyDispatch", "preflight"],
+      ["readOnlyDispatch", "postflight"],
+      ["readOnlyDispatch", "cancelledSafe"],
+      ["postflight", "succeeded"],
+      ["postflight", "confirmedFailed"],
+      ["outcomeUnknown", "reconciling"],
+      ["outcomeUnknown", "recoveryAssessable"],
+      ["reconciling", "succeeded"],
+      ["reconciling", "confirmedFailed"],
+      ["reconciling", "outcomeUnknown"]
+    ],
+    "onlyDispatchingState": "stepIntentDurable"
+  },
+  "files": {}
+}

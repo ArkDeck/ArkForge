@@ -1,0 +1,30 @@
+{
+  "id": "AF-CONF-YAML-011",
+  "suite": "strict-yaml",
+  "title": "full-line comment and blank lines",
+  "kind": "decode",
+  "requirements": ["AF-YAML-004"],
+  "description": "Parse `input.yaml` with the strict subset reader. The value tree has only scalars (text), sequences, mappings and null; typing happens in the consumer. `message` on a rejection is informative.",
+  "input": {
+    "yaml": "# heading\n\na: 1\n\n# trailing\n"
+  },
+  "expected": {
+    "result": "accept",
+    "value": {
+      "mapping": [
+        [
+          "a",
+          {
+            "scalar": "1"
+          }
+        ]
+      ]
+    }
+  },
+  "files": {
+    "input.yaml": {
+      "bytes": 28,
+      "sha256": "ee65b4ece55baf6d8cd739acccef4f9219747985893757aa418027f7fd9a013c"
+    }
+  }
+}

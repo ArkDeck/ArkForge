@@ -1,0 +1,16 @@
+{
+  "id": "AF-CONF-CBOR-056",
+  "suite": "canonical-cbor",
+  "title": "tag 0 (date-time)",
+  "kind": "decode",
+  "requirements": ["AF-DIG-007"],
+  "description": "A canonical decoder MUST reject these bytes. `errorClass` is the class the reference implementation reports; a port MUST reject and SHOULD report the same class.",
+  "input": {
+    "hex": "c074323031332d30332d32315432303a30343a30305a"
+  },
+  "expected": {
+    "result": "reject",
+    "errorClass": "CBOR_UNSUPPORTED_MAJOR_TYPE"
+  },
+  "files": {}
+}

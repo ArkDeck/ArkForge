@@ -1,0 +1,21 @@
+{
+  "id": "AF-CONF-YAML-021",
+  "suite": "strict-yaml",
+  "title": "tab indentation",
+  "kind": "decode",
+  "requirements": ["AF-YAML-011"],
+  "description": "Parse `input.yaml` with the strict subset reader. The value tree has only scalars (text), sequences, mappings and null; typing happens in the consumer. `message` on a rejection is informative.",
+  "input": {
+    "yaml": "a:\n\t- x\n"
+  },
+  "expected": {
+    "result": "reject",
+    "message": "line 2: tabs are not permitted for indentation"
+  },
+  "files": {
+    "input.yaml": {
+      "bytes": 8,
+      "sha256": "b1f9840f49c43e04a460ac97827800bbd29b67d4de455e42e67cd8bd26602bb9"
+    }
+  }
+}

@@ -1,0 +1,21 @@
+{
+  "id": "AF-CONF-PB-016",
+  "suite": "protobuf",
+  "title": "JobSummary",
+  "kind": "encode",
+  "requirements": ["AF-IPC-010", "AF-IPC-011"],
+  "description": "Encoding of `arkforge.ipc.v1.JobSummary` per proto/arkforge.proto. Proto3 defaults (0, false, empty) are omitted; fields are written in field number order; repeated message fields are one tag per element.",
+  "input": {
+    "message": "JobSummary"
+  },
+  "expected": {
+    "hex": "0a054a4f422d311206504c414e2d311a201111111111111111111111111111111111111111111111111111111111111111220e6f7574636f6d65556e6b6e6f776e3206535445502d353804400d482a",
+    "roundTrip": true
+  },
+  "files": {
+    "message.pb": {
+      "bytes": 79,
+      "sha256": "fa2666a80a1596edd0ba011a6544d0f1d4b5602d6821d025218d80f917f60d7d"
+    }
+  }
+}

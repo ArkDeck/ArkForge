@@ -1,0 +1,28 @@
+{
+  "id": "AF-CONF-JOURNAL-008",
+  "suite": "journal",
+  "title": "a durable kind declaring buffered is refused as tampering",
+  "kind": "replay",
+  "requirements": ["AF-JRN-006"],
+  "description": "Open `journal.bin`. A journal that no longer proves its own history is refused; recovery must not reason from it.",
+  "input": {
+    "basedOn": "AF-CONF-JOURNAL-003",
+    "mutation": "record 1 (planStored) fsyncPolicy := buffered, digest recomputed"
+  },
+  "expected": {
+    "result": "reject",
+    "code": "JOURNAL_FSYNC_POLICY_MISDECLARED",
+    "detail": {
+      "atSequence": 1,
+      "kind": "planStored",
+      "declared": "buffered",
+      "required": "durable"
+    }
+  },
+  "files": {
+    "journal.bin": {
+      "bytes": 1239,
+      "sha256": "f5d849890ec45e1cc5961635701294b4bdd6112d6cc0b88233ed7ff35d19ad5a"
+    }
+  }
+}

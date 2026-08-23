@@ -1,0 +1,21 @@
+{
+  "id": "AF-CONF-YAML-028",
+  "suite": "strict-yaml",
+  "title": "flow sequence not closed on one line",
+  "kind": "decode",
+  "requirements": ["AF-YAML-013"],
+  "description": "Parse `input.yaml` with the strict subset reader. The value tree has only scalars (text), sequences, mappings and null; typing happens in the consumer. `message` on a rejection is informative.",
+  "input": {
+    "yaml": "a: [x,\n  y]\n"
+  },
+  "expected": {
+    "result": "reject",
+    "message": "line 1: flow sequence is not closed on one line"
+  },
+  "files": {
+    "input.yaml": {
+      "bytes": 12,
+      "sha256": "5c798c778bc313abadfb52a63acc514eb81467ac8ee25b4fdcf02229ea25cb77"
+    }
+  }
+}

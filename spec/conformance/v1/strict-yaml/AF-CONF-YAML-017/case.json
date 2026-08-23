@@ -1,0 +1,21 @@
+{
+  "id": "AF-CONF-YAML-017",
+  "suite": "strict-yaml",
+  "title": "anchor at line start is rejected",
+  "kind": "decode",
+  "requirements": ["AF-YAML-012"],
+  "description": "Parse `input.yaml` with the strict subset reader. The value tree has only scalars (text), sequences, mappings and null; typing happens in the consumer. `message` on a rejection is informative.",
+  "input": {
+    "yaml": "&x a: 1\n"
+  },
+  "expected": {
+    "result": "reject",
+    "message": "line 1: anchors, aliases and tags are not permitted in a profile"
+  },
+  "files": {
+    "input.yaml": {
+      "bytes": 8,
+      "sha256": "b09e379b44fa504e7d59984ac7bb8c646c6b225537ca32f7c9ccfd86abce9926"
+    }
+  }
+}

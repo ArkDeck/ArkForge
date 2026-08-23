@@ -1,0 +1,17 @@
+{
+  "id": "AF-CONF-SHA256-006",
+  "suite": "sha256",
+  "title": "one byte short of the padding boundary (55 bytes)",
+  "kind": "digest",
+  "requirements": ["AF-DIG-001"],
+  "description": "SHA-256 of the input bytes, lowercase hex.",
+  "input": {
+    "repeatByte": 97,
+    "count": 55,
+    "note": "input is generated, not stored: `count` copies of `repeatByte`"
+  },
+  "expected": {
+    "sha256": "9f4390f8d30c2dd92ec9f095b65e2b9ae9b0a925a5258e241c9f1e910f734318"
+  },
+  "files": {}
+}

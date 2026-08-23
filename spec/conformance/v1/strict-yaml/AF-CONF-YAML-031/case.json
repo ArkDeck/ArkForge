@@ -1,0 +1,21 @@
+{
+  "id": "AF-CONF-YAML-031",
+  "suite": "strict-yaml",
+  "title": "inconsistent indentation inside a mapping",
+  "kind": "decode",
+  "requirements": ["AF-YAML-015"],
+  "description": "Parse `input.yaml` with the strict subset reader. The value tree has only scalars (text), sequences, mappings and null; typing happens in the consumer. `message` on a rejection is informative.",
+  "input": {
+    "yaml": "a: 1\n  b: 2\n"
+  },
+  "expected": {
+    "result": "reject",
+    "message": "line 2: unexpected indentation inside a mapping"
+  },
+  "files": {
+    "input.yaml": {
+      "bytes": 12,
+      "sha256": "027ae7d68fc3939434149ffefb8a23214a1715eda538e2f1cdbe9ed590374807"
+    }
+  }
+}

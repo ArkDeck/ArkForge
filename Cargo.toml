@@ -14,6 +14,7 @@ members = [
     "crates/arkforge-standalone",
     "crates/arkforge-cli",
     "crates/arkforged",
+    "crates/arkforge-conformance",
     "adapters/arkforge-arkdeck-adapter",
 ]
 

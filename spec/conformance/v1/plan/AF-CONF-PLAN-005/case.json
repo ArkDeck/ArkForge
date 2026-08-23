@@ -1,0 +1,372 @@
+{
+  "id": "AF-CONF-PLAN-005",
+  "suite": "plan",
+  "title": "private execution plan: every action body and its digest",
+  "kind": "digest",
+  "requirements": ["AF-PROJ-001", "AF-PROJ-002"],
+  "description": "privateActionDigest = SHA-256(domain || deterministic_cbor(action)). The private plan never crosses the agent/app API; only these digests do.",
+  "input": {
+    "planId": "PLAN-CONF-001",
+    "intent": "fullRestore"
+  },
+  "expected": {
+    "domain": "arkforge/v1/private-action\\0",
+    "actionCount": 32,
+    "actions": [
+      {
+        "actionId": "ACT-001",
+        "stepId": "STEP-001",
+        "role": "primaryEffect",
+        "privateActionDigest": "d2f335be72286d19ec7d96401b334cad801d7be80a2c23031195133e5ac64080",
+        "diag": "{\"body\": {\"via\": \"managed-device-control-port\", \"action\": \"enter-loader\", \"controlAction\": \"enter-updater\"}, \"role\": \"primaryEffect\", \"stepId\": \"STEP-001\", \"actionId\": \"ACT-001\", \"effectClass\": \"transient\", \"contentDigest\": null, \"declaredRange\": null, \"declaredTarget\": null}"
+      },
+      {
+        "actionId": "ACT-002",
+        "stepId": "STEP-002",
+        "role": "primaryEffect",
+        "privateActionDigest": "6c836bad99969a7dff01522b98cc5b63da5700e523f144b30b55119dbc3eb8f4",
+        "diag": "{\"body\": {\"action\": \"probe-loader\"}, \"role\": \"primaryEffect\", \"stepId\": \"STEP-002\", \"actionId\": \"ACT-002\", \"effectClass\": \"readOnly\", \"contentDigest\": null, \"declaredRange\": null, \"declaredTarget\": null}"
+      },
+      {
+        "actionId": "ACT-003",
+        "stepId": "STEP-003",
+        "role": "primaryEffect",
+        "privateActionDigest": "d5e52eca1946714e9c9fbdcef39898ed3cea7cb3116b9fdc0bc28f5a5bad0c56",
+        "diag": "{\"body\": {\"action\": \"validate-partition-table\", \"expectedLayoutDigest\": h'b97fe04de02cca2b18d09065dfde43d9e5d182f6bd2d52e13f1c963285bf55ab'}, \"role\": \"primaryEffect\", \"stepId\": \"STEP-003\", \"actionId\": \"ACT-003\", \"effectClass\": \"readOnly\", \"contentDigest\": null, \"declaredRange\": null, \"declaredTarget\": null}"
+      },
+      {
+        "actionId": "ACT-004",
+        "stepId": "STEP-004",
+        "role": "primaryEffect",
+        "privateActionDigest": "69b5e174dd04aa902e990039d6b6577d75f53844c505c6796d07455d9d1ce153",
+        "diag": "{\"body\": {\"action\": \"write-partition\", \"member\": \"uboot.img\", \"partition\": \"uboot\", \"beginSector\": 8192}, \"role\": \"primaryEffect\", \"stepId\": \"STEP-004\", \"actionId\": \"ACT-004\", \"effectClass\": \"destructive\", \"contentDigest\": h'575cba872c422e3d477e0835e909701acb4beb0b1c1e81e077b487c4b9309ad8', \"declaredRange\": {\"start\": 4194304, \"length\": 2048}, \"declaredTarget\": {\"partition\": \"uboot\"}}"
+      },
+      {
+        "actionId": "ACT-005",
+        "stepId": "STEP-005",
+        "role": "primaryEffect",
+        "privateActionDigest": "b8440f6b59e0da891fa21bcb908f3f5b02777a964ef5a0cb25e45c5dccc3b5a2",
+        "diag": "{\"body\": {\"action\": \"write-partition\", \"member\": \"resource.img\", \"partition\": \"resource\", \"beginSector\": 28672}, \"role\": \"primaryEffect\", \"stepId\": \"STEP-005\", \"actionId\": \"ACT-005\", \"effectClass\": \"destructive\", \"contentDigest\": h'3b094bdb46dc7c0ae62dccdea727679437745ee934bf644da5ba707f3817f21b', \"declaredRange\": {\"start\": 14680064, \"length\": 2048}, \"declaredTarget\": {\"partition\": \"resource\"}}"
+      },
+      {
+        "actionId": "ACT-006",
+        "stepId": "STEP-006",
+        "role": "primaryEffect",
+        "privateActionDigest": "d2b8cfe03a07cbff814e19672eb2121170a52f24e8b3e8240e2a301b1788d2db",
+        "diag": "{\"body\": {\"action\": \"write-partition\", \"member\": \"boot_linux.img\", \"partition\": \"boot_linux\", \"beginSector\": 40960}, \"role\": \"primaryEffect\", \"stepId\": \"STEP-006\", \"actionId\": \"ACT-006\", \"effectClass\": \"destructive\", \"contentDigest\": h'f187737e611a46ce7a3a1059766d35085e8ba65bdb07fd21425c4977d2f172a8', \"declaredRange\": {\"start\": 20971520, \"length\": 2048}, \"declaredTarget\": {\"partition\": \"boot_linux\"}}"
+      },
+      {
+        "actionId": "ACT-007",
+        "stepId": "STEP-007",
+        "role": "primaryEffect",
+        "privateActionDigest": "2b1689ed5bfc6497aa94059c8feb6ebbb3db00151e844c95eed247c36f18a609",
+        "diag": "{\"body\": {\"action\": \"write-partition\", \"member\": \"ramdisk.img\", \"partition\": \"ramdisk\", \"beginSector\": 237568}, \"role\": \"primaryEffect\", \"stepId\": \"STEP-007\", \"actionId\": \"ACT-007\", \"effectClass\": \"destructive\", \"contentDigest\": h'ce9bc9f0fbded8931f65093447c339b5689d1841eddf01f55cde95ea8c1f8958', \"declaredRange\": {\"start\": 121634816, \"length\": 2048}, \"declaredTarget\": {\"partition\": \"ramdisk\"}}"
+      },
+      {
+        "actionId": "ACT-008",
+        "stepId": "STEP-008",
+        "role": "primaryEffect",
+        "privateActionDigest": "cf9dc9a9fba4afed70aebec908fe72ef6f33b673976ce213e0545b2efc6b8b2a",
+        "diag": "{\"body\": {\"action\": \"write-partition\", \"member\": \"system.img\", \"partition\": \"system\", \"beginSector\": 245760}, \"role\": \"primaryEffect\", \"stepId\": \"STEP-008\", \"actionId\": \"ACT-008\", \"effectClass\": \"destructive\", \"contentDigest\": h'0c9a06efc5825e8bd2e68d8a223dc6fa751b0732d53e508e91819692897c1711', \"declaredRange\": {\"start\": 125829120, \"length\": 8258}, \"declaredTarget\": {\"partition\": \"system\"}}"
+      },
+      {
+        "actionId": "ACT-009",
+        "stepId": "STEP-009",
+        "role": "primaryEffect",
+        "privateActionDigest": "4ff579ab29eb045b0e2f482dfe147f74f9ca4e69655a7f172030af0cb0e50acf",
+        "diag": "{\"body\": {\"action\": \"write-partition\", \"member\": \"vendor.img\", \"partition\": \"vendor\", \"beginSector\": 4440064}, \"role\": \"primaryEffect\", \"stepId\": \"STEP-009\", \"actionId\": \"ACT-009\", \"effectClass\": \"destructive\", \"contentDigest\": h'46b890d21325786c61ab9014e0abf6d4bf73f207e5c568ab5e5ce879d689384b', \"declaredRange\": {\"start\": 2273312768, \"length\": 2048}, \"declaredTarget\": {\"partition\": \"vendor\"}}"
+      },
+      {
+        "actionId": "ACT-010",
+        "stepId": "STEP-010",
+        "role": "primaryEffect",
+        "privateActionDigest": "fb9382fddac52859309552a3271bd396e631c753399139f9a8f84d3a4eff30d2",
+        "diag": "{\"body\": {\"action\": \"write-partition\", \"member\": \"updater.img\", \"partition\": \"updater\", \"beginSector\": 6742016}, \"role\": \"primaryEffect\", \"stepId\": \"STEP-010\", \"actionId\": \"ACT-010\", \"effectClass\": \"destructive\", \"contentDigest\": h'02691d83d26a58eb3a594a816d676b8bbb707ba108f065f025a5adbd1663d520', \"declaredRange\": {\"start\": 3451912192, \"length\": 2048}, \"declaredTarget\": {\"partition\": \"updater\"}}"
+      },
+      {
+        "actionId": "ACT-011",
+        "stepId": "STEP-011",
+        "role": "primaryEffect",
+        "privateActionDigest": "733ff336c0d3a2bdfa89d2cea209489dfe27a3bb4c0c4ff7a0db59093b9a4b26",
+        "diag": "{\"body\": {\"action\": \"write-partition\", \"member\": \"chip_ckm.img\", \"partition\": \"chip_ckm\", \"beginSector\": 6938624}, \"role\": \"primaryEffect\", \"stepId\": \"STEP-011\", \"actionId\": \"ACT-011\", \"effectClass\": \"destructive\", \"contentDigest\": h'a1a392b7f280118b79838a28ed594ec22b3d0caeb1bfd00911c3358cc77d27bb', \"declaredRange\": {\"start\": 3552575488, \"length\": 2048}, \"declaredTarget\": {\"partition\": \"chip_ckm\"}}"
+      },
+      {
+        "actionId": "ACT-012",
+        "stepId": "STEP-012",
+        "role": "primaryEffect",
+        "privateActionDigest": "f3e2db80516607607e10337933e3f6fb241ea9acc5f7041b0a83c0a6462304c2",
+        "diag": "{\"body\": {\"action\": \"write-partition\", \"member\": \"userdata.img\", \"partition\": \"userdata\", \"beginSector\": 19955712}, \"role\": \"primaryEffect\", \"stepId\": \"STEP-012\", \"actionId\": \"ACT-012\", \"effectClass\": \"destructive\", \"contentDigest\": h'b06596cb5b43bc0a38bca5a63d90d991aa4682e8d29119ea984062240f67d733', \"declaredRange\": {\"start\": 10217324544, \"length\": 2048}, \"declaredTarget\": {\"partition\": \"userdata\"}}"
+      },
+      {
+        "actionId": "SUB-013",
+        "stepId": "STEP-013",
+        "role": "readOnlyTransportSubAction",
+        "privateActionDigest": "a5dca2c65c7310d7aac370375c5606ff1f85a9c436dc1945ac751a79a9cc5f9e",
+        "diag": "{\"body\": {\"probe\": \"primary-and-backup-gpt\", \"action\": \"characterize-read-domain\", \"policy\": \"characterize-at-runtime\"}, \"role\": \"readOnlyTransportSubAction\", \"stepId\": \"STEP-013\", \"actionId\": \"SUB-013\", \"effectClass\": \"readOnly\", \"contentDigest\": null, \"declaredRange\": null, \"declaredTarget\": null}"
+      },
+      {
+        "actionId": "ACT-013",
+        "stepId": "STEP-013",
+        "role": "primaryEffect",
+        "privateActionDigest": "c1f45a8a2782414678402aecf1d1690896639602990bbedebedcfbda2457eda4",
+        "diag": "{\"body\": {\"action\": \"readback-partition\", \"partition\": \"uboot\", \"beginSector\": 8192, \"erasedMediumFiller\": 204, \"maxStrengthWhenReadable\": \"fullHash\"}, \"role\": \"primaryEffect\", \"stepId\": \"STEP-013\", \"actionId\": \"ACT-013\", \"effectClass\": \"readOnly\", \"contentDigest\": h'575cba872c422e3d477e0835e909701acb4beb0b1c1e81e077b487c4b9309ad8', \"declaredRange\": {\"start\": 4194304, \"length\": 2048}, \"declaredTarget\": {\"partition\": \"uboot\"}}"
+      },
+      {
+        "actionId": "SUB-014",
+        "stepId": "STEP-014",
+        "role": "readOnlyTransportSubAction",
+        "privateActionDigest": "31f0723828fd7bbd306f84dc50c048c2dcb1f64ba9cab26ab1d782d13cc42571",
+        "diag": "{\"body\": {\"probe\": \"primary-and-backup-gpt\", \"action\": \"characterize-read-domain\", \"policy\": \"characterize-at-runtime\"}, \"role\": \"readOnlyTransportSubAction\", \"stepId\": \"STEP-014\", \"actionId\": \"SUB-014\", \"effectClass\": \"readOnly\", \"contentDigest\": null, \"declaredRange\": null, \"declaredTarget\": null}"
+      },
+      {
+        "actionId": "ACT-014",
+        "stepId": "STEP-014",
+        "role": "primaryEffect",
+        "privateActionDigest": "cbc6d2575ef41eb2cabd05387047e3e6713d8dfd1dae1b0df66a7313623d4e42",
+        "diag": "{\"body\": {\"action\": \"readback-partition\", \"partition\": \"resource\", \"beginSector\": 28672, \"erasedMediumFiller\": 204, \"maxStrengthWhenReadable\": \"fullHash\"}, \"role\": \"primaryEffect\", \"stepId\": \"STEP-014\", \"actionId\": \"ACT-014\", \"effectClass\": \"readOnly\", \"contentDigest\": h'3b094bdb46dc7c0ae62dccdea727679437745ee934bf644da5ba707f3817f21b', \"declaredRange\": {\"start\": 14680064, \"length\": 2048}, \"declaredTarget\": {\"partition\": \"resource\"}}"
+      },
+      {
+        "actionId": "SUB-015",
+        "stepId": "STEP-015",
+        "role": "readOnlyTransportSubAction",
+        "privateActionDigest": "e5a588a6abd3d5b08c5339ba9b6b7bbe3b658c1bd0df66be907f89cab7c2a946",
+        "diag": "{\"body\": {\"probe\": \"primary-and-backup-gpt\", \"action\": \"characterize-read-domain\", \"policy\": \"characterize-at-runtime\"}, \"role\": \"readOnlyTransportSubAction\", \"stepId\": \"STEP-015\", \"actionId\": \"SUB-015\", \"effectClass\": \"readOnly\", \"contentDigest\": null, \"declaredRange\": null, \"declaredTarget\": null}"
+      },
+      {
+        "actionId": "ACT-015",
+        "stepId": "STEP-015",
+        "role": "primaryEffect",
+        "privateActionDigest": "ccf3ee0572342ae177225adf2246564210e143d126169bcc046b8f4c558f4065",
+        "diag": "{\"body\": {\"action\": \"readback-partition\", \"partition\": \"boot_linux\", \"beginSector\": 40960, \"erasedMediumFiller\": 204, \"maxStrengthWhenReadable\": \"fullHash\"}, \"role\": \"primaryEffect\", \"stepId\": \"STEP-015\", \"actionId\": \"ACT-015\", \"effectClass\": \"readOnly\", \"contentDigest\": h'f187737e611a46ce7a3a1059766d35085e8ba65bdb07fd21425c4977d2f172a8', \"declaredRange\": {\"start\": 20971520, \"length\": 2048}, \"declaredTarget\": {\"partition\": \"boot_linux\"}}"
+      },
+      {
+        "actionId": "SUB-016",
+        "stepId": "STEP-016",
+        "role": "readOnlyTransportSubAction",
+        "privateActionDigest": "45e0e2b1ee31a6716f6b659cd33f6c40e4222c964aaf50844848e6270ac76c9c",
+        "diag": "{\"body\": {\"probe\": \"primary-and-backup-gpt\", \"action\": \"characterize-read-domain\", \"policy\": \"characterize-at-runtime\"}, \"role\": \"readOnlyTransportSubAction\", \"stepId\": \"STEP-016\", \"actionId\": \"SUB-016\", \"effectClass\": \"readOnly\", \"contentDigest\": null, \"declaredRange\": null, \"declaredTarget\": null}"
+      },
+      {
+        "actionId": "ACT-016",
+        "stepId": "STEP-016",
+        "role": "primaryEffect",
+        "privateActionDigest": "75e7c2684e0900d74b6145db34877965b59637e188c2bb0f25ca7f5a6918c7c0",
+        "diag": "{\"body\": {\"action\": \"readback-partition\", \"partition\": \"ramdisk\", \"beginSector\": 237568, \"erasedMediumFiller\": 204, \"maxStrengthWhenReadable\": \"fullHash\"}, \"role\": \"primaryEffect\", \"stepId\": \"STEP-016\", \"actionId\": \"ACT-016\", \"effectClass\": \"readOnly\", \"contentDigest\": h'ce9bc9f0fbded8931f65093447c339b5689d1841eddf01f55cde95ea8c1f8958', \"declaredRange\": {\"start\": 121634816, \"length\": 2048}, \"declaredTarget\": {\"partition\": \"ramdisk\"}}"
+      },
+      {
+        "actionId": "SUB-017",
+        "stepId": "STEP-017",
+        "role": "readOnlyTransportSubAction",
+        "privateActionDigest": "16cfb919920297ce226133f70ae8715520497331382c9462f21c9914e0d39662",
+        "diag": "{\"body\": {\"probe\": \"primary-and-backup-gpt\", \"action\": \"characterize-read-domain\", \"policy\": \"characterize-at-runtime\"}, \"role\": \"readOnlyTransportSubAction\", \"stepId\": \"STEP-017\", \"actionId\": \"SUB-017\", \"effectClass\": \"readOnly\", \"contentDigest\": null, \"declaredRange\": null, \"declaredTarget\": null}"
+      },
+      {
+        "actionId": "ACT-017",
+        "stepId": "STEP-017",
+        "role": "primaryEffect",
+        "privateActionDigest": "c1c187f9b3e359c13191e275fbf92f18c1c0e0ea0e59edbc07e539ff4fb6e7ba",
+        "diag": "{\"body\": {\"action\": \"readback-partition\", \"partition\": \"system\", \"beginSector\": 245760, \"erasedMediumFiller\": 204, \"maxStrengthWhenReadable\": \"fullHash\"}, \"role\": \"primaryEffect\", \"stepId\": \"STEP-017\", \"actionId\": \"ACT-017\", \"effectClass\": \"readOnly\", \"contentDigest\": h'0c9a06efc5825e8bd2e68d8a223dc6fa751b0732d53e508e91819692897c1711', \"declaredRange\": {\"start\": 125829120, \"length\": 8258}, \"declaredTarget\": {\"partition\": \"system\"}}"
+      },
+      {
+        "actionId": "SUB-018",
+        "stepId": "STEP-018",
+        "role": "readOnlyTransportSubAction",
+        "privateActionDigest": "29376af6a1d2525f7affecee65faf54e008bdb2b56562a7348904374b3470a33",
+        "diag": "{\"body\": {\"probe\": \"primary-and-backup-gpt\", \"action\": \"characterize-read-domain\", \"policy\": \"characterize-at-runtime\"}, \"role\": \"readOnlyTransportSubAction\", \"stepId\": \"STEP-018\", \"actionId\": \"SUB-018\", \"effectClass\": \"readOnly\", \"contentDigest\": null, \"declaredRange\": null, \"declaredTarget\": null}"
+      },
+      {
+        "actionId": "ACT-018",
+        "stepId": "STEP-018",
+        "role": "primaryEffect",
+        "privateActionDigest": "3f82f9087bd22ee976f2887b98c65733c2054e5b64b04cb68b5544a02e7d167b",
+        "diag": "{\"body\": {\"action\": \"readback-partition\", \"partition\": \"vendor\", \"beginSector\": 4440064, \"erasedMediumFiller\": 204, \"maxStrengthWhenReadable\": \"fullHash\"}, \"role\": \"primaryEffect\", \"stepId\": \"STEP-018\", \"actionId\": \"ACT-018\", \"effectClass\": \"readOnly\", \"contentDigest\": h'46b890d21325786c61ab9014e0abf6d4bf73f207e5c568ab5e5ce879d689384b', \"declaredRange\": {\"start\": 2273312768, \"length\": 2048}, \"declaredTarget\": {\"partition\": \"vendor\"}}"
+      },
+      {
+        "actionId": "SUB-019",
+        "stepId": "STEP-019",
+        "role": "readOnlyTransportSubAction",
+        "privateActionDigest": "ccd384be56c319de467e30acc9d4d90bf3173c92bf564f17c371acb223b68117",
+        "diag": "{\"body\": {\"probe\": \"primary-and-backup-gpt\", \"action\": \"characterize-read-domain\", \"policy\": \"characterize-at-runtime\"}, \"role\": \"readOnlyTransportSubAction\", \"stepId\": \"STEP-019\", \"actionId\": \"SUB-019\", \"effectClass\": \"readOnly\", \"contentDigest\": null, \"declaredRange\": null, \"declaredTarget\": null}"
+      },
+      {
+        "actionId": "ACT-019",
+        "stepId": "STEP-019",
+        "role": "primaryEffect",
+        "privateActionDigest": "e000205e60756b837f413f21ffb48891c25fbef34175a9863ed3548d1fddb513",
+        "diag": "{\"body\": {\"action\": \"readback-partition\", \"partition\": \"updater\", \"beginSector\": 6742016, \"erasedMediumFiller\": 204, \"maxStrengthWhenReadable\": \"fullHash\"}, \"role\": \"primaryEffect\", \"stepId\": \"STEP-019\", \"actionId\": \"ACT-019\", \"effectClass\": \"readOnly\", \"contentDigest\": h'02691d83d26a58eb3a594a816d676b8bbb707ba108f065f025a5adbd1663d520', \"declaredRange\": {\"start\": 3451912192, \"length\": 2048}, \"declaredTarget\": {\"partition\": \"updater\"}}"
+      },
+      {
+        "actionId": "SUB-020",
+        "stepId": "STEP-020",
+        "role": "readOnlyTransportSubAction",
+        "privateActionDigest": "c1b2db56599fb3849560fce1363653ab73482f558db034c0d1501b19328cd895",
+        "diag": "{\"body\": {\"probe\": \"primary-and-backup-gpt\", \"action\": \"characterize-read-domain\", \"policy\": \"characterize-at-runtime\"}, \"role\": \"readOnlyTransportSubAction\", \"stepId\": \"STEP-020\", \"actionId\": \"SUB-020\", \"effectClass\": \"readOnly\", \"contentDigest\": null, \"declaredRange\": null, \"declaredTarget\": null}"
+      },
+      {
+        "actionId": "ACT-020",
+        "stepId": "STEP-020",
+        "role": "primaryEffect",
+        "privateActionDigest": "a31cc0cd3b25c03ee1a0b9a13b3243e77a88a152ec5febaf2240700b3fcb0973",
+        "diag": "{\"body\": {\"action\": \"readback-partition\", \"partition\": \"chip_ckm\", \"beginSector\": 6938624, \"erasedMediumFiller\": 204, \"maxStrengthWhenReadable\": \"fullHash\"}, \"role\": \"primaryEffect\", \"stepId\": \"STEP-020\", \"actionId\": \"ACT-020\", \"effectClass\": \"readOnly\", \"contentDigest\": h'a1a392b7f280118b79838a28ed594ec22b3d0caeb1bfd00911c3358cc77d27bb', \"declaredRange\": {\"start\": 3552575488, \"length\": 2048}, \"declaredTarget\": {\"partition\": \"chip_ckm\"}}"
+      },
+      {
+        "actionId": "SUB-021",
+        "stepId": "STEP-021",
+        "role": "readOnlyTransportSubAction",
+        "privateActionDigest": "7788a1e3a9e9096059f3df1e1a5b157960c6edf8aba44e0213ed0537f81e7a2d",
+        "diag": "{\"body\": {\"probe\": \"primary-and-backup-gpt\", \"action\": \"characterize-read-domain\", \"policy\": \"characterize-at-runtime\"}, \"role\": \"readOnlyTransportSubAction\", \"stepId\": \"STEP-021\", \"actionId\": \"SUB-021\", \"effectClass\": \"readOnly\", \"contentDigest\": null, \"declaredRange\": null, \"declaredTarget\": null}"
+      },
+      {
+        "actionId": "ACT-021",
+        "stepId": "STEP-021",
+        "role": "primaryEffect",
+        "privateActionDigest": "5a1723eabeed7dc4a93e037de708e70885125f5cbf16be7095ebc0f57a7a074d",
+        "diag": "{\"body\": {\"action\": \"readback-partition\", \"partition\": \"userdata\", \"beginSector\": 19955712, \"erasedMediumFiller\": 204, \"maxStrengthWhenReadable\": \"fullHash\"}, \"role\": \"primaryEffect\", \"stepId\": \"STEP-021\", \"actionId\": \"ACT-021\", \"effectClass\": \"readOnly\", \"contentDigest\": h'b06596cb5b43bc0a38bca5a63d90d991aa4682e8d29119ea984062240f67d733', \"declaredRange\": {\"start\": 10217324544, \"length\": 2048}, \"declaredTarget\": {\"partition\": \"userdata\"}}"
+      },
+      {
+        "actionId": "ACT-022",
+        "stepId": "STEP-022",
+        "role": "primaryEffect",
+        "privateActionDigest": "99a450dedcd1413ad1b16251082109d6501081cb3b0a9c85d2d4ba744fce6e8d",
+        "diag": "{\"body\": {\"action\": \"reset-device\"}, \"role\": \"primaryEffect\", \"stepId\": \"STEP-022\", \"actionId\": \"ACT-022\", \"effectClass\": \"transient\", \"contentDigest\": null, \"declaredRange\": null, \"declaredTarget\": null}"
+      },
+      {
+        "actionId": "ACT-023",
+        "stepId": "STEP-023",
+        "role": "primaryEffect",
+        "privateActionDigest": "755da25d7a899f0f7b81b9fde5747d60cbcca4b0a8fd93213712010bd970c96f",
+        "diag": "{\"body\": {\"via\": \"managed-device-control-port\", \"action\": \"verify-hdc-postflight\", \"expect\": {\"const.ohos.fullname\": \"OpenHarmony-7.0.0.36\", \"const.product.model\": \"ohos\"}, \"controlAction\": \"read-build-facts\"}, \"role\": \"primaryEffect\", \"stepId\": \"STEP-023\", \"actionId\": \"ACT-023\", \"effectClass\": \"readOnly\", \"contentDigest\": null, \"declaredRange\": null, \"declaredTarget\": null}"
+      }
+    ]
+  },
+  "files": {
+    "action-01.cbor": {
+      "bytes": 208,
+      "sha256": "643d50cac0f6c46f7b1e8bbb75a768872bad6f2d603ca81a7257c3d53a34ef4a"
+    },
+    "action-02.cbor": {
+      "bytes": 146,
+      "sha256": "ef5e0548ec666c1895553d6cd4d5dfe01256518a164663a0012d88fc0e079077"
+    },
+    "action-03.cbor": {
+      "bytes": 214,
+      "sha256": "c7159d1095fb724e68155977cfbb7aa2b6d3d22dbc2b7302e93e6ba02407a8d1"
+    },
+    "action-04.cbor": {
+      "bytes": 270,
+      "sha256": "146a0919ae5134a19532a3f7db413b43183ff9ec66da3195d01a5c3c7c102825"
+    },
+    "action-05.cbor": {
+      "bytes": 279,
+      "sha256": "7cd44410d54c446869bf9210060a3836f35c684922d997c9d6a9771a6eda1304"
+    },
+    "action-06.cbor": {
+      "bytes": 285,
+      "sha256": "1fdf11e6bf05f0a011d5872ecfb2b99ef2a71704972a102e7c44923fe626921a"
+    },
+    "action-07.cbor": {
+      "bytes": 278,
+      "sha256": "ab4c17a3fb15f613e22a28f1c4ec30ccb209421e72fb0c4dc7a33faf5e2f61f0"
+    },
+    "action-08.cbor": {
+      "bytes": 275,
+      "sha256": "b2103fb1c09b3e3a73b4953568ecc16131433f007edb51b0024d492da7a5f765"
+    },
+    "action-09.cbor": {
+      "bytes": 275,
+      "sha256": "0fa917ba45a878f7d4a3a5ab15aba198f580190330a80519efd905ba1178c21e"
+    },
+    "action-10.cbor": {
+      "bytes": 278,
+      "sha256": "ca3228b28e77ac74ffb200bee40328e2e4b4f8016df80e445350e15dd0fbe5a6"
+    },
+    "action-11.cbor": {
+      "bytes": 281,
+      "sha256": "4b0286caae8a3d00b56cab294c627dc033cb4e680a98483bdb6aa4197e2dc549"
+    },
+    "action-12.cbor": {
+      "bytes": 285,
+      "sha256": "5c77dac59449cf9ec15a764455a2b9ac390b6d2945962f49369baeafdfcc1faa"
+    },
+    "action-13.cbor": {
+      "bytes": 233,
+      "sha256": "865e15475ee7ac275005c77bf0a812aaef44b81c05d999352c2997f6a82f3889"
+    },
+    "action-14.cbor": {
+      "bytes": 307,
+      "sha256": "2d29bee3107ff0f2217e6138362448312484edb4f1e77de3ce7724dbd93c8157"
+    },
+    "action-15.cbor": {
+      "bytes": 233,
+      "sha256": "faf80bb5f4758e25ca697bdee15757ea77c989990bccf85523b635eefc2e31d7"
+    },
+    "action-16.cbor": {
+      "bytes": 313,
+      "sha256": "a6e21b6f40055423b7409e419fa1f7bbc3118353a991cfc993a8beba7e653c1c"
+    },
+    "action-17.cbor": {
+      "bytes": 233,
+      "sha256": "4233189dfae6603f5260de463ef04c65d167193e9d0e54e21a0a1c0714f6de1a"
+    },
+    "action-18.cbor": {
+      "bytes": 317,
+      "sha256": "021fc4e0dcef06c7fbd45f14e5ce071bd69831b8f79699b098f13d577bf0c44a"
+    },
+    "action-19.cbor": {
+      "bytes": 233,
+      "sha256": "56c260838d6052cf6e3a45fccb61736f7ebb75c17196961ca5b740aca5f3aaa3"
+    },
+    "action-20.cbor": {
+      "bytes": 313,
+      "sha256": "f43bc648e33c087bcb0184093d415dab36e0781822a4e9aab82455ee5481593d"
+    },
+    "action-21.cbor": {
+      "bytes": 233,
+      "sha256": "59bcc28ff5fb574f7cf7bf56b63d625f795c523353e1e00fc2719a86db600b6e"
+    },
+    "action-22.cbor": {
+      "bytes": 311,
+      "sha256": "d3564807bb115f91bc716f3fd16efa90975e0354e1a87735c885cad1923467c0"
+    },
+    "action-23.cbor": {
+      "bytes": 233,
+      "sha256": "915d8334b85e933464e02f1dfd14ac3491b873289e383067e648cde96703baea"
+    },
+    "action-24.cbor": {
+      "bytes": 311,
+      "sha256": "1c278d575db334737a52cafd3a08a0e5f5a2e82340be182bfd96d9ed5512454a"
+    },
+    "action-25.cbor": {
+      "bytes": 233,
+      "sha256": "77ddee9a126b2ee99db884e65e280565456e851f15e72785c8c94d09b65da91c"
+    },
+    "action-26.cbor": {
+      "bytes": 313,
+      "sha256": "7d4c2dce65114b40866ffc9dba294fbfbd2b9b53a6f3151f000a24eb62e7dea5"
+    },
+    "action-27.cbor": {
+      "bytes": 233,
+      "sha256": "23431a2d108cdf22b28e6ecc40dc1edda594f1792867dabe9f0b2dd0db47f8ef"
+    },
+    "action-28.cbor": {
+      "bytes": 315,
+      "sha256": "82d73e5ca6f0b8d20f1b3e86ea2b5d4e136741c59ea71d83c9fdb4c4115e927d"
+    },
+    "action-29.cbor": {
+      "bytes": 233,
+      "sha256": "af42ba6f5eccb6aaff924c520892a1c2dbe38f657502ecfaf76521645db67836"
+    },
+    "action-30.cbor": {
+      "bytes": 319,
+      "sha256": "6eb1b5d722fcfb7fbe02a0d6dcb9cf4061edb170c6886e70752cd2541bac429d"
+    },
+    "action-31.cbor": {
+      "bytes": 147,
+      "sha256": "85ed34da81b0d0b1e32db64f61d94e67d4c1b88d935891fc5c0db13183aedc60"
+    },
+    "action-32.cbor": {
+      "bytes": 293,
+      "sha256": "790346a3ea129a1784fc024af86875a534f065f4746e4de226134af42f611fe5"
+    }
+  }
+}

@@ -1,0 +1,41 @@
+{
+  "id": "AF-CONF-CBOR-036",
+  "suite": "canonical-cbor",
+  "title": "map: shorter key sorts first regardless of lexical order ({\"b\":2,\"aa\":1})",
+  "kind": "encode",
+  "requirements": ["AF-DIG-003", "AF-DIG-004", "AF-DIG-005"],
+  "description": "The value encodes to exactly `expected.hex` and decodes back to the same value. `input.diag` is RFC 8949 §8 notation; `input.value` is the typed JSON form.",
+  "input": {
+    "diag": "{\"b\": 2, \"aa\": 1}",
+    "value": {
+      "map": [
+        [
+          {
+            "text": "aa"
+          },
+          {
+            "uint": 1
+          }
+        ],
+        [
+          {
+            "text": "b"
+          },
+          {
+            "uint": 2
+          }
+        ]
+      ]
+    }
+  },
+  "expected": {
+    "hex": "a261620262616101",
+    "roundTrip": true
+  },
+  "files": {
+    "encoded.cbor": {
+      "bytes": 8,
+      "sha256": "9ba01bc6133f5b08a6b955cc1372f5556170bc093939214953d0f05eb1e7630f"
+    }
+  }
+}

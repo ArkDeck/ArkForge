@@ -1,0 +1,27 @@
+{
+  "id": "AF-CONF-ADMISSION-014",
+  "suite": "admission",
+  "title": "precedence: a broken continuity outranks an expired deadline",
+  "kind": "derive",
+  "requirements": ["AF-AUTH-003", "AF-AUTH-004", "AF-AUTH-005"],
+  "description": "evaluate_freshness(snapshot, currentFacts). Digests are compared for equality only; their preimages are labels here.",
+  "input": {
+    "snapshot": "AF-CONF-ADMISSION-001",
+    "current": {
+      "nowEpochMs": 1770000125000,
+      "sawDetachSinceSnapshot": false,
+      "transportSessionDigest": "3f3af1ecebbd1410ab417ec0d27bbfcb5d340e177ae159b59fc8626c2dfd9175",
+      "deviceFactsDigest": "bd965159650cf76681c655f7bcdb497d7633fc0b7d70c00c949a9122e4e5e630",
+      "providerFactsDigest": "c75368aead326187a92311dab41bcf61bb202baf39d599ed35231ad7dc873e9c",
+      "toolchainFactsDigest": "cd11d7d43a0c360cd0046e34ad9e69b0298a1ed1f7fddd546756c56cc1f82da6",
+      "artifactFactsDigest": "9a188cc02191baf16e43ab5ddbfe0179c5c735a96145782fa34e068253129f66"
+    }
+  },
+  "expected": {
+    "verdict": "continuityBroken",
+    "reason": "deviceFactsChanged",
+    "permitsDispatch": false,
+    "retryableWithoutDeviceBlame": false
+  },
+  "files": {}
+}

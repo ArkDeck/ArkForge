@@ -1,0 +1,19 @@
+{
+  "id": "AF-CONF-PB-019",
+  "suite": "protobuf",
+  "title": "an unknown field is skipped (forward compatibility)",
+  "kind": "decode",
+  "requirements": ["AF-IPC-013"],
+  "description": "Decode the bytes as `Hello`.",
+  "input": {
+    "decoder": "Hello",
+    "hex": "080118024a0c667574757265206669656c64"
+  },
+  "expected": {
+    "result": "accept",
+    "protocolMajor": 1,
+    "protocolMinor": 0,
+    "sessionKind": 2
+  },
+  "files": {}
+}

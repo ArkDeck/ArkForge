@@ -1,0 +1,30 @@
+{
+  "id": "AF-CONF-YAML-023",
+  "suite": "strict-yaml",
+  "title": "alias marker inside a value is kept as literal text, never resolved",
+  "kind": "decode",
+  "requirements": ["AF-YAML-012"],
+  "description": "Parse `input.yaml` with the strict subset reader. The value tree has only scalars (text), sequences, mappings and null; typing happens in the consumer. `message` on a rejection is informative.",
+  "input": {
+    "yaml": "a: *x\n"
+  },
+  "expected": {
+    "result": "accept",
+    "value": {
+      "mapping": [
+        [
+          "a",
+          {
+            "scalar": "*x"
+          }
+        ]
+      ]
+    }
+  },
+  "files": {
+    "input.yaml": {
+      "bytes": 6,
+      "sha256": "4850f564cb7366400d48c31f56d58df9b2d39ddf9b37713426fca682e5e81ccf"
+    }
+  }
+}

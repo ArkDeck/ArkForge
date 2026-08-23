@@ -1,0 +1,47 @@
+{
+  "id": "AF-CONF-PERMIT-016",
+  "suite": "permit",
+  "title": "context mismatch: intent field differs",
+  "kind": "verify",
+  "requirements": ["AF-AUTH-019"],
+  "description": "verify_permit(permit, secret, intent, alreadyConsumed). The permit's signing body is `signing-body.cbor`; the tag and epoch are in `input`. The intent is the dispatch about to happen.",
+  "input": {
+    "basedOn": "AF-CONF-PERMIT-001",
+    "mutation": "planId",
+    "integrityTag": "d0a4dbc07944f6a802a4f157574f89ddc1cca5f9eb89c7b5c26d99884ea37ae0",
+    "permitEpoch": 1,
+    "verifierSecretAscii": "arkforge-arkdeck-permit-vector-secret",
+    "verifierEpoch": 1,
+    "alreadyConsumed": false,
+    "intent": {
+      "nowEpochMs": 1770000030000,
+      "controllerSessionId": "SESSION-VECTOR",
+      "jobId": "JOB-VECTOR",
+      "planId": "PLAN-OTHER",
+      "planDigest": "99eabe796385e792ea122de891eba93bfaccf1a1600e745007e8bcaa3821bc94",
+      "stepId": "STEP-ENSURE-MODE",
+      "attemptId": "ATTEMPT-1",
+      "publicStepDigest": "0942444ed717911d5f913e78ea7b8dec7aee96bea37236505a212297337ac855",
+      "privateActionDigest": "6ff89da59dcccc0d702f5d8fb7927f44ce41f45940c9f3bb72e2d65b17ca7f38",
+      "effectSetDigest": "6d01d80f815cd113b3169db08219658068577bd6da7aea5dea56cf9a60185b73",
+      "authorityBinding": {
+        "authorityNamespace": "arkdeck",
+        "bindingId": "BINDING-VECTOR",
+        "bindingRevision": 3,
+        "stableIdentityDigest": "ebd711e7cfb6d1fa699f96e2eef4a005767d3c389cbb43ef35235ffb532cb300"
+      },
+      "admittedDeviceFactsDigest": "0ff97f732588138265188c17879c4092c5a1ac251d76dc4c04f2254c3767f951"
+    }
+  },
+  "expected": {
+    "result": "reject",
+    "code": "PERMIT_CONTEXT_MISMATCH",
+    "field": "planId"
+  },
+  "files": {
+    "signing-body.cbor": {
+      "bytes": 641,
+      "sha256": "bae9c1e8d669e6850eb967524885bed0632b6adbb9de5fb3bea971250fb5cd51"
+    }
+  }
+}

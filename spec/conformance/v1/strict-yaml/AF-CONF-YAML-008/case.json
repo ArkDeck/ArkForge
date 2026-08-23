@@ -1,0 +1,30 @@
+{
+  "id": "AF-CONF-YAML-008",
+  "suite": "strict-yaml",
+  "title": "document start marker",
+  "kind": "decode",
+  "requirements": ["AF-YAML-001"],
+  "description": "Parse `input.yaml` with the strict subset reader. The value tree has only scalars (text), sequences, mappings and null; typing happens in the consumer. `message` on a rejection is informative.",
+  "input": {
+    "yaml": "---\na: 1\n"
+  },
+  "expected": {
+    "result": "accept",
+    "value": {
+      "mapping": [
+        [
+          "a",
+          {
+            "scalar": "1"
+          }
+        ]
+      ]
+    }
+  },
+  "files": {
+    "input.yaml": {
+      "bytes": 9,
+      "sha256": "5a8370e6ce53158c1b87c4faa088fa4c16227221b38002dd0207123bf58748c6"
+    }
+  }
+}

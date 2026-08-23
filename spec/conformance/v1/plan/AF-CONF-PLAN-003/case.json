@@ -1,0 +1,27 @@
+{
+  "id": "AF-CONF-PLAN-003",
+  "suite": "plan",
+  "title": "golden transcript → first observation and probe facts",
+  "kind": "digest",
+  "requirements": ["AF-TRN-001", "AF-TRN-002", "AF-TRN-020"],
+  "description": "Replay transcripts/dayu200-gj4-ecamp-96effff15.yaml through the transcript transport; discover yields exactly one observation.",
+  "input": {
+    "transcript": "transcripts/dayu200-gj4-ecamp-96effff15.yaml",
+    "transcriptFileSha256": "2bb4cff47ac57ef3bc64222e1b1dcfe22ffd4279e2f01c9f5d992e915d8649ab"
+  },
+  "expected": {
+    "transcriptDigest": "920f77d6e99a15d31524d1cd4200221792395aecfe946c6a2a0a7b9cc6a81e88",
+    "observationDiag": "{\"mode\": \"hdc-normal\", \"observationId\": \"OBS-PREFLIGHT\", \"serialEvidence\": {\"kind\": \"descriptor\", \"digest\": h'f0016d55ee3df292573214e5c7fc5f0c273c4f975a1a3d38610c9efe0c08eaab'}, \"topologyDigest\": h'f13c39593e926e3e3949a38f3622d1f78ea2c8a35eb3e04a9b756213b844a8d8', \"descriptorDigest\": h'67d2276b1667a4c9afa40c33bc3f94db400d381af51c1a9ab8ab958f1290d8f5', \"identityStrength\": \"protocolConfirmed\", \"protocolIdentity\": [], \"observedAtEpochMs\": 1754380841500, \"providerCandidates\": [], \"malformedDescriptor\": false}",
+    "probeFactsDigest": "7eb7e69966fb3538eb1c691d20249d5a4a2f22280d3aedcb344d019e6341625a",
+    "protocolFacts": {
+      "transport": "arkforge.transport.replay"
+    },
+    "profileCandidate": "{\"id\": \"org.openharmony.dayu200\", \"digest\": h'4d8b7dad099e5a5ab5bd1e0add5f52abb432899ea3506061f4c01854a70eeafc', \"version\": [1, 0, 0]}"
+  },
+  "files": {
+    "observation.cbor": {
+      "bytes": 339,
+      "sha256": "ab23830ecd90ffe5f7917593266396d33cc809637a7f3efbb4b450dc39ac6a79"
+    }
+  }
+}

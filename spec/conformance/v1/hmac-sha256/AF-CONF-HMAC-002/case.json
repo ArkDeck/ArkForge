@@ -1,0 +1,16 @@
+{
+  "id": "AF-CONF-HMAC-002",
+  "suite": "hmac-sha256",
+  "title": "RFC 4231 case 2 (key shorter than block)",
+  "kind": "digest",
+  "requirements": ["AF-DIG-002"],
+  "description": "HMAC-SHA-256(key, data), lowercase hex.",
+  "input": {
+    "keyHex": "4a656665",
+    "dataHex": "7768617420646f2079612077616e7420666f72206e6f7468696e673f"
+  },
+  "expected": {
+    "tag": "5bdcc146bf60754e6a042426089575c75a003f089d2739839dec58b964ec3843"
+  },
+  "files": {}
+}
