@@ -1,0 +1,3 @@
+# Conformance fixtures are normative byte sequences. Never let a checkout
+# rewrite their line endings, including on Windows with core.autocrlf enabled.
+/spec/conformance/** -text
