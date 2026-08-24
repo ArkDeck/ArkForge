@@ -25,7 +25,7 @@ pub mod tree;
 pub use tree::{Case, Tree};
 
 /// The spec version these fixtures belong to. Bumped with `spec/manifest.yaml`.
-pub const SPEC_VERSION: &str = "1.0.0-draft.3";
+pub const SPEC_VERSION: &str = "1.0.0-draft.4";
 
 /// Every fixture, in memory.
 pub fn generate() -> Tree {

@@ -4,7 +4,7 @@ status: informative
 Disagreements found while extracting the spec from `docs/architecture.md` and
 the Rust reference implementation. A row beginning with **RESOLVED** records
 the decision and regression coverage. All issues identified in this extraction
-are resolved in `1.0.0-draft.3`; future disagreements must be added as new rows
+are resolved in `1.0.0-draft.4`; future disagreements must be added as new rows
 before the draft can claim complete traceability again.
 
 | id | area | description | where found |
@@ -24,3 +24,4 @@ before the draft can claim complete traceability again.
 | SI-013 | PROF | **RESOLVED in 1.0.0-draft.3.** §18.2 now uses the actual v1 schema (`minimumVersion`/`maximumVersionExclusive`, complete transitions/data-impact, `recovery: null`) and links the machine schema. | `docs/architecture.md §18.2` |
 | SI-014 | CONF | **RESOLVED in 1.0.0-draft.3.** Added transcript-dispatch, reconcile, action-receipt and process-level CLI suites plus a dependency-free Draft-2020-12/CDDL/domain validator (`arkforge-conformance validate`). | `crates/arkforge-conformance`, `spec/conformance/v1` |
 | SI-015 | ID | **RESOLVED in 1.0.0-draft.3.** The three grammars are intentionally distinct: OpaqueId machine keys, narrow DeviceMode tokens, and bounded visible vendor labels. Receipt ingress enforces unique OpaqueId fact keys; labels are nonempty, unpadded, control-free and ≤128 UTF-8 bytes. | AF-ID-005..006, `crates/arkforge-core/src/profile.rs` |
+| SI-016 | CLI | **RESOLVED in 1.0.0-draft.4.** Machine help now publishes the complete supported-platform set (`macos`, `windows`) rather than the build host, making AF-CONF-CLI-002 one portable byte contract. | `crates/arkforge-cli/src/main.rs help_leaf_json`, AF-CONF-CLI-002 |

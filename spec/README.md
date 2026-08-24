@@ -1,6 +1,6 @@
 # ArkForge Specification v1
 
-> 状态：`1.0.0-draft.3`（2026-08-23）。本目录是 ArkForge 的**语言无关规范正本**。
+> 状态：`1.0.0-draft.4`（2026-08-24）。本目录是 ArkForge 的**语言无关规范正本**。
 > Rust、Zig、C++、Swift 都只是这份规范的实现；Rust 工作区是第一个参考实现，
 > 也是生成 conformance fixture 的 oracle，但**Rust 代码不是规范**。
 >

@@ -5923,11 +5923,10 @@ fn print_help_index(output: Output) {
 }
 
 fn supported_platforms_json() -> &'static str {
-    if cfg!(target_os = "windows") {
-        "[\"windows\"]"
-    } else {
-        "[\"macos\"]"
-    }
+    // This field describes where the command surface is supported, not the
+    // host that happened to build this binary. Keeping the complete, ordered
+    // set also makes the machine-help contract byte-identical across ports.
+    "[\"macos\",\"windows\"]"
 }
 
 fn child_specs(parent: &str) -> Vec<&'static HelpSpec> {

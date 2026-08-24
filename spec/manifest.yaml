@@ -4,8 +4,8 @@
 # Bump `version` on any normative change; list every file with its status.
 # `external` lists normative files that live outside spec/ for tooling reasons.
 schema: arkforge.spec-manifest/v1
-version: 1.0.0-draft.3
-date: 2026-08-23
+version: 1.0.0-draft.4
+date: 2026-08-24
 reference_implementation: rust workspace at this commit (not normative)
 precedence: [conformance/v1, model and state-machines and errors, requirements, docs/architecture.md, reference implementation]
 

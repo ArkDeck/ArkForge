@@ -1,6 +1,6 @@
 {
   "schema": "arkforge.conformance-manifest/v1",
-  "specVersion": "1.0.0-draft.3",
+  "specVersion": "1.0.0-draft.4",
   "generator": "crates/arkforge-conformance (Rust reference implementation as oracle)",
   "authority": "These bytes are normative. If a fixture and the prose in spec/ disagree, that is a spec defect to be resolved by a spec revision, never by an implementation choosing one side silently.",
   "suites": {
@@ -295,8 +295,8 @@
       "files": {
         "cli/AF-CONF-CLI-001/case.json": "54aff8f30bb7f0b4414d04cb4c27fbc53cd5a5c4a84bd60c91d5ceba8966c75b",
         "cli/AF-CONF-CLI-001/stdout.txt": "a06c95bfaa61cfd468163f1a43fdf1c1c96fe425efd14c4c0f1e9b5ffb8a7a67",
-        "cli/AF-CONF-CLI-002/case.json": "4806ccbca2205079e25ee526c7058bb416af4430e39617a5c1f96f1ab2aacde7",
-        "cli/AF-CONF-CLI-002/stdout.txt": "9ef9981f8e9bfbd02ceaff59cf17cf1eaa95648990210c06a5ba682cf5be43c7",
+        "cli/AF-CONF-CLI-002/case.json": "bb3722e5ae2d46175e45dd6a03d04324a2f56e8c1a7e3df994568656f4bbe8c0",
+        "cli/AF-CONF-CLI-002/stdout.txt": "9a65eb9cc2c042252e8900f4c596c3d2a05eacb8a308df9b2df7fd5e6696069c",
         "cli/AF-CONF-CLI-003/case.json": "b7c536a849706ab819f8b86815b09e97ee857e504d17b57ab4e303eb39d788e6",
         "cli/AF-CONF-CLI-003/stderr.txt": "b5154ef0c97b6b2bd206b5948ecb081763df9c243cc15b3b27b2ab8443cb8145",
         "cli/AF-CONF-CLI-004/case.json": "f635bb21d399d45d662832b9b37879f8edb18b80f6bacd34d425d7a0a1a220d2",

@@ -17,6 +17,9 @@ tests: [AF-CONF-CLI-001..004]
 tree; their subcommands are the machine-help index. A port MUST implement the same tree with
 the same spellings; `arkforge help [path] --format json` MUST describe it as
 `arkforge.command-help/v1` (index: `arkforge.command-help-index/v1`).
+`availability.platforms` names the complete ordered set of hosts that implement
+the command surface, not the host that built the current binary; for v1 it is
+exactly `["macos", "windows"]`, so machine help is byte-stable across both ports.
 
 ### AF-CLI-002 — structured output is pure
 status: normative
