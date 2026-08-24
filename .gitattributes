@@ -1,3 +1,8 @@
 # Conformance fixtures are normative byte sequences. Never let a checkout
 # rewrite their line endings, including on Windows with core.autocrlf enabled.
 /spec/conformance/** -text
+
+# Published profiles and transcripts are normative inputs to the fixture
+# generator, and their file digests are part of the generated contract.
+/profiles/** -text
+/transcripts/** -text
