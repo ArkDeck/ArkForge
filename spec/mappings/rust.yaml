@@ -172,7 +172,7 @@ areas:
         symbol: arkforge_ipc::framing::{read_frame, write_frame}; arkforge_ipc::wire::MAX_FRAME_BYTES
       - req: AF-IPC-003..005
         symbol: arkforge_ipc::{negotiate, SessionKind::may_call, PROTOCOL_MAJOR, PROTOCOL_MINOR}; arkforge_ipc::messages::{Hello, HelloAck, Request, Response}
-        tests: [crates/arkforge-ipc/tests/swift_sdk_vectors.rs, arkforge-conformance protobuf suite]
+        tests: [crates/arkforge-ipc/tests/swift_sdk_vectors.rs, crates/arkforge-client/src/controller.rs, crates/arkforge-client/src/public.rs, arkforge-conformance protobuf suite]
       - req: AF-IPC-006
         symbol: arkforged::main pairing bootstrap; arkforge_standalone::supervisor pairing epoch storage
       - req: AF-IPC-010..017
@@ -181,8 +181,9 @@ areas:
         symbol: arkforge_platform
         tests: [crates/arkforge-platform/tests/local_roundtrip.rs]
       - req: AF-IPC-019
-        symbol: arkforge_arkdeck_adapter::terminal_outcome; ArkDeck ArkForgeFlashSession strict terminal mapper
-        tests: [adapters/arkforge-arkdeck-adapter tests, ArkDeck ArkForgeFlashSessionContractTests]
+        symbol: ArkDeck ArkForgeFlashSession::terminalOutcome (external Swift consumer)
+        gap: No Rust adapter terminal mapper; external consumer tests are not run by this workspace.
+        tests: [ArkDeck ArkForgeFlashSessionContractTests]
   - area: ART
     symbols:
       - req: AF-ART-001..002, AF-ART-013

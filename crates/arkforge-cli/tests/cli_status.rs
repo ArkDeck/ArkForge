@@ -238,7 +238,9 @@ fn removed_leaves_are_absent_from_the_parser_help_and_completion() {
         );
     }
 
-    let index = stdout(&offline(&["help", "--all", "--format", "json"]));
+    let index = offline(&["help", "--all", "--format", "json"]);
+    assert!(index.status.success(), "{index:?}");
+    let index = stdout(&index);
     for command in [
         "doctor",
         "daemon status",

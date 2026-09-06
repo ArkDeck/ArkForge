@@ -237,11 +237,7 @@ impl PublicClient {
         profile_id: &str,
         device_id: &str,
     ) -> Result<Assessment, ClientError> {
-        let mut request = Vec::new();
-        wire::write_string(&mut request, 1, artifact_id);
-        wire::write_string(&mut request, 2, profile_id);
-        wire::write_string(&mut request, 3, device_id);
-        wire::write_string(&mut request, 4, "fullRestore");
+        let request = encode_public_assessment(artifact_id, profile_id, device_id);
         let payload = self.call(Api::MaterializePlan, request)?;
         match MaterializePlanResponse::decode(&payload)
             .map_err(|error| ClientError::decode("Invalid flash assessment", error))?
@@ -569,9 +565,27 @@ fn string_value(
         .map_err(|error| ClientError::decode(&format!("Invalid {context}"), error))
 }
 
+fn encode_public_assessment(artifact_id: &str, profile_id: &str, device_id: &str) -> Vec<u8> {
+    let mut request = Vec::new();
+    wire::write_string(&mut request, 1, artifact_id);
+    wire::write_string(&mut request, 2, profile_id);
+    wire::write_string(&mut request, 3, device_id);
+    wire::write_string(&mut request, 4, "fullRestore");
+    request
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn public_assessment_production_encoder_matches_wire_schema() {
+        let hex: String = encode_public_assessment("A", "P", "O")
+            .iter()
+            .map(|byte| format!("{byte:02x}"))
+            .collect();
+        assert_eq!(hex, "0a01411201501a014f220b66756c6c526573746f7265");
+    }
 
     #[test]
     fn observation_decoder_preserves_agent_visible_identity_evidence() {

@@ -145,6 +145,7 @@ fn the_help_contract_publishes_the_composite_shape_and_its_refusal_facts() {
         .args(["help", "--all", "--format", "json"])
         .output()
         .unwrap();
+    assert!(index.status.success(), "{index:?}");
     let index = stdout(&index);
     assert!(!index.contains("\"command\":\"flash assess\""));
     assert!(!index.contains("arkforge.flash-assessment/v1"));

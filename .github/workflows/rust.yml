@@ -21,3 +21,5 @@ jobs:
         run: cargo clippy --workspace --all-targets --all-features -- -D warnings
       - name: Test
         run: cargo test --workspace --all-targets
+      - name: Swift SDK tests
+        run: swift test

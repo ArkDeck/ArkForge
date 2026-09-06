@@ -38,6 +38,26 @@ pub struct MaterializeInput<'a> {
     pub authority_support_detail: &'a str,
 }
 
+impl MaterializeInput<'_> {
+    fn encode(&self) -> Vec<u8> {
+        let mut payload = Vec::new();
+        wire::write_string(&mut payload, 1, self.artifact_id);
+        wire::write_string(&mut payload, 2, self.profile_id);
+        wire::write_string(&mut payload, 3, self.device_id);
+        wire::write_string(&mut payload, 4, "fullRestore");
+        wire::write_string(&mut payload, 5, self.toolchain_id);
+        wire::write_string(&mut payload, 6, self.authority_namespace);
+        wire::write_string(&mut payload, 7, self.binding_id);
+        wire::write_uint64(&mut payload, 8, self.binding_revision);
+        wire::write_bytes(&mut payload, 9, self.stable_identity_sha256);
+        wire::write_string(&mut payload, 10, self.execution_purpose);
+        wire::write_bytes(&mut payload, 11, self.authority_support_key_sha256);
+        wire::write_string(&mut payload, 12, self.authority_support_state);
+        wire::write_string(&mut payload, 13, self.authority_support_detail);
+        payload
+    }
+}
+
 impl ControllerClient {
     pub fn connect(runtime_dir: &Path) -> Result<Self, ClientError> {
         let endpoint = LocalEndpoint::for_runtime(runtime_dir, LocalChannel::Controller);
@@ -89,20 +109,7 @@ impl ControllerClient {
         &mut self,
         input: &MaterializeInput<'_>,
     ) -> Result<MaterializePlanResponse, ClientError> {
-        let mut payload = Vec::new();
-        wire::write_string(&mut payload, 1, input.artifact_id);
-        wire::write_string(&mut payload, 2, input.profile_id);
-        wire::write_string(&mut payload, 3, input.device_id);
-        wire::write_string(&mut payload, 4, "fullRestore");
-        wire::write_string(&mut payload, 5, input.toolchain_id);
-        wire::write_string(&mut payload, 6, input.authority_namespace);
-        wire::write_string(&mut payload, 7, input.binding_id);
-        wire::write_uint64(&mut payload, 8, input.binding_revision);
-        wire::write_bytes(&mut payload, 9, input.stable_identity_sha256);
-        wire::write_string(&mut payload, 10, input.execution_purpose);
-        wire::write_bytes(&mut payload, 11, input.authority_support_key_sha256);
-        wire::write_string(&mut payload, 12, input.authority_support_state);
-        wire::write_string(&mut payload, 13, input.authority_support_detail);
+        let payload = input.encode();
         let response = self.call(Api::MaterializePlan, payload)?;
         MaterializePlanResponse::decode(&response)
             .map_err(|error| invalid_response("decode materializePlan", error))
@@ -267,4 +274,36 @@ fn invalid_response(context: &str, error: impl std::fmt::Display) -> ClientError
         10,
         false,
     )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn materialize_production_encoder_matches_swift_golden() {
+        let input = MaterializeInput {
+            artifact_id: "A",
+            profile_id: "P",
+            device_id: "O",
+            toolchain_id: "T",
+            authority_namespace: "N",
+            binding_id: "B",
+            binding_revision: 7,
+            stable_identity_sha256: &[0xaa, 0xbb],
+            execution_purpose: "primary",
+            authority_support_key_sha256: &[0xde, 0xad],
+            authority_support_state: "hardwareCampaign",
+            authority_support_detail: "AFA-AC-8",
+        };
+        let hex: String = input
+            .encode()
+            .iter()
+            .map(|byte| format!("{byte:02x}"))
+            .collect();
+        assert_eq!(
+            hex,
+            "0a01411201501a014f220b66756c6c526573746f72652a015432014e3a014240074a02aabb52077072696d6172795a02dead6210686172647761726543616d706169676e6a084146412d41432d38"
+        );
+    }
 }

@@ -2376,7 +2376,7 @@ fn run_flash_run(arguments: &[String], globals: Globals) -> Result<i32, CliError
         tokens: tokens.clone(),
         provenance: consent.0,
         model_assertion: consent.1,
-        hardware_campaign: partial.sealed_campaign.clone(),
+        hardware_campaign: partial.sealed_campaign,
         recorded_at_epoch_ms: now_epoch_ms()?,
     };
     let approval_id = approval::record(&runtime_dir, &approval)?;
@@ -3741,9 +3741,9 @@ fn run_job_recover(arguments: &[String], globals: Globals) -> Result<i32, CliErr
             format!(
                 "No superseding plan was created for {job_id}: {}",
                 if assessment.unavailable_reason.is_empty() {
-                    assessment.availability.clone()
+                    &assessment.availability
                 } else {
-                    assessment.unavailable_reason.clone()
+                    &assessment.unavailable_reason
                 }
             ),
             3,
@@ -7511,43 +7511,44 @@ mod tests {
 
     #[test]
     fn help_placeholders_files_and_ellipses_are_never_concrete_identifiers() {
-        let uppercase_digest = "A".repeat(64);
-        for artifact in [
-            "<artifact-id>",
-            "./firmware.tar.gz",
-            "...",
-            &uppercase_digest,
-        ] {
+        let validate_artifact = |artifact: &str| {
+            validate_against_command_tree_for_test(&strings(&[
+                "artifact",
+                "show",
+                "--artifact",
+                artifact,
+            ]))
+        };
+        assert!(validate_artifact(&"a".repeat(64)).is_ok());
+        for artifact in ["<artifact-id>", "./firmware.tar.gz", "...", &"A".repeat(64)] {
             assert!(
-                validate_against_command_tree_for_test(&strings(&[
-                    "flash",
-                    "assess",
-                    "--artifact",
-                    artifact,
-                    "--profile",
-                    "org.openharmony.dayu200@1.0.0",
-                    "--device",
-                    "OBS-1",
-                    "--intent",
-                    "full-restore",
-                ]))
-                .is_err(),
+                validate_artifact(artifact).is_err(),
                 "artifact value {artifact:?} must not parse"
             );
         }
-        assert!(
+        let validate_device = |device: &str| {
             validate_against_command_tree_for_test(&strings(&[
-                "device",
-                "list",
-                "--device",
-                "<observation-id>"
+                "device", "list", "--device", device,
             ]))
-            .is_err()
-        );
+        };
+        assert!(validate_device("OBS-1").is_ok());
+        assert!(validate_device("<observation-id>").is_err());
     }
 
     #[test]
     fn typed_relations_refuse_ambiguous_or_incomplete_effect_inputs() {
+        assert!(
+            validate_against_command_tree_for_test(&strings(&[
+                "apply",
+                "--plan",
+                "PLAN-1",
+                "--expect-plan-sha256",
+                &"0".repeat(64),
+                "--ack",
+                "data-loss:userdata",
+            ]))
+            .is_ok()
+        );
         assert!(
             validate_against_command_tree_for_test(&strings(&[
                 "daemon", "start", "--hdc", "/opt/hdc"
@@ -7582,7 +7583,6 @@ mod tests {
         );
         assert!(
             validate_against_command_tree_for_test(&strings(&[
-                "flash",
                 "apply",
                 "--plan",
                 "PLAN-1",

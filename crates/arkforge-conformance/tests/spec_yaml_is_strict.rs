@@ -70,3 +70,14 @@ fn published_profiles_and_transcripts_still_load() {
             .unwrap_or_else(|e| panic!("{}: {e}", transcript.display()));
     }
 }
+
+/// This historical capture predates SI-008's domain split. Rehashing its
+/// observations would alter evidence and the replay backend identity (SI-018).
+#[test]
+fn historical_usb_capture_bytes_are_preserved() {
+    let captured = include_bytes!("../../../transcripts/captured/dayu200-hdc-normal.yaml");
+    assert_eq!(
+        arkforge_core::digest::sha256(captured).to_hex(),
+        "301acc7d07623d71edc35881edb98923fae3e607f8cdac4dafe8c6b75b7470a9"
+    );
+}

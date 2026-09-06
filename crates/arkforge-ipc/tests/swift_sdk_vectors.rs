@@ -2,7 +2,7 @@ use arkforge_ipc::messages::{
     Assessment, ErrorBody, Hello, JobEvent, JobEventKind, KeyValue, MaterializePlanResponse,
     Request, Response, SubmitManagedControlReceiptRequest, SubmitStepPermitRequest,
 };
-use arkforge_ipc::{Api, SessionKind, Status, wire};
+use arkforge_ipc::{Api, SessionKind, Status};
 
 fn bytes(hex: &str) -> Vec<u8> {
     assert!(hex.len().is_multiple_of(2));
@@ -34,32 +34,6 @@ fn handshake_and_request_match_the_swift_sdk() {
     };
     assert_eq!(request.encode(), bytes("0a055245512d311003"));
     assert_eq!(Request::decode(&request.encode()).unwrap(), request);
-}
-
-#[test]
-fn materialize_plan_request_matches_the_swift_sdk() {
-    let mut encoded = Vec::new();
-    wire::write_string(&mut encoded, 1, "A");
-    wire::write_string(&mut encoded, 2, "P");
-    wire::write_string(&mut encoded, 3, "O");
-    wire::write_string(&mut encoded, 4, "fullRestore");
-    wire::write_string(&mut encoded, 5, "T");
-    wire::write_string(&mut encoded, 6, "N");
-    wire::write_string(&mut encoded, 7, "B");
-    wire::write_uint64(&mut encoded, 8, 7);
-    wire::write_bytes(&mut encoded, 9, &[0xaa, 0xbb]);
-    wire::write_string(&mut encoded, 10, "primary");
-    wire::write_bytes(&mut encoded, 11, &[0xde, 0xad]);
-    wire::write_string(&mut encoded, 12, "hardwareCampaign");
-    wire::write_string(&mut encoded, 13, "AFA-AC-8");
-    assert_eq!(
-        encoded,
-        bytes(
-            "0a01411201501a014f220b66756c6c526573746f72652a015432014e3a01424007\
-             4a02aabb52077072696d6172795a02dead6210686172647761726543616d706169676e\
-             6a084146412d41432d38"
-        )
-    );
 }
 
 #[test]
