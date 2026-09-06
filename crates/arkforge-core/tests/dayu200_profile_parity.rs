@@ -11,7 +11,7 @@ use arkforge_core::ids::PartitionId;
 use arkforge_core::profile::{self, HardwareRevisionPolicy, WriteDomainDeclaration};
 use arkforge_core::verification::{ReadDomainDeclaration, VerificationStrength};
 
-fn load() -> arkforge_core::profile::DeviceProfile {
+fn load() -> profile::DeviceProfile {
     let source = include_str!("../../../profiles/dayu200.yaml");
     profile::load(source).expect("profiles/dayu200.yaml must load and validate")
 }

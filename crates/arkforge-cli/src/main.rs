@@ -138,7 +138,6 @@ impl CliError {
 
     /// Attach the composite facts established before this refusal so a failure
     /// path carries the same information a success path would have returned.
-    #[allow(dead_code)]
     fn with_facts(mut self, facts: impl Into<String>) -> Self {
         self.extras.get_or_insert_default().facts = Some(facts.into());
         self

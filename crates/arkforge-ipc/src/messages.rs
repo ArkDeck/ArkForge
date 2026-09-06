@@ -1092,9 +1092,7 @@ impl ManagedControlRequest {
                 1 => request.job_id = value.as_str(1)?.to_string(),
                 2 => request.step_id = value.as_str(2)?.to_string(),
                 3 => request.request_id = value.as_str(3)?.to_string(),
-                4 => {
-                    request.action = wire::decode_enum(4, &value, ManagedControlAction::from_wire)?
-                }
+                4 => request.action = decode_enum(4, &value, ManagedControlAction::from_wire)?,
                 5 => request.permit_id = value.as_str(5)?.to_string(),
                 6 => request
                     .expected_facts
@@ -1531,7 +1529,7 @@ impl JobEvent {
             match field {
                 1 => event.job_id = value.as_str(1)?.to_string(),
                 2 => event.sequence = value.as_u64()?,
-                3 => event.kind = wire::decode_enum(3, &value, JobEventKind::from_wire)?,
+                3 => event.kind = decode_enum(3, &value, JobEventKind::from_wire)?,
                 4 => event.at_epoch_ms = value.as_u64()?,
                 5 => event.journal_record_sha256 = value.as_bytes()?.to_vec(),
                 6 => event.job_state = value.as_str(6)?.to_string(),
@@ -1712,9 +1710,7 @@ impl SubmitManagedControlReceiptRequest {
             match field {
                 1 => request.job_id = value.as_str(1)?.to_string(),
                 2 => request.request_id = value.as_str(2)?.to_string(),
-                3 => {
-                    request.action = wire::decode_enum(3, &value, ManagedControlAction::from_wire)?
-                }
+                3 => request.action = decode_enum(3, &value, ManagedControlAction::from_wire)?,
                 4 => request.accepted = value.as_bool()?,
                 5 => request.facts.push(KeyValue::decode(value.as_bytes()?)?),
                 6 => request.evidence_sha256 = value.as_bytes()?.to_vec(),

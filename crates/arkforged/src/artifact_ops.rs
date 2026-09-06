@@ -58,7 +58,7 @@ pub fn inspect_container<R: Read>(mut source: R) -> Result<ArtifactManifest, Str
         }
     }
     let head = magic[..filled].to_vec();
-    let rejoined = std::io::Read::chain(std::io::Cursor::new(head), source);
+    let rejoined = Read::chain(std::io::Cursor::new(head), source);
 
     if filled == 2 && magic[0] == 0x1f && magic[1] == 0x8b {
         dayu200::inspect(rejoined).map_err(|error| error.to_string())

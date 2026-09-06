@@ -38,11 +38,7 @@ fn gate_rows() -> Vec<(u32, String, String)> {
             let Ok(number) = cells[1].parse::<u32>() else {
                 continue; // the `|---|` separator row
             };
-            rows.push((
-                number,
-                cells[2].to_string(),
-                cells[3].replace("**", "").to_string(),
-            ));
+            rows.push((number, cells[2].to_string(), cells[3].replace("**", "")));
         }
     }
     rows

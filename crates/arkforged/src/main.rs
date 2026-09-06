@@ -13,7 +13,7 @@ use arkforge_ipc::messages::{Hello, HelloAck, Request, Response};
 use arkforge_ipc::{Api, PROTOCOL_MAJOR, PROTOCOL_MINOR, SessionKind, Status, negotiate};
 use arkforge_platform::{LocalChannel, LocalEndpoint, LocalListener, LocalStream};
 use arkforged::{Clock, Service};
-use std::io::{self, Read, Write};
+use std::io::{self, Read};
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 
@@ -135,8 +135,7 @@ fn run(arguments: &[String]) -> Result<(), String> {
         // timestamp at launch and expired every admission it ever offered.
         Clock::System,
         hardware_campaign.as_deref(),
-    )
-    .map_err(|error| error.to_string())?;
+    )?;
     if let Some(campaign) = &hardware_campaign {
         // Said out loud at startup, next to the native backend identity.
         // A daemon that can execute writes on an unverified combination is
@@ -220,7 +219,7 @@ fn run(arguments: &[String]) -> Result<(), String> {
 fn spawn_authority_liveness_monitor() {
     std::thread::spawn(|| {
         let mut trailing = [0_u8; 1];
-        let _ = std::io::stdin().read(&mut trailing);
+        let _ = io::stdin().read(&mut trailing);
         eprintln!("arkforged: paired authority liveness pipe closed; refusing orphaned service");
         std::process::exit(11);
     });
@@ -472,12 +471,6 @@ impl<'a> Read for ContentStream<'a> {
         self.position += count;
         Ok(count)
     }
-}
-
-/// Keeps `Write` in the import path honest about flushing.
-#[allow(dead_code)]
-fn flush<W: Write>(writer: &mut W) -> io::Result<()> {
-    writer.flush()
 }
 
 #[cfg(test)]

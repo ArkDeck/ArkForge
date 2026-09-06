@@ -1732,7 +1732,7 @@ impl Service {
                 .find(|step| step.step_id.as_str() == completed_step_id)
                 .is_some_and(|step| {
                     successful_dispatch_requires_rebind(
-                        arkforge_core::outcome::ActionDisposition::SemanticSuccess,
+                        ActionDisposition::SemanticSuccess,
                         step.expected_mode_before.as_ref(),
                         step.expected_mode_after.as_ref(),
                     )
@@ -2175,7 +2175,7 @@ impl Service {
                 )
             }
             Ok(PlanMaterialization::Executable(envelope)) => {
-                let maturity_key = arkforge_core::identity::MaturityKey {
+                let maturity_key = MaturityKey {
                     provider: envelope.provider.clone(),
                     profile: envelope.profile.clone(),
                     artifact_format: provider.descriptor().artifact_formats[0].clone(),
@@ -2243,10 +2243,7 @@ impl Service {
     }
 }
 
-fn profile_key(
-    id: &arkforge_core::ids::OpaqueId,
-    version: arkforge_core::identity::Version,
-) -> String {
+fn profile_key(id: &OpaqueId, version: Version) -> String {
     format!("{id}@{version}")
 }
 
@@ -2315,7 +2312,7 @@ fn encode_job_summary(job: &crate::jobs::Job) -> JobSummary {
 fn next_expected_mode(
     stored: &StoredPlan,
     job: Option<&crate::jobs::Job>,
-) -> Result<Option<arkforge_core::DeviceMode>, String> {
+) -> Result<Option<DeviceMode>, String> {
     let job = job.ok_or_else(|| "the job no longer exists".to_string())?;
     Ok(job.expected_mode(&stored.envelope))
 }
@@ -2348,11 +2345,11 @@ fn provider_for<'a>(
 }
 
 fn driver_facts_digest() -> Sha256Digest {
-    arkforge_core::digest::sha256(b"arkforge/driver-facts/none-measured")
+    sha256(b"arkforge/driver-facts/none-measured")
 }
 
 fn evidence_set_digest() -> Sha256Digest {
-    arkforge_core::digest::sha256(b"AD-003,AD-005,AD-006")
+    sha256(b"AD-003,AD-005,AD-006")
 }
 
 /// The research backend the Unisoc provider dispatches through — which is to
@@ -2362,7 +2359,7 @@ fn research_toolchain_identity() -> ToolchainIdentity {
         id: OpaqueId::new("research-inspect").expect("literal identifier"),
         kind: ToolchainKind::Replay,
         version: Version::new(0, 1, 0),
-        backend_digest: arkforge_core::digest::sha256(b"arkforge/research-inspect"),
+        backend_digest: sha256(b"arkforge/research-inspect"),
         upstream_ref: None,
     }
 }
@@ -2382,9 +2379,7 @@ pub fn native_toolchain_identity(backend_digest: Sha256Digest) -> ToolchainIdent
 /// executable. It can never pass execution readiness because no dispatcher is
 /// bound; the digest exists only to keep the assessment's maturity key exact.
 fn unbound_native_toolchain_identity() -> ToolchainIdentity {
-    native_toolchain_identity(arkforge_core::digest::sha256(
-        b"arkforge/native-rockusb/unbound",
-    ))
+    native_toolchain_identity(sha256(b"arkforge/native-rockusb/unbound"))
 }
 
 fn replay_toolchain_identity() -> ToolchainIdentity {
@@ -2392,7 +2387,7 @@ fn replay_toolchain_identity() -> ToolchainIdentity {
         id: OpaqueId::new("transcript-replay").expect("literal identifier"),
         kind: ToolchainKind::Replay,
         version: Version::new(1, 0, 0),
-        backend_digest: arkforge_core::digest::sha256(b"arkforge/transcript-replay"),
+        backend_digest: sha256(b"arkforge/transcript-replay"),
         upstream_ref: None,
     }
 }
@@ -2881,7 +2876,7 @@ mod tests {
             campaign,
         )
         .unwrap();
-        let backend_digest = arkforge_core::digest::sha256(b"one exact arkforged build");
+        let backend_digest = sha256(b"one exact arkforged build");
         service.bind_native_dispatcher(BoundToolchain {
             id: OpaqueId::new("arkforged-native-rockusb").unwrap(),
             backend_digest,

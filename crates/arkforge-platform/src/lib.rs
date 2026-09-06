@@ -261,7 +261,7 @@ mod platform {
     }
 
     pub fn fill_random(bytes: &mut [u8]) -> std::io::Result<()> {
-        std::fs::File::open("/dev/urandom")?.read_exact(bytes)
+        fs::File::open("/dev/urandom")?.read_exact(bytes)
     }
 
     pub fn verify_trusted_signature(_path: &Path) -> std::io::Result<()> {
@@ -272,11 +272,11 @@ mod platform {
     }
 
     pub fn sync_directory(path: &Path) -> std::io::Result<()> {
-        std::fs::File::open(path)?.sync_all()
+        fs::File::open(path)?.sync_all()
     }
 
     pub fn replace_file(source: &Path, target: &Path) -> std::io::Result<()> {
-        std::fs::rename(source, target)
+        fs::rename(source, target)
     }
 
     pub fn volume_available_bytes(path: &Path) -> std::io::Result<u64> {

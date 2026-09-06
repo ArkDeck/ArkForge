@@ -322,7 +322,7 @@ fn the_unisoc_provider_refuses_a_device_in_a_mode_it_does_not_declare() {
     });
     for (index, record) in transcript.records.iter_mut().enumerate() {
         record.sequence = index as u32 + 1;
-        record.kind = arkforge_transport::transcript::RecordKind::Observation;
+        record.kind = transcript::RecordKind::Observation;
     }
     let transport = TranscriptTransport::new(transcript);
     let observations = transport

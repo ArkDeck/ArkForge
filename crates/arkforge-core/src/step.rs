@@ -434,7 +434,6 @@ mod tests {
             Err(StepError::WriteWithoutContentDigest(_))
         ));
 
-        let mut step = step.clone();
         step.content_digest = Some(sha256(b"image"));
         step.semantic_target = Some(SemanticTarget::Device);
         assert!(matches!(

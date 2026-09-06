@@ -26,7 +26,7 @@ use arkforged::profiles;
 const MODEL_BINDING_FACT_KEYS: &[&str] = &["hdc.productModel", "const.product.model"];
 
 /// The profiles this build knows about.
-pub struct ProfileRegistry {
+pub(crate) struct ProfileRegistry {
     profiles: Vec<DeviceProfile>,
 }
 
@@ -35,24 +35,24 @@ impl ProfileRegistry {
     ///
     /// A shipped profile that does not validate is a build defect, not a user
     /// error, so it is reported rather than silently skipped.
-    pub fn load() -> Result<Self, String> {
+    pub(crate) fn load() -> Result<Self, String> {
         let profiles =
             profiles::shipped().map_err(|(name, error)| format!("{name} is invalid: {error}"))?;
         Ok(Self { profiles })
     }
 
-    pub fn profiles(&self) -> &[DeviceProfile] {
+    pub(crate) fn profiles(&self) -> &[DeviceProfile] {
         &self.profiles
     }
 
-    pub fn find(&self, reference: &str) -> Option<&DeviceProfile> {
+    pub(crate) fn find(&self, reference: &str) -> Option<&DeviceProfile> {
         self.profiles
             .iter()
             .find(|profile| profile_reference(profile) == reference)
     }
 
     /// Profiles whose declared artifact formats include this container format.
-    pub fn compatible_with_format(&self, format_id: &str) -> Vec<String> {
+    pub(crate) fn compatible_with_format(&self, format_id: &str) -> Vec<String> {
         let mut references = self
             .profiles
             .iter()
@@ -70,13 +70,13 @@ impl ProfileRegistry {
 }
 
 /// The exact `id@major.minor.patch` reference a caller may pass to `--profile`.
-pub fn profile_reference(profile: &DeviceProfile) -> String {
+pub(crate) fn profile_reference(profile: &DeviceProfile) -> String {
     format!("{}@{}", profile.id, profile.version)
 }
 
 /// How well the physical identity of a device is established.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum Strength {
+pub(crate) enum Strength {
     /// Nothing in this build recognizes the device.
     None,
     /// A measured USB identity places it in one or more protocol personalities.
@@ -88,7 +88,7 @@ pub enum Strength {
 }
 
 impl Strength {
-    pub fn as_str(self) -> &'static str {
+    pub(crate) fn as_str(self) -> &'static str {
         match self {
             Strength::None => "none",
             Strength::UsbMode => "usb-mode",
@@ -100,7 +100,7 @@ impl Strength {
 
 /// What the frontend concluded about one observation, and why.
 #[derive(Debug, Clone)]
-pub struct Identification {
+pub(crate) struct Identification {
     /// The physical product model, when a model-binding fact proved one.
     pub model: Option<String>,
     /// The single compatible profile, when the compatible set has exactly one
@@ -119,7 +119,7 @@ impl Identification {
     /// Only model-binding evidence goes in. An observation id or a bus position
     /// would change on every replug, which would make a remembered board look
     /// new each time it was plugged in.
-    pub fn physical_identity_digest(&self) -> Option<String> {
+    pub(crate) fn physical_identity_digest(&self) -> Option<String> {
         self.model.as_ref()?;
         let binding = self
             .evidence
@@ -133,7 +133,7 @@ impl Identification {
         Some(arkforge_core::digest::sha256(binding.join("\n").as_bytes()).to_hex())
     }
 
-    pub fn to_json(&self, json: impl Fn(&str) -> String) -> String {
+    pub(crate) fn to_json(&self, json: impl Fn(&str) -> String) -> String {
         let optional = |value: Option<&str>| value.map(&json).unwrap_or_else(|| "null".to_string());
         format!(
             "{{\"model\":{},\"profile\":{},\"profile_resolution\":{},\"compatible_profiles\":[{}],\"evidence\":[{}],\"strength\":{}}}",
@@ -156,14 +156,14 @@ impl Identification {
 }
 
 /// A `(key, value)` fact pair as the probe and observation surfaces report them.
-pub type Fact<'a> = (&'a str, &'a str);
+pub(crate) type Fact<'a> = (&'a str, &'a str);
 
 /// Builds the identification block for one observation.
 ///
 /// `probe_facts` is `Some` only when an active probe actually ran; passing an
 /// empty slice would claim a probe answered with nothing, which is a different
 /// fact from no probe at all.
-pub fn identify(
+pub(crate) fn identify(
     registry: &ProfileRegistry,
     observation: &DeviceObservationView,
     probe_facts: Option<&[Fact<'_>]>,
@@ -257,7 +257,7 @@ pub fn identify(
 /// declares nothing else. It is a function rather than a constant so that the
 /// day a combination admits two, the caller starts asking instead of quietly
 /// defaulting to the first.
-pub fn legal_intents(profile: &DeviceProfile, format_id: &str) -> Vec<&'static str> {
+pub(crate) fn legal_intents(profile: &DeviceProfile, format_id: &str) -> Vec<&'static str> {
     if profile
         .artifact_formats
         .iter()
@@ -270,14 +270,14 @@ pub fn legal_intents(profile: &DeviceProfile, format_id: &str) -> Vec<&'static s
 }
 
 /// One current observation together with what this build concluded about it.
-pub struct Candidate {
+pub(crate) struct Candidate {
     pub observation: DeviceObservationView,
     pub identification: Identification,
 }
 
 impl Candidate {
     /// A short line naming this candidate for a selection or refusal listing.
-    pub fn summary(&self) -> String {
+    pub(crate) fn summary(&self) -> String {
         format!(
             "{}  mode={}  model={}  profiles={}  strength={}",
             self.observation.observation_id,
@@ -298,7 +298,7 @@ impl Candidate {
 /// Three characters of a digest collide often enough to pick the wrong board,
 /// and picking the wrong board here is the failure this whole surface exists to
 /// prevent.
-pub const MIN_TARGET_PREFIX: usize = 4;
+pub(crate) const MIN_TARGET_PREFIX: usize = 4;
 
 /// Candidates a porcelain `--target` selector names.
 ///
@@ -307,7 +307,10 @@ pub const MIN_TARGET_PREFIX: usize = 4;
 /// widened into a prefix sweep. A raw USB serial is never available here: the
 /// public socket exposes only its domain-separated digest, so a caller
 /// selecting by serial selects by that digest.
-pub fn select_by_target<'a>(candidates: &'a [Candidate], selector: &str) -> Vec<&'a Candidate> {
+pub(crate) fn select_by_target<'a>(
+    candidates: &'a [Candidate],
+    selector: &str,
+) -> Vec<&'a Candidate> {
     let exact = candidates
         .iter()
         .filter(|candidate| {

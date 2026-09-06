@@ -69,7 +69,7 @@ struct StagingUse {
 #[derive(Debug, Clone)]
 pub struct PendingPreparation {
     pub job_id: String,
-    pub plan_actions: Vec<arkforge_core::projection::PrivateActionRecord>,
+    pub plan_actions: Vec<PrivateActionRecord>,
     pub profile: arkforge_core::profile::DeviceProfile,
     pub artifact_digest: Sha256Digest,
 }
@@ -211,7 +211,7 @@ impl<'a> Dispatcher<'a> {
         work: &PendingReconcile,
     ) -> Result<ReconcileDispatchOutcome, String> {
         let scratch = self.job_root(&work.job_id).join("reconcile-scratch");
-        std::fs::create_dir_all(&scratch).map_err(|error| error.to_string())?;
+        fs::create_dir_all(&scratch).map_err(|error| error.to_string())?;
 
         // Reconciliation observations must be fresh. No table/read-domain fact
         // retained from the interrupted execution is trusted as a new read.
@@ -328,7 +328,7 @@ impl<'a> Dispatcher<'a> {
         };
 
         let scratch = self.job_root(&work.job_id).join("scratch");
-        std::fs::create_dir_all(&scratch)
+        fs::create_dir_all(&scratch)
             .map_err(|error| DispatchFailure::BeforeAnyEffect(error.to_string()))?;
         let session = self
             .sessions
@@ -388,7 +388,7 @@ impl<'a> Dispatcher<'a> {
         &mut self,
         job_id: &str,
         artifact_digest: Sha256Digest,
-        plan_actions: &[arkforge_core::projection::PrivateActionRecord],
+        plan_actions: &[PrivateActionRecord],
         profile: &arkforge_core::profile::DeviceProfile,
         preparation_mode: &'static str,
     ) -> Result<StagingStats, DispatchFailure> {
@@ -443,7 +443,7 @@ impl<'a> Dispatcher<'a> {
         if !root.exists() {
             return Ok(());
         }
-        std::fs::remove_dir_all(&root).map_err(|error| format!("{}: {error}", root.display()))
+        fs::remove_dir_all(&root).map_err(|error| format!("{}: {error}", root.display()))
     }
 
     pub fn work_root(&self) -> &Path {
@@ -470,7 +470,7 @@ fn readback_observes_effect(record: &PrivateActionRecord, effect: &PersistentEff
 }
 
 fn expected_images(
-    plan_actions: &[arkforge_core::projection::PrivateActionRecord],
+    plan_actions: &[PrivateActionRecord],
     profile: &arkforge_core::profile::DeviceProfile,
 ) -> Result<BTreeMap<String, ExpectedImage>, DispatchFailure> {
     let mut expected = BTreeMap::new();
@@ -1093,8 +1093,8 @@ impl RockUsbPort for NativeRockUsbPort {
             .test_unit_ready()
             .map_err(|error| RockUsbPortFailure::BeforeIo(error.to_string()))?;
 
-        let started = std::time::Instant::now();
-        let mut hasher = arkforge_core::digest::Sha256::new();
+        let started = Instant::now();
+        let mut hasher = Sha256::new();
         let mut buffer = vec![0u8; ROCKUSB_TRANSFER_CHUNK_SECTORS as usize * LOGICAL_BLOCK_BYTES];
         let mut remaining = total_bytes;
         let mut position = begin_sector;
@@ -1181,7 +1181,7 @@ impl RockUsbPort for NativeRockUsbPort {
         protocol
             .test_unit_ready()
             .map_err(|error| RockUsbPortFailure::BeforeIo(error.to_string()))?;
-        let started = std::time::Instant::now();
+        let started = Instant::now();
         protocol
             .reset_device()
             .map_err(|error| RockUsbPortFailure::AfterIo(error.to_string()))?;
@@ -1196,10 +1196,9 @@ impl RockUsbPort for NativeRockUsbPort {
     }
 }
 
-pub fn executable_digest(path: &Path) -> Result<arkforge_core::Sha256Digest, String> {
-    let mut file =
-        std::fs::File::open(path).map_err(|error| format!("{}: {error}", path.display()))?;
-    let mut hasher = arkforge_core::digest::Sha256::new();
+pub fn executable_digest(path: &Path) -> Result<Sha256Digest, String> {
+    let mut file = fs::File::open(path).map_err(|error| format!("{}: {error}", path.display()))?;
+    let mut hasher = Sha256::new();
     let mut buffer = vec![0u8; 1 << 16];
     loop {
         let read = file
@@ -1410,7 +1409,7 @@ mod tests {
             "arkforge-native-empty-write-{}",
             std::process::id()
         ));
-        std::fs::write(&empty_path, []).unwrap();
+        fs::write(&empty_path, []).unwrap();
         let mut empty = StagedImage {
             member: "uboot.img".into(),
             path: empty_path.clone(),
@@ -1423,7 +1422,7 @@ mod tests {
             port.write_partition("uboot", 0x2000, &mut empty),
             Err(RockUsbPortFailure::BeforeIo(_))
         ));
-        let _ = std::fs::remove_file(empty_path);
+        let _ = fs::remove_file(empty_path);
     }
 
     #[test]

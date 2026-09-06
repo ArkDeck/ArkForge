@@ -304,7 +304,7 @@ impl FlashProvider for UnisocProvider {
             }],
             profile_candidates: vec![ProfileCandidate {
                 profile: profile_identity,
-                maturity: maturity_state.clone(),
+                maturity: maturity_state,
                 rationale: format!(
                     "research profile with {} writable targets and {} execution blockers",
                     request.profile.allowed_targets.len(),

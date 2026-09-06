@@ -210,7 +210,7 @@ pub(super) struct HdcControlPort<R = ProcessPort> {
 }
 
 impl HdcControlPort<ProcessPort> {
-    pub fn new(
+    pub(crate) fn new(
         executable: PathBuf,
         working_directory: PathBuf,
         expected_digest: Sha256Digest,
@@ -228,7 +228,7 @@ impl HdcControlPort<ProcessPort> {
 }
 
 impl<R: CommandPort> HdcControlPort<R> {
-    pub fn perform(
+    pub(crate) fn perform(
         &mut self,
         observations: &mut PublicClient,
         request: &ManagedControlRequest,

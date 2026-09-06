@@ -10,15 +10,15 @@ use arkforge_core::digest::{
 };
 use arkforge_core::identity::{HostPlatform, Version};
 
-pub const AUTHORITY_NAMESPACE: &str = "arkforge.cli";
-pub const IMPLEMENTATION_VERSION: Version = Version::new(0, 1, 0);
+pub(crate) const AUTHORITY_NAMESPACE: &str = "arkforge.cli";
+pub(crate) const IMPLEMENTATION_VERSION: Version = Version::new(0, 1, 0);
 
 const CONTROL_MAPPING: &str = "arkforge.cli-hdc-control/v1\nenterUpdater=accepted+exactDetach+uniqueLoaderRebind\nrebootToNormal=exactBoundNormalRebind\nreadProductFacts=const.product.model\nreadBuildFacts=const.ohos.fullname\n";
 const PERMIT_CODEC: &str =
     "arkforge.step-permit/rfc8949-v1+hmac-sha256;exact-stored-bytes;same-epoch-retransmit";
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct AuthoritySupportKey {
+pub(crate) struct AuthoritySupportKey {
     pub authority_namespace: AuthorityNamespace,
     pub authority_implementation_version: Version,
     pub authority_implementation_digest: Sha256Digest,
@@ -30,7 +30,7 @@ pub struct AuthoritySupportKey {
 }
 
 impl AuthoritySupportKey {
-    pub fn for_running_build(
+    pub(crate) fn for_running_build(
         implementation_digest: Sha256Digest,
         mechanics_maturity_key_digest: Sha256Digest,
         managed_control_tool_digest: Sha256Digest,
@@ -48,7 +48,7 @@ impl AuthoritySupportKey {
         }
     }
 
-    pub fn digest(&self) -> Result<Sha256Digest, String> {
+    pub(crate) fn digest(&self) -> Result<Sha256Digest, String> {
         let bytes = self
             .to_canonical_bytes()
             .map_err(|error| error.to_string())?;
@@ -89,7 +89,7 @@ impl CanonicalCbor for AuthoritySupportKey {
 /// Production support records are intentionally empty until the exact
 /// CLI-authority hardware and crash campaign is reviewed. Mechanics maturity
 /// cannot populate this registry and rescue evidence is not consulted.
-pub fn lookup(_key: &AuthoritySupportKey) -> AuthoritySupportState {
+pub(crate) fn lookup(_key: &AuthoritySupportKey) -> AuthoritySupportState {
     AuthoritySupportState::HardwareGated {
         blocker: "The exact arkforge.cli authority build/control-map/permit-codec/mechanics/platform combination has no reviewed hardware support record.".into(),
     }
@@ -98,7 +98,7 @@ pub fn lookup(_key: &AuthoritySupportKey) -> AuthoritySupportState {
 /// Classifies the exact authority key for a named acceptance campaign or the
 /// reviewed production registry. Campaign state is deliberately explicit and
 /// remains distinct from production support in every sealed plan and receipt.
-pub fn classify(
+pub(crate) fn classify(
     key: &AuthoritySupportKey,
     hardware_campaign: Option<&str>,
 ) -> AuthoritySupportState {
@@ -113,7 +113,7 @@ pub fn classify(
 /// Whether this build contains any maintainer-reviewed support record. Exact
 /// execution still requires [`lookup`] for the full key; this coarse fact is
 /// only for `status` readiness reporting.
-pub const fn has_reviewed_support_records() -> bool {
+pub(crate) const fn has_reviewed_support_records() -> bool {
     false
 }
 

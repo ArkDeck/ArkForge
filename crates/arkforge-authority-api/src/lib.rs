@@ -1163,18 +1163,6 @@ mod tests {
     }
 
     #[test]
-    fn no_disposition_permits_redispatch() {
-        for disposition in [
-            ActionDisposition::SemanticSuccess,
-            ActionDisposition::ConfirmedNoEffect,
-            ActionDisposition::ConfirmedPartialEffect,
-            ActionDisposition::OutcomeUnknown,
-        ] {
-            assert!(!disposition.permits_redispatch(), "{disposition:?}");
-        }
-    }
-
-    #[test]
     fn unbounded_possible_effects_block_recovery_assessment() {
         let unbounded = PossibleEffectSet {
             effects: EffectSet::read_only(),

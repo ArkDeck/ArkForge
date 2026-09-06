@@ -469,7 +469,7 @@ fn the_materialized_dayu200_plan_would_be_admissible_by_the_arkdeck_registry() {
     // every registry floor (architecture.md 5.4).
     use arkforge_arkdeck_adapter::check_plan;
 
-    let plan = crate::support::materialize_dayu200_plan();
+    let plan = support::materialize_dayu200_plan();
     let mapped = check_plan(&plan.public_steps)
         .unwrap_or_else(|refusal| panic!("the DAYU200 plan is not admissible: {refusal}"));
     assert_eq!(mapped.len(), 23);
@@ -510,7 +510,7 @@ mod support {
 
     /// Materializes the DAYU200 plan through the executable branch, so the
     /// admission check has a full step list to examine.
-    pub fn materialize_dayu200_plan() -> FlashPlanEnvelope {
+    pub(crate) fn materialize_dayu200_plan() -> FlashPlanEnvelope {
         let archive = fixture::dayu200_archive();
         let manifest = dayu200::inspect(archive.as_slice()).unwrap();
         let profile = profile::load(PROFILE_SOURCE).unwrap();

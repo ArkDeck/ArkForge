@@ -15,7 +15,7 @@ use std::io::{BufRead, IsTerminal, Write};
 ///
 /// Split from the terminal probing so the rule itself is testable: this is the
 /// whole of it, and every argument is a fact about the invocation.
-pub fn gate_open(
+pub(crate) fn gate_open(
     human_output: bool,
     no_input: bool,
     stdin: bool,
@@ -26,7 +26,7 @@ pub fn gate_open(
 }
 
 /// The gate for this process.
-pub fn open_for(human_output: bool, no_input: bool) -> bool {
+pub(crate) fn open_for(human_output: bool, no_input: bool) -> bool {
     gate_open(
         human_output,
         no_input,
@@ -37,7 +37,7 @@ pub fn open_for(human_output: bool, no_input: bool) -> bool {
 }
 
 /// Somebody who can be shown a line and asked a question.
-pub trait Prompt {
+pub(crate) trait Prompt {
     fn show(&mut self, line: &str);
     /// Asks and returns the trimmed answer, or `None` if the operator ended the
     /// input instead of answering.
@@ -45,7 +45,7 @@ pub trait Prompt {
 }
 
 /// The real operator, on the terminal this process is attached to.
-pub struct TerminalPrompt;
+pub(crate) struct TerminalPrompt;
 
 impl Prompt for TerminalPrompt {
     fn show(&mut self, line: &str) {
@@ -64,7 +64,7 @@ impl Prompt for TerminalPrompt {
 }
 
 /// One numbered choice offered to the operator.
-pub struct Choice {
+pub(crate) struct Choice {
     /// The value the caller gets back when this line is chosen.
     pub value: String,
     /// What the operator reads.
@@ -76,7 +76,7 @@ pub struct Choice {
 /// A numbered line list and nothing more: no raw mode, no full-screen frame, no
 /// filesystem browser. An empty answer or an ended input selects nothing, so
 /// pressing return out of habit cannot pick a device.
-pub fn select(prompt: &mut dyn Prompt, title: &str, choices: &[Choice]) -> Option<String> {
+pub(crate) fn select(prompt: &mut dyn Prompt, title: &str, choices: &[Choice]) -> Option<String> {
     if choices.is_empty() {
         return None;
     }
@@ -94,7 +94,7 @@ pub fn select(prompt: &mut dyn Prompt, title: &str, choices: &[Choice]) -> Optio
 
 /// What the confirmation screen must hear before it accepts.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub enum Confirmation {
+pub(crate) enum Confirmation {
     /// A plain `y`, for a board this host has proved and flashed before.
     Acknowledge,
     /// One of the product models the profile declares, typed in full.
@@ -108,7 +108,7 @@ impl Confirmation {
     /// machine cannot prove which board this is — every time, since a human
     /// assertion never becomes evidence — and once more for the first flash of
     /// a board and profile this host has proved but not yet written to.
-    pub fn required(
+    pub(crate) fn required(
         identity_is_strong: bool,
         first_flash: bool,
         declared_models: &[String],
@@ -120,7 +120,7 @@ impl Confirmation {
     }
 
     /// Whether an answer satisfies this confirmation.
-    pub fn accepts(&self, answer: &str) -> bool {
+    pub(crate) fn accepts(&self, answer: &str) -> bool {
         match self {
             Confirmation::Acknowledge => answer.eq_ignore_ascii_case("y"),
             Confirmation::TypeModel(models) => models
@@ -129,7 +129,7 @@ impl Confirmation {
         }
     }
 
-    pub fn question(&self) -> String {
+    pub(crate) fn question(&self) -> String {
         match self {
             Confirmation::Acknowledge => "Type y to accept these effects: ".to_string(),
             Confirmation::TypeModel(models) => format!(
@@ -141,7 +141,7 @@ impl Confirmation {
 }
 
 #[cfg(test)]
-pub struct ScriptedPrompt {
+pub(crate) struct ScriptedPrompt {
     pub answers: Vec<String>,
     pub shown: Vec<String>,
     pub asked: Vec<String>,
@@ -149,7 +149,7 @@ pub struct ScriptedPrompt {
 
 #[cfg(test)]
 impl ScriptedPrompt {
-    pub fn new(answers: &[&str]) -> Self {
+    pub(crate) fn new(answers: &[&str]) -> Self {
         Self {
             answers: answers
                 .iter()

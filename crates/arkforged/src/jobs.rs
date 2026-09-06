@@ -696,7 +696,7 @@ impl JobRegistry {
                     step_id: step_id.clone(),
                     request_id: format!("{}-control", snapshot.request_id),
                     action,
-                    permit_id: permit_id.clone(),
+                    permit_id,
                     expected_facts: expect
                         .into_iter()
                         .map(|(key, value)| KeyValue { key, value })
@@ -1141,7 +1141,7 @@ impl JobRegistry {
             };
             job.move_to(JobState::OutcomeUnknown)?;
             job.stopped = Some(JobStop::DispatchOutcomeUnknown {
-                step_id: step_id.clone(),
+                step_id,
                 disposition: outcome.disposition,
             });
             job.publish(
@@ -1488,7 +1488,7 @@ impl JobRegistry {
             };
             job.move_to(JobState::OutcomeUnknown)?;
             job.stopped = Some(JobStop::ControlOutcomeUnknown {
-                step_id: step_id.clone(),
+                step_id,
                 reason: request.failure_reason.clone(),
             });
             job.publish(
@@ -1517,7 +1517,7 @@ impl JobRegistry {
         let receipt = ActionReceiptSummary {
             job_id: transaction.job_id().to_string(),
             plan_id: transaction.plan_id().to_string(),
-            step_id: step_id.clone(),
+            step_id,
             action_id: String::new(),
             attempt_id: transaction.attempt_id().to_string(),
             permit_id: transaction.permit_id().to_string(),
@@ -1944,7 +1944,7 @@ pub fn canonical_facts_digest(facts: &[KeyValue]) -> Sha256Digest {
         bytes.extend_from_slice(value.as_bytes());
         bytes.push(b'\n');
     }
-    sha256::sha256(&bytes)
+    sha256(&bytes)
 }
 
 fn missing_expected_control_facts(expected: &[KeyValue], observed: &[KeyValue]) -> Vec<String> {

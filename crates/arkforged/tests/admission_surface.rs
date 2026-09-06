@@ -2329,7 +2329,7 @@ fn a_plan_built_for_another_toolchain_is_refused_by_digest() {
         })
         .unwrap();
 
-    let plan_id = arkforge_core::PlanId::new(fixture.envelope.plan_id.as_str()).unwrap();
+    let plan_id = PlanId::new(fixture.envelope.plan_id.as_str()).unwrap();
     let digest = fixture.envelope.plan_digest;
 
     // The tool the plan was built for.

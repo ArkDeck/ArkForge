@@ -148,7 +148,7 @@ fn the_manifest_digest_is_stable_across_two_inspections() {
 
 #[test]
 fn an_extra_unknown_member_is_reported_rather_than_ignored() {
-    let mut tar = arkforge_artifact::fixture::TarArchiveBuilder::new();
+    let mut tar = fixture::TarArchiveBuilder::new();
     for name in fixture::PINNED_MEMBER_NAMES {
         let body = if name == "parameter.txt" {
             format!("{}\n", fixture::PINNED_CMDLINE).into_bytes()
