@@ -29,7 +29,7 @@ ArkForge 目前处于**硬件准入阶段**。生产支持注册表仍为空；�
 
 ## 构建
 
-仓库固定使用 Rust 1.98.0 / Edition 2024。当前 runtime 面向 macOS 与 Windows x64；
+仓库固定使用 Rust 1.98.1 / Edition 2024。当前 runtime 面向 macOS 与 Windows x64；
 Windows 的发布签名和真机证据按独立成熟度组合验收。
 
 ```bash

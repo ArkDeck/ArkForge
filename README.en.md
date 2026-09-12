@@ -31,7 +31,7 @@ safety gates, and never publishes production support automatically. See the
 
 ## Build
 
-The repository pins Rust 1.98.0 and Edition 2024. The runtime currently targets macOS and Windows
+The repository pins Rust 1.98.1 and Edition 2024. The runtime currently targets macOS and Windows
 x64; Windows release signing and physical-device evidence are accepted as a separate maturity
 combination.
 
