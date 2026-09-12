@@ -31,9 +31,9 @@ safety gates, and never publishes production support automatically. See the
 
 ## Build
 
-The repository pins Rust 1.98.1 and Edition 2024. The runtime currently targets macOS and Windows
-x64; Windows release signing and physical-device evidence are accepted as a separate maturity
-combination.
+The repository follows Rust stable via `rust-toolchain.toml`; the minimum supported Rust version
+is 1.98.1, with Edition 2024. The runtime currently targets macOS and Windows x64; Windows release
+signing and physical-device evidence are accepted as a separate maturity combination.
 
 ```bash
 git clone https://github.com/ArkDeck/ArkForge.git
