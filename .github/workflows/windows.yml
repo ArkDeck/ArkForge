@@ -13,7 +13,7 @@ jobs:
     timeout-minutes: 45
     steps:
       - uses: actions/checkout@v7
-      - name: Show pinned toolchain
+      - name: Show Rust toolchain
         run: rustc --version --verbose
       - name: Format
         run: cargo fmt --all -- --check
