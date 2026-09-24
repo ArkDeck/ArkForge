@@ -27,3 +27,4 @@ arkforge-platform = { path = "../arkforge-platform" }
 
 [dev-dependencies]
 arkforge-arkdeck-adapter = { path = "../../adapters/arkforge-arkdeck-adapter" }
+arkforge-client = { path = "../arkforge-client" }

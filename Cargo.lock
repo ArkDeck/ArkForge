@@ -128,6 +128,7 @@ dependencies = [
  "arkforge-arkdeck-adapter",
  "arkforge-artifact",
  "arkforge-authority-api",
+ "arkforge-client",
  "arkforge-core",
  "arkforge-engine",
  "arkforge-ipc",

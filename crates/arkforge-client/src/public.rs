@@ -232,6 +232,18 @@ impl PublicClient {
         &self.runtime_info
     }
 
+    /// Bounds every later wait of this session for the daemon to answer, or
+    /// removes the bound with `None` (the default once the handshake is done).
+    /// A caller that must not hang on a daemon that stopped answering sets one.
+    pub fn set_timeout(&mut self, timeout: Option<Duration>) -> Result<(), ClientError> {
+        let stream = self.stream.as_mut().ok_or_else(|| {
+            ClientError::transport("Cannot bound the public session: connection is closed")
+        })?;
+        stream.set_read_timeout(timeout).map_err(|error| {
+            ClientError::transport(format!("Cannot bound the public session: {error}"))
+        })
+    }
+
     pub fn device_list(&mut self) -> Result<Vec<DeviceObservationView>, ClientError> {
         let payload = self.call(Api::DiscoverDevices, Vec::new())?;
         decode_observations(&payload)

@@ -2,10 +2,10 @@
 //!
 //! Short-lived `arkforge` commands never construct this type. Keeping it in a
 //! separate module makes the capability direction reviewable: public commands
-//! use `PublicClient`; only the supervisor can materialize, start, cancel,
-//! reconcile or answer admissions.
+//! use `PublicClient`; only the supervisor can import, inspect, discover,
+//! materialize, start, cancel, reconcile or answer admissions.
 
-use crate::{ClientError, DeviceObservationView};
+use crate::{ClientError, DeviceObservationView, PublicRuntimeInfo};
 use arkforge_ipc::framing::{read_frame, write_frame};
 use arkforge_ipc::messages::{
     ErrorBody, Hello, HelloAck, ImportArtifactRequest, ImportArtifactResponse,
@@ -27,6 +27,7 @@ const IMPORT_CHUNK_BYTES: usize = 4 * 1024 * 1024;
 pub struct ControllerClient {
     stream: Option<LocalStream>,
     next_request: u64,
+    runtime_info: PublicRuntimeInfo,
 }
 
 #[derive(Debug, Clone)]
@@ -151,7 +152,23 @@ impl ControllerClient {
         Ok(Self {
             stream: Some(stream),
             next_request: 1,
+            runtime_info: PublicRuntimeInfo {
+                protocol_major: ack.protocol_major,
+                protocol_minor: ack.protocol_minor,
+                daemon_version: ack.daemon_version,
+                execution_ready: ack.execution_ready,
+                execution_blockers: ack.execution_blockers,
+                toolchain_id: ack.toolchain_id,
+                toolchain_sha256: ack.toolchain_sha256,
+            },
         })
+    }
+
+    /// The standing facts the daemon acknowledged this session with: its
+    /// readiness to execute and the toolchain it bound, as the public session
+    /// reports them too.
+    pub fn runtime_info(&self) -> &PublicRuntimeInfo {
+        &self.runtime_info
     }
 
     /// Inspects an object already held by this daemon, using its typed manifest.
