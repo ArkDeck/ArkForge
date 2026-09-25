@@ -22,7 +22,7 @@ members = [
 version = "0.1.0"
 edition = "2024"
 rust-version = "1.98.1"
-license = "Apache-2.0"
+license = "MIT"
 repository = "https://github.com/ArkDeck/ArkForge"
 
 # ArkForge carries no third-party runtime dependencies. Every primitive the

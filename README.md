@@ -156,4 +156,4 @@ codec 均在仓内实现，并使用公开测试向量验证。设计理由见
 
 ## License
 
-Apache-2.0
+MIT，见 [LICENSE](LICENSE)。

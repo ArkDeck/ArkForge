@@ -168,4 +168,4 @@ vectors. See [AFD-0001](docs/decisions/AFD-0001-zero-dependency-core.md) for the
 
 ## License
 
-Apache-2.0
+MIT; see [LICENSE](LICENSE).
