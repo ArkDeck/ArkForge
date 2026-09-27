@@ -5,20 +5,27 @@
 //! use `PublicClient`; only the supervisor can materialize, start, cancel,
 //! reconcile or answer admissions.
 
-use crate::ClientError;
+use crate::{ClientError, DeviceObservationView};
 use arkforge_ipc::framing::{read_frame, write_frame};
 use arkforge_ipc::messages::{
-    ErrorBody, Hello, HelloAck, JobEvent, MaterializePlanResponse, Request, Response,
+    ErrorBody, Hello, HelloAck, ImportArtifactRequest, ImportArtifactResponse,
+    InspectArtifactResponse, JobEvent, MaterializePlanResponse, Request, Response,
     SubmissionOutcome, SubmitManagedControlReceiptRequest, SubmitStepPermitRequest,
     WatchJobRequest,
 };
 use arkforge_ipc::{Api, PROTOCOL_MAJOR, PROTOCOL_MINOR, SessionKind, Status, wire};
 use arkforge_platform::{LocalChannel, LocalEndpoint, LocalStream};
+use std::fs::File;
+use std::io::{Read, Write};
 use std::path::Path;
+use std::time::Duration;
+
+const HANDSHAKE_TIMEOUT: Duration = Duration::from_secs(10);
+const IMPORT_CHUNK_BYTES: usize = 4 * 1024 * 1024;
 
 #[derive(Debug)]
 pub struct ControllerClient {
-    stream: LocalStream,
+    stream: Option<LocalStream>,
     next_request: u64,
 }
 
@@ -59,7 +66,39 @@ impl MaterializeInput<'_> {
 }
 
 impl ControllerClient {
+    /// The Swift SDK's bound for waiting on archive import/inspection replies.
+    /// This is a per-read idle timeout, not a whole-exchange or write deadline.
+    pub const MATERIALIZATION_READ_TIMEOUT: Duration = Duration::from_secs(900);
+
     pub fn connect(runtime_dir: &Path) -> Result<Self, ClientError> {
+        Self::connect_inner(runtime_dir, None)
+    }
+
+    /// Opens a separate connection for bounded materialization response reads.
+    ///
+    /// Use `connect` for the execution session, whose job waits remain unbounded.
+    /// A timeout or interrupted exchange closes this connection; it never retries
+    /// a request or lets a late response become the next request's answer.
+    /// This does not bound writes or the total duration of a peer's slow reply.
+    pub fn connect_with_read_timeout(
+        runtime_dir: &Path,
+        timeout: Duration,
+    ) -> Result<Self, ClientError> {
+        if timeout.is_zero() {
+            return Err(ClientError::new(
+                "INVALID_TIMEOUT",
+                "The controller read timeout must be positive.",
+                2,
+                false,
+            ));
+        }
+        Self::connect_inner(runtime_dir, Some(timeout))
+    }
+
+    fn connect_inner(
+        runtime_dir: &Path,
+        read_timeout: Option<Duration>,
+    ) -> Result<Self, ClientError> {
         let endpoint = LocalEndpoint::for_runtime(runtime_dir, LocalChannel::Controller);
         let mut stream = LocalStream::connect(&endpoint).map_err(|error| {
             ClientError::new(
@@ -69,6 +108,13 @@ impl ControllerClient {
                 true,
             )
         })?;
+        stream
+            .set_read_timeout(Some(
+                read_timeout
+                    .unwrap_or(HANDSHAKE_TIMEOUT)
+                    .min(HANDSHAKE_TIMEOUT),
+            ))
+            .map_err(|error| transport("bound the controller handshake", error))?;
         let hello = Hello {
             protocol_major: PROTOCOL_MAJOR,
             protocol_minor: PROTOCOL_MINOR,
@@ -99,10 +145,62 @@ impl ControllerClient {
                 false,
             ));
         }
+        stream
+            .set_read_timeout(read_timeout)
+            .map_err(|error| transport("configure the controller response wait", error))?;
         Ok(Self {
-            stream,
+            stream: Some(stream),
             next_request: 1,
         })
+    }
+
+    /// Inspects an object already held by this daemon, using its typed manifest.
+    pub fn artifact_show(
+        &mut self,
+        artifact_id: &str,
+    ) -> Result<InspectArtifactResponse, ClientError> {
+        let mut payload = Vec::new();
+        wire::write_string(&mut payload, 1, artifact_id);
+        InspectArtifactResponse::decode(&self.call(Api::InspectArtifact, payload)?)
+            .map_err(|error| invalid_response("decode inspectArtifact", error))
+    }
+
+    /// Observes devices through the controller session without taking a device.
+    pub fn device_list(&mut self) -> Result<Vec<DeviceObservationView>, ClientError> {
+        crate::public::decode_observations(&self.call(Api::DiscoverDevices, Vec::new())?)
+    }
+
+    /// Streams a regular file through the existing controller import protocol.
+    /// Size comes from the opened file, and content uses at most 4 MiB per frame.
+    /// The daemon remains responsible for checking the expected content digest.
+    pub fn import_artifact(
+        &mut self,
+        path: &Path,
+        expected_sha256: &str,
+    ) -> Result<ImportArtifactResponse, ClientError> {
+        let mut file = File::open(path).map_err(|error| transport("open the artifact", error))?;
+        let metadata = file
+            .metadata()
+            .map_err(|error| transport("read the artifact size", error))?;
+        if !metadata.is_file() {
+            return Err(ClientError::new(
+                "INVALID_ARTIFACT_FILE",
+                "The artifact must be a regular file.",
+                2,
+                false,
+            ));
+        }
+        let header = ImportArtifactRequest {
+            expected_size_bytes: metadata.len(),
+            expected_sha256: expected_sha256.to_owned(),
+        };
+        let response = self.exchange(
+            Api::ImportArtifact,
+            header.encode(),
+            Some((&mut file, metadata.len())),
+        )?;
+        ImportArtifactResponse::decode(&response)
+            .map_err(|error| invalid_response("decode importArtifact", error))
     }
 
     pub fn materialize_plan(
@@ -203,15 +301,35 @@ impl ControllerClient {
     }
 
     fn call(&mut self, api: Api, payload: Vec<u8>) -> Result<Vec<u8>, ClientError> {
+        self.exchange(api, payload, None)
+    }
+
+    fn exchange(
+        &mut self,
+        api: Api,
+        payload: Vec<u8>,
+        content: Option<(&mut File, u64)>,
+    ) -> Result<Vec<u8>, ClientError> {
+        // Retain the connection only after a complete, correlated response.
+        // A partial frame, failed upload or timed-out read cannot be resumed.
+        let mut stream = self.stream.take().ok_or_else(|| {
+            transport(
+                "send a controller request",
+                "connection is closed after a failed exchange",
+            )
+        })?;
         let request = Request {
             request_id: format!("CLI-CONTROLLER-{}", self.next_request),
             api,
             payload,
         };
         self.next_request += 1;
-        write_frame(&mut self.stream, &request.encode())
+        write_frame(&mut stream, &request.encode())
             .map_err(|error| transport("send a controller request", error))?;
-        let frame = read_frame(&mut self.stream)
+        if let Some((file, size)) = content {
+            stream_artifact(&mut stream, file, size)?;
+        }
+        let frame = read_frame(&mut stream)
             .map_err(|error| transport("read a controller response", error))?
             .ok_or_else(|| transport("read a controller response", "connection closed"))?;
         let response = Response::decode(&frame)
@@ -223,10 +341,16 @@ impl ControllerClient {
             ));
         }
         if response.status == Status::Ok {
+            self.stream = Some(stream);
             return Ok(response.payload);
         }
         let error = ErrorBody::decode(&response.payload)
             .map_err(|decode| invalid_response("decode controller refusal", decode))?;
+        // Import may be refused before the daemon drains the content frames.
+        // Such a connection cannot safely carry a subsequent request.
+        if api != Api::ImportArtifact {
+            self.stream = Some(stream);
+        }
         let exit = match error.code.as_str() {
             "UNKNOWN_JOB" | "PROFILE_NOT_FOUND" | "ARTIFACT_NOT_INSPECTED" => 5,
             "STALE_JOB_SEQUENCE" | "PLAN_NOT_STARTABLE" => 6,
@@ -240,6 +364,35 @@ impl ControllerClient {
         };
         Err(ClientError::new(error.code, error.message, exit, false))
     }
+}
+
+fn stream_artifact(
+    stream: &mut impl Write,
+    file: &mut impl Read,
+    size: u64,
+) -> Result<(), ClientError> {
+    let mut remaining = size;
+    let mut buffer = vec![0; IMPORT_CHUNK_BYTES];
+    while remaining > 0 {
+        let count = remaining.min(buffer.len() as u64) as usize;
+        file.read_exact(&mut buffer[..count])
+            .map_err(|error| transport("read the artifact content", error))?;
+        write_frame(stream, &buffer[..count])
+            .map_err(|error| transport("send the artifact content", error))?;
+        remaining -= count as u64;
+    }
+    let mut extra = [0];
+    if file
+        .read(&mut extra)
+        .map_err(|error| transport("finish reading the artifact", error))?
+        != 0
+    {
+        return Err(transport(
+            "send the artifact",
+            "file size changed during import",
+        ));
+    }
+    write_frame(stream, &[]).map_err(|error| transport("finish the artifact stream", error))
 }
 
 fn first_string(payload: &[u8], field: u32, context: &str) -> Result<String, ClientError> {
@@ -279,6 +432,24 @@ fn invalid_response(context: &str, error: impl std::fmt::Display) -> ClientError
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_changed_artifact_size_never_sends_a_successful_terminator() {
+        let mut frames = Vec::new();
+        let error = stream_artifact(&mut frames, &mut b"short".as_slice(), 10).unwrap_err();
+        assert_eq!(error.code, "CONTROLLER_IO_FAILED");
+        assert!(frames.is_empty());
+
+        let error = stream_artifact(&mut frames, &mut b"grew".as_slice(), 3).unwrap_err();
+        assert_eq!(error.code, "CONTROLLER_IO_FAILED");
+        let mut reader = frames.as_slice();
+        assert_eq!(read_frame(&mut reader).unwrap(), Some(b"gre".to_vec()));
+        assert_eq!(
+            read_frame(&mut reader).unwrap(),
+            None,
+            "no empty success terminator"
+        );
+    }
 
     #[test]
     fn materialize_production_encoder_matches_swift_golden() {

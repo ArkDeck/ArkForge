@@ -112,13 +112,39 @@ pub struct PublicRuntimeInfo {
 
 #[derive(Debug)]
 pub struct PublicClient {
-    stream: LocalStream,
+    stream: Option<LocalStream>,
     next_request: u64,
     runtime_info: PublicRuntimeInfo,
 }
 
 impl PublicClient {
     pub fn connect(runtime_dir: &Path) -> Result<Self, ClientError> {
+        Self::connect_inner(runtime_dir, None)
+    }
+
+    /// Bounds idle reads on a separate inspection/assessment connection.
+    /// Default `connect` remains unbounded after its handshake. This is not a
+    /// write or whole-request deadline. A failed exchange closes the connection
+    /// without retrying, so its delayed response cannot answer another request.
+    pub fn connect_with_read_timeout(
+        runtime_dir: &Path,
+        timeout: Duration,
+    ) -> Result<Self, ClientError> {
+        if timeout.is_zero() {
+            return Err(ClientError::new(
+                "INVALID_TIMEOUT",
+                "The public read timeout must be positive.",
+                2,
+                false,
+            ));
+        }
+        Self::connect_inner(runtime_dir, Some(timeout))
+    }
+
+    fn connect_inner(
+        runtime_dir: &Path,
+        read_timeout: Option<Duration>,
+    ) -> Result<Self, ClientError> {
         let endpoint = LocalEndpoint::for_runtime(runtime_dir, LocalChannel::Public);
         let mut stream = LocalStream::connect(&endpoint).map_err(|error| {
             ClientError::new(
@@ -132,7 +158,11 @@ impl PublicClient {
             )
         })?;
         stream
-            .set_read_timeout(Some(HANDSHAKE_TIMEOUT))
+            .set_read_timeout(Some(
+                read_timeout
+                    .unwrap_or(HANDSHAKE_TIMEOUT)
+                    .min(HANDSHAKE_TIMEOUT),
+            ))
             .map_err(|error| {
                 ClientError::transport(format!("Cannot bound the public handshake: {error}"))
             })?;
@@ -178,14 +208,13 @@ impl PublicClient {
                 false,
             ));
         }
-        // The handshake proved someone is serving. Everything after it may
-        // legitimately take as long as it takes — a followed job, a device
-        // that is slow to answer — so the wait goes back to unbounded.
-        stream.set_read_timeout(None).map_err(|error| {
-            ClientError::transport(format!("Cannot restore the public session wait: {error}"))
+        // Default sessions can legitimately wait on a followed job. Only a
+        // caller that explicitly requested bounded reads keeps a timeout.
+        stream.set_read_timeout(read_timeout).map_err(|error| {
+            ClientError::transport(format!("Cannot configure the public session wait: {error}"))
         })?;
         Ok(Self {
-            stream,
+            stream: Some(stream),
             next_request: 1,
             runtime_info: PublicRuntimeInfo {
                 protocol_major: ack.protocol_major,
@@ -325,6 +354,9 @@ impl PublicClient {
     }
 
     fn call(&mut self, api: Api, payload: Vec<u8>) -> Result<Vec<u8>, ClientError> {
+        let mut stream = self.stream.take().ok_or_else(|| {
+            ClientError::transport("The public connection is closed after a failed exchange.")
+        })?;
         let request_id = format!("arkforge-{}-{}", std::process::id(), self.next_request);
         self.next_request += 1;
         let request = Request {
@@ -332,9 +364,9 @@ impl PublicClient {
             api,
             payload,
         };
-        write_frame(&mut self.stream, &request.encode())
+        write_frame(&mut stream, &request.encode())
             .map_err(|error| ClientError::transport(format!("Cannot send {api}: {error}")))?;
-        let frame = read_frame(&mut self.stream)
+        let frame = read_frame(&mut stream)
             .map_err(|error| {
                 ClientError::transport(format!("Cannot read the {api} response: {error}"))
             })?
@@ -357,10 +389,12 @@ impl PublicClient {
             ));
         }
         if response.status == Status::Ok {
+            self.stream = Some(stream);
             return Ok(response.payload);
         }
         let error = ErrorBody::decode(&response.payload)
             .map_err(|decode| ClientError::decode("Invalid daemon error", decode))?;
+        self.stream = Some(stream);
         let (exit_code, retryable) = match response.status {
             Status::InvalidArgument => (2, false),
             Status::NotFound => (5, false),
@@ -378,7 +412,9 @@ impl PublicClient {
     }
 }
 
-fn decode_observations(payload: &[u8]) -> Result<Vec<DeviceObservationView>, ClientError> {
+pub(crate) fn decode_observations(
+    payload: &[u8],
+) -> Result<Vec<DeviceObservationView>, ClientError> {
     let mut observations = Vec::new();
     let mut reader = wire::Reader::new(payload);
     while let Some((field, value)) = reader

@@ -289,6 +289,49 @@ impl KeyValue {
     }
 }
 
+/// The existing controller-only import header. Content follows in frames,
+/// terminated by an empty frame; a caller's path is never sent to the daemon.
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct ImportArtifactRequest {
+    pub expected_size_bytes: u64,
+    pub expected_sha256: String,
+}
+
+impl ImportArtifactRequest {
+    pub fn encode(&self) -> Vec<u8> {
+        let mut out = Vec::new();
+        wire::write_uint64(&mut out, 1, self.expected_size_bytes);
+        wire::write_string(&mut out, 2, &self.expected_sha256);
+        out
+    }
+}
+
+/// The content-addressed object returned by `importArtifact`.
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct ImportArtifactResponse {
+    pub artifact_id: String,
+    pub sha256: String,
+    pub size_bytes: u64,
+    pub deduplicated: bool,
+}
+
+impl ImportArtifactResponse {
+    pub fn decode(input: &[u8]) -> Result<Self, WireError> {
+        let mut response = Self::default();
+        let mut reader = Reader::new(input);
+        while let Some((field, value)) = reader.next_field()? {
+            match field {
+                1 => response.artifact_id = value.as_str(1)?.to_string(),
+                2 => response.sha256 = value.as_str(2)?.to_string(),
+                3 => response.size_bytes = value.as_u64()?,
+                4 => response.deduplicated = value.as_bool()?,
+                _ => {}
+            }
+        }
+        Ok(response)
+    }
+}
+
 /// `InspectArtifactResponse`.
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct InspectArtifactResponse {
