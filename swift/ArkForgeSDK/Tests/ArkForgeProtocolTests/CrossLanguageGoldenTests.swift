@@ -26,6 +26,20 @@ final class CrossLanguageGoldenTests: XCTestCase {
       bytes("0a055245512d311003"))
   }
 
+  func testImportHeaderAndResponseMatchRustVector() throws {
+    XCTAssertEqual(
+      ArkForgeImportArtifactRequest(expectedSizeBytes: 300, expectedSHA256: "D").encoded,
+      bytes("08ac02120144"))
+    XCTAssertEqual(
+      ArkForgeImportArtifactRequest(expectedSizeBytes: 0, expectedSHA256: "").encoded,
+      Data())
+    let response = try ArkForgeImportArtifactResponse.decode(bytes("0a014112014418ac022001"))
+    XCTAssertEqual(response.artifactID, "A")
+    XCTAssertEqual(response.contentSHA256, "D")
+    XCTAssertEqual(response.sizeBytes, 300)
+    XCTAssertTrue(response.deduplicated)
+  }
+
   func testPlanRequestMatchesRustVector() {
     let request = ArkForgeMaterializePlanRequest(
       artifactID: "A", profileID: "P", observationID: "O",

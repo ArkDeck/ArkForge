@@ -1,6 +1,7 @@
 use arkforge_ipc::messages::{
-    Assessment, ErrorBody, Hello, JobEvent, JobEventKind, KeyValue, MaterializePlanResponse,
-    Request, Response, SubmitManagedControlReceiptRequest, SubmitStepPermitRequest,
+    Assessment, ErrorBody, Hello, ImportArtifactRequest, ImportArtifactResponse, JobEvent,
+    JobEventKind, KeyValue, MaterializePlanResponse, Request, Response,
+    SubmitManagedControlReceiptRequest, SubmitStepPermitRequest,
 };
 use arkforge_ipc::{Api, SessionKind, Status};
 
@@ -34,6 +35,37 @@ fn handshake_and_request_match_the_swift_sdk() {
     };
     assert_eq!(request.encode(), bytes("0a055245512d311003"));
     assert_eq!(Request::decode(&request.encode()).unwrap(), request);
+}
+
+#[test]
+fn import_header_and_response_use_the_existing_swift_field_layout() {
+    assert_eq!(
+        ImportArtifactRequest {
+            expected_size_bytes: 300,
+            expected_sha256: "D".into(),
+        }
+        .encode(),
+        bytes("08ac02120144")
+    );
+    assert!(ImportArtifactRequest::default().encode().is_empty());
+    let expected = ImportArtifactResponse {
+        artifact_id: "A".into(),
+        sha256: "D".into(),
+        size_bytes: 300,
+        deduplicated: true,
+    };
+    assert_eq!(
+        ImportArtifactResponse::decode(&bytes("0a014112014418ac022001")).unwrap(),
+        expected
+    );
+    // An unknown field remains skippable; a known field with the wrong wire
+    // type and a truncated length remain errors under the existing codec.
+    assert_eq!(
+        ImportArtifactResponse::decode(&bytes("0a014112014418ac022001980601")).unwrap(),
+        expected
+    );
+    assert!(ImportArtifactResponse::decode(&bytes("0801")).is_err());
+    assert!(ImportArtifactResponse::decode(&bytes("0a0541")).is_err());
 }
 
 #[test]
