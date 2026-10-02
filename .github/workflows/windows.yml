@@ -14,7 +14,8 @@ jobs:
     steps:
       - uses: actions/checkout@v7
       - name: Update workspace Rust toolchain
-        run: rustup toolchain install --profile minimal --component rustfmt,clippy --no-self-update
+        # Without an explicit channel, rustup can reuse the runner's stale stable install.
+        run: rustup toolchain install stable --profile minimal --component rustfmt,clippy --no-self-update
       - name: Show Rust toolchain
         run: rustc --version --verbose
       - name: Format
