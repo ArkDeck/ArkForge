@@ -13,6 +13,8 @@ jobs:
     timeout-minutes: 45
     steps:
       - uses: actions/checkout@v7
+      - name: Update workspace Rust toolchain
+        run: rustup toolchain install --profile minimal --component rustfmt,clippy --no-self-update
       - name: Show Rust toolchain
         run: rustc --version --verbose
       - name: Format

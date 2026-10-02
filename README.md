@@ -29,7 +29,7 @@ ArkForge 目前处于**硬件准入阶段**。生产支持注册表仍为空；�
 
 ## 构建
 
-仓库通过 `rust-toolchain.toml` 跟随 Rust stable，最低支持 Rust 1.98.1 / Edition 2024。
+仓库通过 `rust-toolchain.toml` 跟随 Rust stable，最低支持 Rust 1.99.0 / Edition 2024。
 当前 runtime 面向 macOS 与 Windows x64；Windows 的发布签名和真机证据按独立成熟度组合验收。
 
 ```bash
