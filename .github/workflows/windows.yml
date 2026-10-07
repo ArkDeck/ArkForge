@@ -44,3 +44,4 @@ jobs:
         run: |
           & .\packaging\windows\Test-WindowsAcceptanceContract.ps1
           & .\packaging\windows\Test-ReleaseBundle.ps1
+          & .\packaging\windows\Test-HdcPackage.ps1

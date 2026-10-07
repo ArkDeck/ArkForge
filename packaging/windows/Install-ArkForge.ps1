@@ -55,10 +55,12 @@ if ($trustedManifest.schema -ne 'arkforge.windows-trusted-manifest/v1' -or
 foreach ($fact in $trustedManifest.files) {
     Assert-PackageFile $packageRoot $fact
 }
-foreach ($relative in @('bin\arkforge.exe', 'bin\arkforged.exe', 'tools\hdc.exe', 'Install-ArkForge.ps1', 'Uninstall-ArkForge.ps1', 'Test-ArkForgePackage.ps1')) {
+foreach ($relative in @('bin\arkforge.exe', 'bin\arkforged.exe', 'tools\hdc.exe', 'Install-ArkForge.ps1', 'Uninstall-ArkForge.ps1', 'Test-ArkForgePackage.ps1', 'ReleaseBundle.psm1')) {
     Assert-TrustedSignature (Join-Path $packageRoot $relative) $trustedManifest.certificateThumbprint
 }
 Assert-TrustedSignature (Join-Path $packageRoot 'driver\arkforge-rockusb.cat')
+Import-Module (Join-Path $packageRoot 'ReleaseBundle.psm1') -Force
+Assert-ArkForgeHdcPackage -PackageRoot $packageRoot -CertificateThumbprint $trustedManifest.certificateThumbprint -ManifestFiles $trustedManifest.files
 $receipt = Get-Content -LiteralPath (Join-Path $packageRoot 'package-receipt.json') -Raw | ConvertFrom-Json
 if ($receipt.schema -ne 'arkforge.windows-package-receipt/v1') {
     throw "Unsupported informational receipt schema: $($receipt.schema)"

@@ -266,4 +266,129 @@ function New-ArkForgeReleaseBundle {
     finally { foreach ($stream in @($streams + $copiedStreams)) { $stream.Dispose() } }
 }
 
-Export-ModuleMember -Function New-ArkForgeReleaseBundle, Get-ArkForgeReleaseBundleMembers
+function Assert-HdcPath([string]$Path, [bool]$Directory = $false) {
+    $full = [IO.Path]::GetFullPath($Path)
+    [void](Assert-PlainBundlePath $full $Directory)
+    $parent = [IO.Directory]::GetParent($full)
+    while ($null -ne $parent) {
+        [void](Assert-PlainBundlePath $parent.FullName $true)
+        $parent = $parent.Parent
+    }
+    return $full
+}
+
+function Assert-HdcImage([IO.Stream]$Stream, [bool]$Library) {
+    $reader = [IO.BinaryReader]::new($Stream, [Text.Encoding]::ASCII, $true)
+    try {
+        $Stream.Position = 0
+        if ($Stream.Length -lt 64 -or $Stream.Length -gt 67108864 -or $reader.ReadUInt16() -ne 0x5a4d) { throw 'Invalid bounded HDC PE image.' }
+        $Stream.Position = 0x3c
+        $pe = [long]$reader.ReadUInt32()
+        if ($pe -gt $Stream.Length - 26) { throw 'Invalid HDC PE header.' }
+        $Stream.Position = $pe
+        if ($reader.ReadUInt32() -ne 0x00004550 -or $reader.ReadUInt16() -ne 0x8664) { throw 'HDC package images must be AMD64.' }
+        $Stream.Position = $pe + 22
+        $flags = $reader.ReadUInt16()
+        if (($flags -band 2) -eq 0 -or (($flags -band 0x2000) -ne 0) -ne $Library) { throw 'HDC executable/library PE kind mismatch.' }
+        $Stream.Position = $pe + 24
+        if ($reader.ReadUInt16() -ne 0x20b) { throw 'HDC package images must be PE32+.' }
+    }
+    finally { $reader.Dispose(); $Stream.Position = 0 }
+    $imports = @(Get-ImageImportedLibraries $Stream)
+    # HDC's official Windows SDK build uses the OS Universal CRT API set.
+    # This HDC-only list does not extend the static-CRT ArkForge bundle closure.
+    $ucrt = @('api-ms-win-crt-convert-l1-1-0.dll', 'api-ms-win-crt-environment-l1-1-0.dll',
+        'api-ms-win-crt-filesystem-l1-1-0.dll', 'api-ms-win-crt-heap-l1-1-0.dll',
+        'api-ms-win-crt-locale-l1-1-0.dll', 'api-ms-win-crt-math-l1-1-0.dll',
+        'api-ms-win-crt-multibyte-l1-1-0.dll', 'api-ms-win-crt-private-l1-1-0.dll',
+        'api-ms-win-crt-runtime-l1-1-0.dll', 'api-ms-win-crt-stdio-l1-1-0.dll',
+        'api-ms-win-crt-string-l1-1-0.dll', 'api-ms-win-crt-time-l1-1-0.dll',
+        'api-ms-win-crt-utility-l1-1-0.dll')
+    foreach ($name in $imports) {
+        if (-not $Library -and $name -ieq 'libusb_shared.dll') { continue }
+        if ($name.ToLowerInvariant() -in $ucrt) { continue }
+        Assert-SystemImageDependencies @($name)
+    }
+    return $imports
+}
+
+function Open-HdcInputs([string]$HdcPath, [string]$NoticePath) {
+    $held = @()
+    try {
+        $hdc = Assert-HdcPath $HdcPath
+        $stream = [IO.File]::Open($hdc, [IO.FileMode]::Open, [IO.FileAccess]::Read, [IO.FileShare]::Read)
+        $held += [ordered]@{ path = 'tools/hdc.exe'; source = $hdc; stream = $stream; facts = Get-StreamFacts $stream }
+        $imports = @(Assert-HdcImage $stream $false)
+        if ('libusb_shared.dll' -in $imports) {
+            $usb = Assert-HdcPath (Join-Path ([IO.Path]::GetDirectoryName($hdc)) 'libusb_shared.dll')
+            $stream = [IO.File]::Open($usb, [IO.FileMode]::Open, [IO.FileAccess]::Read, [IO.FileShare]::Read)
+            $held += [ordered]@{ path = 'tools/libusb_shared.dll'; source = $usb; stream = $stream; facts = Get-StreamFacts $stream }
+            [void](Assert-HdcImage $stream $true)
+        }
+        if (-not $NoticePath) { $NoticePath = Join-Path ([IO.Path]::GetDirectoryName($hdc)) 'NOTICE.txt' }
+        $notice = Assert-HdcPath $NoticePath
+        $stream = [IO.File]::Open($notice, [IO.FileMode]::Open, [IO.FileAccess]::Read, [IO.FileShare]::Read)
+        $held += [ordered]@{ path = 'tools/NOTICE.txt'; source = $notice; stream = $stream; facts = Get-StreamFacts $stream }
+        if ($stream.Length -lt 1 -or $stream.Length -gt 2097152) { throw 'HDC notice must be bounded whole source bytes.' }
+        return ,$held
+    }
+    catch {
+        foreach ($heldFile in $held) { $heldFile.stream.Dispose() }
+        throw
+    }
+}
+
+function Copy-HdcInput($InputFile, [string]$Destination) {
+    # Every source handle denies write/delete until the complete copy is checked.
+    [void](Assert-HdcPath $InputFile.source)
+    $before = Get-StreamFacts $InputFile.stream
+    if ($before.sha256 -cne $InputFile.facts.sha256 -or $before.bytes -ne $InputFile.facts.bytes) { throw 'HDC source drift before copy.' }
+    $output = [IO.File]::Open($Destination, [IO.FileMode]::CreateNew, [IO.FileAccess]::ReadWrite, [IO.FileShare]::None)
+    try {
+        $InputFile.stream.Position = 0
+        $InputFile.stream.CopyTo($output, 16384)
+        $output.Flush($true)
+        $copied = Get-StreamFacts $output
+        $source = Get-StreamFacts $InputFile.stream
+        [void](Assert-HdcPath $InputFile.source)
+        if ($copied.sha256 -cne $before.sha256 -or $copied.bytes -ne $before.bytes -or
+            $source.sha256 -cne $before.sha256 -or $source.bytes -ne $before.bytes) { throw 'Whole HDC source/copy bytes drifted.' }
+    }
+    finally { $output.Dispose() }
+}
+
+function Copy-ArkForgeHdcPackage([string]$HdcPath, [string]$ToolsPath, [string]$NoticePath = '') {
+    $tools = Assert-HdcPath $ToolsPath $true
+    if (@(Get-ChildItem -LiteralPath $tools -Force).Count -ne 0) { throw 'HDC staging directory must be fresh and empty.' }
+    $held = Open-HdcInputs $HdcPath $NoticePath
+    try {
+        foreach ($heldFile in $held) { Copy-HdcInput $heldFile (Join-Path $tools ([IO.Path]::GetFileName($heldFile.path))) }
+        return @($held | ForEach-Object { [ordered]@{ path = $_.path; sha256 = $_.facts.sha256; bytes = $_.facts.bytes } })
+    }
+    finally { foreach ($heldFile in $held) { $heldFile.stream.Dispose() } }
+}
+
+function Assert-ArkForgeHdcPackage([string]$PackageRoot, [string]$CertificateThumbprint, [object[]]$ManifestFiles) {
+    $tools = Assert-HdcPath (Join-Path $PackageRoot 'tools') $true
+    $held = Open-HdcInputs (Join-Path $tools 'hdc.exe') (Join-Path $tools 'NOTICE.txt')
+    try {
+        $names = @($held | ForEach-Object { [IO.Path]::GetFileName($_.path) })
+        $entries = @(Get-ChildItem -LiteralPath $tools -Force)
+        if ($entries.Count -ne $names.Count -or @($entries | Where-Object { $_.PSIsContainer -or $_.Name -cnotin $names }).Count -ne 0) { throw 'HDC tools contain undeclared members.' }
+        foreach ($heldFile in $held) {
+            if (-not $heldFile.path.EndsWith('/NOTICE.txt', [StringComparison]::Ordinal)) {
+                $signature = Get-AuthenticodeSignature -LiteralPath $heldFile.source
+                if ($signature.Status -ne [Management.Automation.SignatureStatus]::Valid -or $null -eq $signature.SignerCertificate -or
+                    $signature.SignerCertificate.Thumbprint -ine $CertificateThumbprint) { throw 'HDC package release signature mismatch.' }
+            }
+            $boundFacts = @($ManifestFiles | Where-Object { $_.path -ceq $heldFile.path })
+            if ($boundFacts.Count -ne 1 -or $boundFacts[0].sha256 -cnotmatch '^[0-9a-f]{64}$' -or
+                ($boundFacts[0].bytes -isnot [int] -and $boundFacts[0].bytes -isnot [long]) -or
+                $boundFacts[0].sha256 -cne $heldFile.facts.sha256 -or
+                $boundFacts[0].bytes -ne $heldFile.facts.bytes) { throw 'HDC member is not wholly bound by the signed package manifest.' }
+        }
+    }
+    finally { foreach ($heldFile in $held) { $heldFile.stream.Dispose() } }
+}
+
+Export-ModuleMember -Function New-ArkForgeReleaseBundle, Get-ArkForgeReleaseBundleMembers, Copy-ArkForgeHdcPackage, Assert-ArkForgeHdcPackage
