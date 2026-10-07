@@ -61,9 +61,12 @@ Bundle construction follows executable signing and verification and precedes
 the existing signed `ArkForge.PackageManifest.ps1`, which binds the nested
 manifest and every bundle member. The informational package receipt names the
 bundle and its manifest digest. Keep that outer signed package with any exported
-bundle ZIP. ArkDeck independently checks its closed manifest/inventory and the
-native executable trust/identity when loading the bundle; the outer installer
-signature is not a substitute for those checks. Its bundle path is the nested
+bundle ZIP. ArkDeck independently checks its closed manifest/inventory, native
+file identities and byte hashes when loading the bundle. Those checks do not
+perform Authenticode verification or establish AF-W1; retain the accepted
+signed outer package and its matching physical receipt as the delivery proof.
+The outer installer signature is not a substitute for the inventory checks.
+Its bundle path is the nested
 `ArkForge.release-bundle` directory, not the installer/package root.
 
 Software producer regressions run without launching any image or device:
