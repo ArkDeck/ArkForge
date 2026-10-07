@@ -57,6 +57,7 @@ function Get-RelativeFileFacts([string]$Root) {
 
 $scriptRoot = Split-Path -Parent $MyInvocation.MyCommand.Path
 $repoRoot = (Resolve-Path -LiteralPath (Join-Path $scriptRoot '..\..')).Path
+Import-Module (Join-Path $scriptRoot 'ReleaseBundle.psm1') -Force
 if (-not $OutputDirectory) {
     $OutputDirectory = Join-Path $repoRoot 'target\arkforge-windows-release'
 }
@@ -93,12 +94,24 @@ try {
     New-Item -ItemType Directory -Path (Join-Path $stage 'tools') -Force | Out-Null
     New-Item -ItemType Directory -Path (Join-Path $stage 'driver') -Force | Out-Null
 
-    Invoke-Checked $cargo @(
-        'build', '--locked', '--release', '--target', 'x86_64-pc-windows-msvc',
-        '-p', 'arkforge-cli', '--bin', 'arkforge',
-        '-p', 'arkforged', '--bin', 'arkforged'
-    )
-    $releaseRoot = Join-Path $repoRoot 'target\x86_64-pc-windows-msvc\release'
+    $targetRoot = if ($env:CARGO_TARGET_DIR) { [IO.Path]::GetFullPath($env:CARGO_TARGET_DIR) } else { Join-Path $repoRoot 'target' }
+    $previousRustFlags = $env:RUSTFLAGS
+    $previousEncodedRustFlags = $env:CARGO_ENCODED_RUSTFLAGS
+    try {
+        # A closed release bundle cannot depend on a build-host VC runtime.
+        # The final PE import inspection independently verifies this closure.
+        $env:RUSTFLAGS = '-C target-feature=+crt-static'
+        $env:CARGO_ENCODED_RUSTFLAGS = $null
+        Invoke-Checked $cargo @(
+            'build', '--manifest-path', (Join-Path $repoRoot 'Cargo.toml'),
+            '--locked', '--release', '--target', 'x86_64-pc-windows-msvc',
+            '--target-dir', $targetRoot, '-j', '2',
+            '-p', 'arkforge-cli', '--bin', 'arkforge',
+            '-p', 'arkforged', '--bin', 'arkforged'
+        )
+    }
+    finally { $env:RUSTFLAGS = $previousRustFlags; $env:CARGO_ENCODED_RUSTFLAGS = $previousEncodedRustFlags }
+    $releaseRoot = Join-Path $targetRoot 'x86_64-pc-windows-msvc\release'
     Copy-Item -LiteralPath (Join-Path $releaseRoot 'arkforge.exe') -Destination (Join-Path $stage 'bin\arkforge.exe')
     Copy-Item -LiteralPath (Join-Path $releaseRoot 'arkforged.exe') -Destination (Join-Path $stage 'bin\arkforged.exe')
     Copy-Item -LiteralPath (Resolve-Path -LiteralPath $HdcPath).Path -Destination (Join-Path $stage 'tools\hdc.exe')
@@ -127,6 +140,13 @@ try {
             throw "PowerShell signing failed for $script ($($signature.Status))."
         }
     }
+
+    # ArkDeck consumes this one closed release unit, not the installer tree.
+    # It is made from the exact images just signed/verified above and the
+    # published profile; the signed outer manifest below binds every byte.
+    $releaseBundle = New-ArkForgeReleaseBundle -PackageRoot $stage `
+        -ProfilePath (Join-Path $repoRoot 'profiles\dayu200.yaml') `
+        -CertificateThumbprint $CertificateThumbprint -Version '0.1.0'
 
     $hdcDigest = (Get-FileHash -LiteralPath (Join-Path $stage 'tools\hdc.exe') -Algorithm SHA256).Hash.ToLowerInvariant()
     $runtimeManifest = [ordered]@{
@@ -177,6 +197,11 @@ try {
         certificateThumbprint = $CertificateThumbprint.ToUpperInvariant()
         timestampUrl = $TimestampUrl
         files = Get-RelativeFileFacts $stage
+        releaseBundle = [ordered]@{
+            path = 'ArkForge.release-bundle'
+            manifest = 'ArkForge.release-bundle/Contents/Resources/arkforge-bundle.json'
+            manifestSha256 = $releaseBundle.manifestSha256
+        }
         acceptance = [ordered]@{
             software = 'run Test-ArkForgePackage.ps1 after installation'
             hardware = 'requires Windows x64, a DAYU200 in Loader mode, and the packaged HDC'

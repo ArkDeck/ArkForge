@@ -17,12 +17,17 @@ jobs:
       ARKFORGE_HDC_PATH: ${{ vars.ARKFORGE_HDC_PATH }}
       ARKFORGE_DRIVER_PACKAGE: ${{ vars.ARKFORGE_DRIVER_PACKAGE }}
       ARKFORGE_DENIED_ACCOUNT: ${{ vars.ARKFORGE_DENIED_ACCOUNT }}
-      ARKFORGE_DENIED_PASSWORD: ${{ secrets.ARKFORGE_DENIED_PASSWORD }}
     steps:
       - uses: actions/checkout@v7
-      - name: Require production acceptance inputs
+      - name: Require protected release and production acceptance inputs
         shell: pwsh
+        env:
+          ARKFORGE_DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+          ARKFORGE_DENIED_PASSWORD: ${{ secrets.ARKFORGE_DENIED_PASSWORD }}
         run: |
+          if ($env:GITHUB_REF -cne ('refs/heads/' + $env:ARKFORGE_DEFAULT_BRANCH)) {
+            throw 'Physical acceptance requires the protected default-branch release source.'
+          }
           $required = @(
             'ARKFORGE_CERT_THUMBPRINT', 'ARKFORGE_TIMESTAMP_URL', 'ARKFORGE_HDC_PATH',
             'ARKFORGE_DRIVER_PACKAGE', 'ARKFORGE_DENIED_ACCOUNT', 'ARKFORGE_DENIED_PASSWORD'
@@ -32,11 +37,15 @@ jobs:
       - name: Build signed package
         shell: pwsh
         run: |
-          $package = Join-Path $env:RUNNER_TEMP ('arkforge-release-' + [guid]::NewGuid().ToString('N'))
-          $install = Join-Path $env:RUNNER_TEMP ('arkforge-install-' + [guid]::NewGuid().ToString('N'))
-          $evidence = Join-Path $env:RUNNER_TEMP 'arkforge-windows-acceptance.json'
+          $id = [guid]::NewGuid().ToString('N')
+          $package = Join-Path $env:RUNNER_TEMP ('arkforge-release-' + $id)
+          $install = Join-Path $env:RUNNER_TEMP ('arkforge-install-' + $id)
+          $delivery = Join-Path $env:RUNNER_TEMP ('arkforge-delivery-' + $id)
+          [void](New-Item -ItemType Directory -Path $delivery -ErrorAction Stop)
+          $evidence = Join-Path $delivery 'arkforge-windows-acceptance.json'
           "ARKFORGE_ACCEPTANCE_PACKAGE=$package" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
           "ARKFORGE_ACCEPTANCE_INSTALL=$install" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+          "ARKFORGE_ACCEPTANCE_DELIVERY=$delivery" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
           "ARKFORGE_ACCEPTANCE_EVIDENCE=$evidence" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
           & .\packaging\windows\package-arkforge.ps1 `
             -CertificateThumbprint $env:ARKFORGE_CERT_THUMBPRINT `
@@ -46,26 +55,128 @@ jobs:
             -OutputDirectory $package
       - name: Install signed package and run physical acceptance
         shell: pwsh
+        env:
+          ARKFORGE_DENIED_PASSWORD: ${{ secrets.ARKFORGE_DENIED_PASSWORD }}
         run: |
           & (Join-Path $env:ARKFORGE_ACCEPTANCE_PACKAGE 'Install-ArkForge.ps1') `
             -InstallRoot $env:ARKFORGE_ACCEPTANCE_INSTALL
           $secure = ConvertTo-SecureString $env:ARKFORGE_DENIED_PASSWORD -AsPlainText -Force
           $credential = [Management.Automation.PSCredential]::new($env:ARKFORGE_DENIED_ACCOUNT, $secure)
+          Remove-Item Env:ARKFORGE_DENIED_PASSWORD
           & (Join-Path $env:ARKFORGE_ACCEPTANCE_PACKAGE 'Test-ArkForgePackage.ps1') `
             -InstallRoot $env:ARKFORGE_ACCEPTANCE_INSTALL `
             -DeniedCredential $credential `
             -EvidencePath $env:ARKFORGE_ACCEPTANCE_EVIDENCE
-      - name: Upload acceptance evidence
+          $result = Get-Content -LiteralPath $env:ARKFORGE_ACCEPTANCE_EVIDENCE -Raw | ConvertFrom-Json
+          if ($result.schema -cne 'arkforge.windows-acceptance/v1' -or
+              $result.fullAcceptance -isnot [bool] -or -not $result.fullAcceptance -or
+              $result.deviceCount -ne 1 -or
+              $result.crossAccount -cne 'different-account named pipe access denied (Win32 error 5)') {
+            throw 'Only full physical/ACL acceptance can qualify this delivery.'
+          }
+          # The test proves typed stop and both original native exits before
+          # returning a full receipt. An acknowledgement alone is insufficient.
+          'ARKFORGE_ACCEPTANCE_CLEANUP_READY=true' | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+      - name: Bind immutable package, bundle and acceptance exports
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          function Assert-DeliveryArchive([string]$Path, [object[]]$Expected) {
+            $expectedPaths = [Collections.Generic.HashSet[string]]::new([StringComparer]::OrdinalIgnoreCase)
+            foreach ($fact in $Expected) {
+              if ($fact.path -cnotmatch '^[A-Za-z0-9_.-]+(?:/[A-Za-z0-9_.-]+)*$' -or
+                  @($fact.path.Split('/') | Where-Object { $_ -in @('.', '..') }).Count -ne 0 -or
+                  -not $expectedPaths.Add($fact.path) -or
+                  $fact.sha256 -cnotmatch '^[0-9a-f]{64}$' -or
+                  ($fact.bytes -isnot [int] -and $fact.bytes -isnot [long]) -or $fact.bytes -lt 0) {
+                throw 'Delivery expected inventory is unsafe, duplicate or unmeasured.'
+              }
+            }
+            $stream = [IO.File]::Open($Path, [IO.FileMode]::Open, [IO.FileAccess]::Read, [IO.FileShare]::Read)
+            $archive = [IO.Compression.ZipArchive]::new($stream, [IO.Compression.ZipArchiveMode]::Read)
+            try {
+              $files = @($archive.Entries | Where-Object { -not $_.FullName.EndsWith('/') })
+              if ($files.Count -ne $Expected.Count) { throw 'Delivery archive contains a missing or undeclared file.' }
+              foreach ($fact in $Expected) {
+                $entry = @($files | Where-Object { $_.FullName.Replace('\', '/') -ceq $fact.path })
+                if ($entry.Count -ne 1 -or $entry[0].Length -ne $fact.bytes) { throw 'Delivery archive member count/length mismatch.' }
+                $input = $entry[0].Open()
+                $sha = [Security.Cryptography.IncrementalHash]::CreateHash([Security.Cryptography.HashAlgorithmName]::SHA256)
+                try {
+                  $buffer = [byte[]]::new(16384)
+                  $total = 0L
+                  while (($count = $input.Read($buffer, 0, $buffer.Length)) -ne 0) {
+                    $total += $count
+                    if ($total -gt $fact.bytes) { throw 'Delivery archive expanded past its declared size.' }
+                    $sha.AppendData($buffer, 0, $count)
+                  }
+                  if ($total -ne $fact.bytes) { throw 'Delivery archive is truncated.' }
+                  $digest = ([BitConverter]::ToString($sha.GetHashAndReset())).Replace('-', '').ToLowerInvariant()
+                }
+                finally { $sha.Dispose(); $input.Dispose() }
+                if ($digest -cne $fact.sha256) { throw 'Delivery archive member digest mismatch.' }
+              }
+            }
+            finally { $archive.Dispose(); $stream.Dispose() }
+          }
+          $package = $env:ARKFORGE_ACCEPTANCE_PACKAGE
+          $delivery = $env:ARKFORGE_ACCEPTANCE_DELIVERY
+          $evidence = Get-Content -LiteralPath $env:ARKFORGE_ACCEPTANCE_EVIDENCE -Raw | ConvertFrom-Json
+          $receipt = Get-Content -LiteralPath (Join-Path $package 'package-receipt.json') -Raw | ConvertFrom-Json
+          $manifest = Join-Path $package 'ArkForge.release-bundle/Contents/Resources/arkforge-bundle.json'
+          $manifestSha = (Get-FileHash -LiteralPath $manifest -Algorithm SHA256).Hash.ToLowerInvariant()
+          $receiptSha = (Get-FileHash -LiteralPath (Join-Path $package 'package-receipt.json') -Algorithm SHA256).Hash.ToLowerInvariant()
+          if (-not $evidence.fullAcceptance -or $receiptSha -cne $evidence.packageReceiptSha256 -or
+              $manifestSha -cne $receipt.releaseBundle.manifestSha256 -or
+              $manifestSha -cne $evidence.releaseBundle.manifestSha256 -or
+              $evidence.arkforgeSha256 -cne $evidence.releaseBundle.cliSha256 -or
+              $evidence.arkforgedSha256 -cne $evidence.releaseBundle.daemonSha256) {
+            throw 'Acceptance and exported release bundle are not the same package.'
+          }
+          $receiptFile = Get-Item -LiteralPath (Join-Path $package 'package-receipt.json')
+          $packageFiles = @($receipt.files) + @([pscustomobject]@{ path = 'package-receipt.json'; sha256 = $receiptSha; bytes = $receiptFile.Length })
+          Assert-DeliveryArchive ($package + '.zip') $packageFiles
+          $packageZip = Join-Path $delivery 'ArkForge.windows-package.zip'
+          $source = [IO.File]::OpenRead($package + '.zip')
+          $destination = [IO.File]::Open($packageZip, [IO.FileMode]::CreateNew, [IO.FileAccess]::Write, [IO.FileShare]::None)
+          try { $source.CopyTo($destination); $destination.Flush($true) }
+          finally { $destination.Dispose(); $source.Dispose() }
+          Assert-DeliveryArchive $packageZip $packageFiles
+          $bundleZip = Join-Path $delivery 'ArkForge.release-bundle.zip'
+          if (Test-Path -LiteralPath $bundleZip) { throw 'Refusing to replace a bundle export.' }
+          Compress-Archive -LiteralPath (Join-Path $package 'ArkForge.release-bundle') -DestinationPath $bundleZip -CompressionLevel Optimal
+          $bundleFiles = @($receipt.files | Where-Object { $_.path.StartsWith('ArkForge.release-bundle/', [StringComparison]::Ordinal) })
+          if ($bundleFiles.Count -ne 4) { throw 'The package does not bind the closed release bundle.' }
+          Assert-DeliveryArchive $bundleZip $bundleFiles
+          $members = @('ArkForge.windows-package.zip', 'ArkForge.release-bundle.zip', 'arkforge-windows-acceptance.json') | ForEach-Object {
+            $file = Get-Item -LiteralPath (Join-Path $delivery $_)
+            [ordered]@{ path = $_; sha256 = (Get-FileHash -LiteralPath $file.FullName -Algorithm SHA256).Hash.ToLowerInvariant(); bytes = $file.Length }
+          }
+          $record = [ordered]@{
+            schema = 'arkforge.windows-acceptance-delivery/v1'
+            sourceRevision = $env:GITHUB_SHA
+            runId = $env:GITHUB_RUN_ID
+            runAttempt = $env:GITHUB_RUN_ATTEMPT
+            qualification = 'AF-W1 physical packaging and ACL acceptance; destructive flash not run'
+            releaseBundle = $evidence.releaseBundle
+            members = @($members)
+          }
+          $stream = [IO.File]::Open((Join-Path $delivery 'delivery.json'), [IO.FileMode]::CreateNew, [IO.FileAccess]::Write, [IO.FileShare]::None)
+          try {
+            $bytes = [Text.UTF8Encoding]::new($false).GetBytes(($record | ConvertTo-Json -Depth 8) + "`n")
+            $stream.Write($bytes, 0, $bytes.Length)
+            $stream.Flush($true)
+          }
+          finally { $stream.Dispose() }
+      - name: Upload matched acceptance and release delivery
         uses: actions/upload-artifact@v4
         with:
-          name: arkforge-windows-production-acceptance-${{ github.sha }}
-          path: ${{ env.ARKFORGE_ACCEPTANCE_EVIDENCE }}
+          name: arkforge-windows-production-acceptance-${{ github.sha }}-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ env.ARKFORGE_ACCEPTANCE_DELIVERY }}
           if-no-files-found: error
-      - name: Uninstall acceptance package
-        if: always()
+      - name: Uninstall successfully stopped acceptance package
+        if: always() && env.ARKFORGE_ACCEPTANCE_CLEANUP_READY == 'true'
         shell: pwsh
         run: |
           $uninstaller = Join-Path $env:ARKFORGE_ACCEPTANCE_PACKAGE 'Uninstall-ArkForge.ps1'
-          if (Test-Path -LiteralPath $uninstaller) {
-            & $uninstaller -InstallRoot $env:ARKFORGE_ACCEPTANCE_INSTALL -Confirm:$false
-          }
+          & $uninstaller -InstallRoot $env:ARKFORGE_ACCEPTANCE_INSTALL -Confirm:$false

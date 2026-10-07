@@ -28,7 +28,7 @@ jobs:
         shell: pwsh
         run: |
           $failed = $false
-          Get-ChildItem packaging/windows -Filter *.ps1 | ForEach-Object {
+          Get-ChildItem packaging/windows -File | Where-Object { $_.Extension -in @('.ps1', '.psm1') } | ForEach-Object {
             $tokens = $null
             $errors = $null
             [void][System.Management.Automation.Language.Parser]::ParseFile(
@@ -39,3 +39,8 @@ jobs:
             }
           }
           if ($failed) { exit 1 }
+      - name: Test acceptance and release bundle guards without hardware
+        shell: pwsh
+        run: |
+          & .\packaging\windows\Test-WindowsAcceptanceContract.ps1
+          & .\packaging\windows\Test-ReleaseBundle.ps1
