@@ -11,6 +11,7 @@ param(
     [Parameter(Mandatory = $true)]
     [ValidateScript({ Test-Path -LiteralPath $_ -PathType Leaf })]
     [string]$HdcPath,
+    [string]$HdcNoticePath = '',
 
     [Parameter(Mandatory = $true)]
     [ValidateScript({ Test-Path -LiteralPath $_ -PathType Container })]
@@ -94,6 +95,10 @@ try {
     New-Item -ItemType Directory -Path (Join-Path $stage 'tools') -Force | Out-Null
     New-Item -ItemType Directory -Path (Join-Path $stage 'driver') -Force | Out-Null
 
+    # Official Windows HDC imports libusb_shared.dll. Stage only that exact
+    # bounded dependency and the supplied notice, never borrow a build-host DLL.
+    $hdcSources = @(Copy-ArkForgeHdcPackage -HdcPath $HdcPath -NoticePath $HdcNoticePath -ToolsPath (Join-Path $stage 'tools'))
+
     $targetRoot = if ($env:CARGO_TARGET_DIR) { [IO.Path]::GetFullPath($env:CARGO_TARGET_DIR) } else { Join-Path $repoRoot 'target' }
     $previousRustFlags = $env:RUSTFLAGS
     $previousEncodedRustFlags = $env:CARGO_ENCODED_RUSTFLAGS
@@ -114,12 +119,12 @@ try {
     $releaseRoot = Join-Path $targetRoot 'x86_64-pc-windows-msvc\release'
     Copy-Item -LiteralPath (Join-Path $releaseRoot 'arkforge.exe') -Destination (Join-Path $stage 'bin\arkforge.exe')
     Copy-Item -LiteralPath (Join-Path $releaseRoot 'arkforged.exe') -Destination (Join-Path $stage 'bin\arkforged.exe')
-    Copy-Item -LiteralPath (Resolve-Path -LiteralPath $HdcPath).Path -Destination (Join-Path $stage 'tools\hdc.exe')
     Copy-Item -LiteralPath $driverInf -Destination (Join-Path $stage 'driver\arkforge-rockusb.inf')
     Copy-Item -LiteralPath $driverCatalog -Destination (Join-Path $stage 'driver\arkforge-rockusb.cat')
     Copy-Item -LiteralPath (Join-Path $scriptRoot 'Install-ArkForge.ps1') -Destination $stage
     Copy-Item -LiteralPath (Join-Path $scriptRoot 'Uninstall-ArkForge.ps1') -Destination $stage
     Copy-Item -LiteralPath (Join-Path $scriptRoot 'Test-ArkForgePackage.ps1') -Destination $stage
+    Copy-Item -LiteralPath (Join-Path $scriptRoot 'ReleaseBundle.psm1') -Destination $stage
     Copy-Item -LiteralPath (Join-Path $scriptRoot 'README.md') -Destination $stage
 
     $signedFiles = @(
@@ -127,6 +132,9 @@ try {
         (Join-Path $stage 'bin\arkforged.exe'),
         (Join-Path $stage 'tools\hdc.exe')
     )
+    if (Test-Path -LiteralPath (Join-Path $stage 'tools\libusb_shared.dll')) {
+        $signedFiles += Join-Path $stage 'tools\libusb_shared.dll'
+    }
     foreach ($file in $signedFiles) {
         Invoke-Checked $signToolPath @(
             'sign', '/sha1', $CertificateThumbprint, '/fd', 'SHA256',
@@ -134,7 +142,7 @@ try {
         )
         Invoke-Checked $signToolPath @('verify', '/pa', '/all', '/v', $file)
     }
-    foreach ($script in @('Install-ArkForge.ps1', 'Uninstall-ArkForge.ps1', 'Test-ArkForgePackage.ps1')) {
+    foreach ($script in @('Install-ArkForge.ps1', 'Uninstall-ArkForge.ps1', 'Test-ArkForgePackage.ps1', 'ReleaseBundle.psm1')) {
         $signature = Set-AuthenticodeSignature -FilePath (Join-Path $stage $script) -Certificate $certificate -HashAlgorithm SHA256 -TimestampServer $TimestampUrl
         if ($signature.Status -ne [System.Management.Automation.SignatureStatus]::Valid) {
             throw "PowerShell signing failed for $script ($($signature.Status))."
@@ -159,6 +167,7 @@ try {
             path = 'tools/hdc.exe'
             sha256 = $hdcDigest
             requireTrustedAuthenticode = $true
+            sourceFiles = $hdcSources
         }
         driver = [ordered]@{
             inf = 'driver/arkforge-rockusb.inf'
@@ -177,6 +186,7 @@ try {
         certificateThumbprint = $CertificateThumbprint.ToUpperInvariant()
         files = Get-RelativeFileFacts $stage
     }
+    Assert-ArkForgeHdcPackage -PackageRoot $stage -CertificateThumbprint $CertificateThumbprint -ManifestFiles $trustedManifest.files
     $trustedJson = $trustedManifest | ConvertTo-Json -Depth 8 -Compress
     $trustedBase64 = [Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes($trustedJson))
     $trustedScript = @"

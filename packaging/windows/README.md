@@ -2,7 +2,8 @@
 
 This package keeps three trust decisions explicit:
 
-- `arkforge.exe`, sibling `arkforged.exe`, and the selected `hdc.exe` are
+- `arkforge.exe`, sibling `arkforged.exe`, the selected `hdc.exe` and its required
+  `libusb_shared.dll` (when imported) are
   individually Authenticode-signed and timestamped;
 - the DAYU200 Loader (`USB\VID_2207&PID_350A`) binds only through the signed
   `arkforge-rockusb.cat` WinUSB package and the private ArkForge interface GUID;
@@ -20,6 +21,32 @@ Build the release from an x64 Native Tools PowerShell 7 session:
 ```
 
 The HDC input must be a redistributable build selected by the release owner.
+Its AMD64 PE import closure is inspected before the build: only Windows system
+imports and the explicit Universal CRT API set are allowed, plus the single
+app-local `libusb_shared.dll` dependency. That DLL must be beside the selected
+HDC, must itself import only the permitted system/API-set libraries, and must be
+an AMD64 DLL. Missing dependencies, other vendor DLLs, delayed imports, links,
+source drift and existing staging members are refused. No PATH search or
+recursive dependency borrowing occurs.
+
+Keep the complete corresponding redistribution notice beside HDC as `NOTICE.txt`,
+or supply its exact source file with `-HdcNoticePath`. The producer retains the
+source handles, copies the whole HDC/DLL/notice bytes exclusively, verifies their
+digests and counts, then signs only the staged executable and DLL. It leaves the
+original SDK files unchanged. `arkforge-runtime.json` records those pre-sign
+source facts; the signed package manifest separately binds every final signed
+image and the unchanged notice. Installation and acceptance check the exact
+tools inventory, common trusted release signer and final whole hashes before
+driver installation or an HDC self-test. The closure-validation module is also
+signed and included in the trusted manifest.
+
+The official SDK notice identifies HDC under Apache 2.0 and libusb under LGPL
+2.1. Retain the complete notice and satisfy the corresponding libusb source or
+source-offer obligations for the exact redistributed build; the HDC license does
+not replace those obligations. Upstream sources are
+[OpenHarmony HDC](https://gitee.com/openharmony/developtools_hdc) and
+[libusb](https://github.com/libusb/libusb).
+
 The driver directory must contain the canonical INF and its production-signed
 catalog returned by the Windows Hardware Developer Program; an application
 code-signing certificate is not accepted as a substitute. The packager verifies
@@ -73,6 +100,7 @@ Software producer regressions run without launching any image or device:
 
 ```powershell
 .\packaging\windows\Test-ReleaseBundle.ps1
+.\packaging\windows\Test-HdcPackage.ps1
 ```
 
 The test uses signed public Windows executable bytes as explicitly labelled

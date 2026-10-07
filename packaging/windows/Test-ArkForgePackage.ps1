@@ -323,7 +323,7 @@ foreach ($fact in $trustedManifest.files) {
 $receiptFact = Get-AcceptanceFileFact $root 'package-receipt.json'
 if ($receiptFact.sha256 -cne $installReceipt.packageReceiptSha256) { throw 'The installed package receipt changed.' }
 $bundleFacts = Assert-ReleaseBundle $root $receipt $trustedManifest
-foreach ($relative in @($manifest.arkforge, $manifest.arkforged, $manifest.hdc.path, $manifest.driver.catalog)) {
+foreach ($relative in @($manifest.arkforge, $manifest.arkforged, $manifest.hdc.path, $manifest.driver.catalog, 'ReleaseBundle.psm1')) {
     $path = Join-Path $root ($relative.Replace('/', '\'))
     $signature = Get-AuthenticodeSignature -LiteralPath $path
     if ($signature.Status -ne [System.Management.Automation.SignatureStatus]::Valid) {
@@ -334,6 +334,9 @@ foreach ($relative in @($manifest.arkforge, $manifest.arkforged, $manifest.hdc.p
         throw "Release signer mismatch for ${relative}: $($signature.SignerCertificate.Thumbprint)"
     }
 }
+
+Import-Module (Join-Path $root 'ReleaseBundle.psm1') -Force
+Assert-ArkForgeHdcPackage -PackageRoot $root -CertificateThumbprint $trustedManifest.certificateThumbprint -ManifestFiles $trustedManifest.files
 
 $published = Get-WindowsDriver -Online | Where-Object { $_.Driver -eq $installReceipt.publishedDriver }
 if ($null -eq $published) {
