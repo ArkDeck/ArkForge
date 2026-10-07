@@ -317,19 +317,22 @@ function Open-HdcInputs([string]$HdcPath, [string]$NoticePath) {
     try {
         $hdc = Assert-HdcPath $HdcPath
         $stream = [IO.File]::Open($hdc, [IO.FileMode]::Open, [IO.FileAccess]::Read, [IO.FileShare]::Read)
-        $held += [ordered]@{ path = 'tools/hdc.exe'; source = $hdc; stream = $stream; facts = Get-StreamFacts $stream }
+        $held += [ordered]@{ path = 'tools/hdc.exe'; source = $hdc; stream = $stream; facts = $null }
         $imports = @(Assert-HdcImage $stream $false)
+        $held[-1].facts = Get-StreamFacts $stream
         if ('libusb_shared.dll' -in $imports) {
             $usb = Assert-HdcPath (Join-Path ([IO.Path]::GetDirectoryName($hdc)) 'libusb_shared.dll')
             $stream = [IO.File]::Open($usb, [IO.FileMode]::Open, [IO.FileAccess]::Read, [IO.FileShare]::Read)
-            $held += [ordered]@{ path = 'tools/libusb_shared.dll'; source = $usb; stream = $stream; facts = Get-StreamFacts $stream }
+            $held += [ordered]@{ path = 'tools/libusb_shared.dll'; source = $usb; stream = $stream; facts = $null }
             [void](Assert-HdcImage $stream $true)
+            $held[-1].facts = Get-StreamFacts $stream
         }
         if (-not $NoticePath) { $NoticePath = Join-Path ([IO.Path]::GetDirectoryName($hdc)) 'NOTICE.txt' }
         $notice = Assert-HdcPath $NoticePath
         $stream = [IO.File]::Open($notice, [IO.FileMode]::Open, [IO.FileAccess]::Read, [IO.FileShare]::Read)
-        $held += [ordered]@{ path = 'tools/NOTICE.txt'; source = $notice; stream = $stream; facts = Get-StreamFacts $stream }
+        $held += [ordered]@{ path = 'tools/NOTICE.txt'; source = $notice; stream = $stream; facts = $null }
         if ($stream.Length -lt 1 -or $stream.Length -gt 2097152) { throw 'HDC notice must be bounded whole source bytes.' }
+        $held[-1].facts = Get-StreamFacts $stream
         return ,$held
     }
     catch {

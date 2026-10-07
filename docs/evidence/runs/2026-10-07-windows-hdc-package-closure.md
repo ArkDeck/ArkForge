@@ -19,6 +19,7 @@ CREATE_NEW reports are retained under
 | Command | Exit | Result | Log/report |
 | --- | --- | --- | --- |
 | `pwsh -NoProfile -File packaging/windows/Test-HdcPackage.ps1 -ReportPath <new report>` | 0 | 21 passed, 0 failed, 0 skipped | `hdc-package-fixed.stdout.log`, `hdc-package-fixed.stderr.log`, `hdc-package-tests-fixed.json` |
+| Same HDC command after the bounded-read correction | 0 | 22 passed, 0 failed, 0 skipped | `hdc-package-bounded-final.stdout.log`, `hdc-package-bounded-final.json` |
 | `pwsh -NoProfile -File packaging/windows/Test-ReleaseBundle.ps1 -ReportPath <new report>` | 0 | 21 passed, 0 failed, 0 skipped | `release-bundle-closure.stdout.log`, `release-bundle-closure.json` |
 | `pwsh -NoProfile -File packaging/windows/Test-WindowsAcceptanceContract.ps1` | 0 | 31 software checks passed | `acceptance-closure.stdout.log` |
 | `pwsh -NoProfile -File <task-owned copy_sdk_hdc.ps1>` | 0 | Official SDK source and copied whole bytes equal | `sdk-hdc-copy.stdout.log`, `sdk-hdc-copy.json` |
@@ -41,6 +42,15 @@ overwrote PowerShell's case-insensitive automatic `$Matches` variable. The local
 binding variable was renamed to `$boundFacts`; the complete 21-case suite then
 passed. The original failures remain in `hdc-package-2.*` and
 `hdc-package-diagnostic.*`. These were a code defect, not an invalid load run.
+
+Final source review found that whole hashing preceded the input length checks.
+The producer now validates each image's 64 MiB limit and the notice's 2 MiB limit
+before hashing; handles remain tracked for disposal on every refusal. The added
+regression intercepts whole hashing and rejects any oversized read, checking
+HDC, DLL and notice independently with no output copy. The final distinct
+software guard count is 74 (22 HDC, 21 unchanged bundle and 31 acceptance).
+Only the changed HDC suite and PowerShell parsing were repeated for this narrow
+ordering correction (`parse-packaging-bounded-final.*`, exit 0).
 
 The official installed SDK pre-sign copy accepted these actual whole source
 facts, then remeasured the unchanged originals and copies:

@@ -96,6 +96,34 @@ Case 'oversized source notice refuses' {
     $p = Inputs 'huge-notice'; [IO.File]::WriteAllBytes((Join-Path $p.source 'NOTICE.txt'), [byte[]]::new(2097153))
     NoCopy $p { Stage $p } 'bounded'
 }
+Case 'all input length bounds precede whole hashing' {
+    function Assert-BoundedHashOrder([string]$Path) {
+        & $module {
+            param($Path)
+            $script:BoundedSavedFacts = (Get-Item Function:Get-StreamFacts).ScriptBlock
+            try {
+                Set-Item Function:script:Get-StreamFacts {
+                    param([IO.Stream]$Stream)
+                    $limit = if ([IO.Path]::GetFileName($Stream.Name) -ceq 'NOTICE.txt') { 2097152 } else { 67108864 }
+                    if ($Stream.Length -gt $limit) { throw 'Oversized source was hashed before its input bound.' }
+                    & $script:BoundedSavedFacts $Stream
+                }
+                Open-HdcInputs $Path ''
+            }
+            finally {
+                Set-Item Function:script:Get-StreamFacts $script:BoundedSavedFacts
+                Remove-Variable BoundedSavedFacts -Scope Script
+            }
+        } $Path
+    }
+    foreach ($name in @('hdc.exe', 'libusb_shared.dll', 'NOTICE.txt')) {
+        $p = Inputs ('oversized-' + $name)
+        $stream = [IO.File]::OpenWrite((Join-Path $p.source $name))
+        try { $stream.SetLength($(if ($name -ceq 'NOTICE.txt') { 2097153 } else { 67108865 })) }
+        finally { $stream.Dispose() }
+        NoCopy $p { Assert-BoundedHashOrder $p.hdc } 'bounded'
+    }
+}
 Case 'unexpected HDC vendor dependency refuses' {
     $p = Inputs 'vendor' @('libusb_shared.dll', 'vendor.dll')
     NoCopy $p { Stage $p } 'system closure'
