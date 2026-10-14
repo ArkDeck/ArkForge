@@ -20,7 +20,7 @@ bytes), full-hash readback for `uboot` and `resource`, seven explicit
 `skipped-lba-read-window` results, and a successful `DEVICE_RESET`.
 The seven skipped ranges are not full-hash passes.
 
-The original job remains in `rebindWait`: Windows reports the normal-mode HDC
+The original job stopped progressing in `rebindWait`: Windows reported the normal-mode HDC
 device, but the published Windows enumerator sees only the private Loader
 interface and vendor-bound Loaders. An independent, exact-target read-only HDC
 diagnosis returned `const.ohos.fullname=OpenHarmony-7.0.0.43` and
@@ -28,7 +28,13 @@ diagnosis returned `const.ohos.fullname=OpenHarmony-7.0.0.43` and
 or hardware qualification. The original job, intent and receipts are retained;
 none of its writes is replayed.
 
-## Corrections under review
+## Published observation and campaign corrections
+
+[PR #10](https://github.com/ArkDeck/ArkForge/pull/10) was published as
+`cad59911abf4fd527ab31f1b6d4b2a3c4f68035a`. Windows PR/push runs
+38536342297/38536287168 and Rust/macOS/Swift PR/push runs
+38536342258/38536287176 all succeeded on exact head
+`b92f0e761afee16271cb973777a64b7eb24a71d2`.
 
 Observe the existing WinUSB-bound normal personality through the same bounded,
 read-only hub descriptor path used for vendor-bound Loaders. Every PnP/hub
@@ -39,7 +45,7 @@ embedded-null refusal to the hub driver-key structure's zero padding. Its
 terminated WCHAR key is now decoded separately from padding; nonzero data
 after the terminator, missing termination and a PnP key mismatch still refuse.
 USB identity strings retain their original strict parser. End-to-end Runtime
-postflight remains to be checked with the published correction.
+postflight still requires an end-to-end succeeded execution.
 
 Derive Windows topology from validated PnP physical location paths for both
 observation paths. The prior device-instance hash changed with PID/serial and
@@ -86,6 +92,58 @@ and the fixture-manifest pins. Full workspace/macOS/Swift checks run in CI.
 
 ## CI
 
-Pending at commit time; the PR records the exact head and actual run results.
+PR #9 and #10 results are recorded above.
 This record does not assert an end-to-end succeeded job, AF-W1 qualification,
 production support, or `REAL_DEVICE_PASS`.
+
+## Subsequent normal-start run and HDC correction
+
+The published CLI safely cancelled the original job at its rebind boundary,
+after 21 of 22 steps, using its exact event sequence. All write/readback/reset
+receipts remain intact. The replacement published Runtime observed the normal
+personality with `serialAndTopology` identity and sealed a new 23-step plan.
+Its first managed-control request expired after 120 seconds, before any
+partition writes. The job is `outcomeUnknown`; the original intent is not
+replayed. Typed read-only reconciliation retained `stillUnknown`. Runtime
+reports that independent complete-overwrite recovery can be assessed; no
+recovery has yet been dispatched.
+
+Read-only HDC diagnostics isolated the Windows environment prerequisite:
+`list targets -v` returned in 62 ms with the inherited environment, while an
+empty environment timed out at 10 seconds. Supplying only `SystemRoot`
+returned in 51 ms. `WINDIR` alone and `TEMP`/`TMP` alone each timed out at
+3 seconds. These are diagnostic samples, not performance or hardware
+qualification. Local logs are `hdc-readonly-diagnostic.json` and
+`hdc-minimum-environment-diagnostic.json` in the campaign directory.
+An independent fixed-argv read-only query with only `SystemRoot` matched the
+Runtime's exact case-sensitive serial digest and returned OpenHarmony 7.0.0.43
+and model `ohos`; `hdc-properties-minimum-environment.json` preserves that
+diagnosis. It is not a Runtime postflight receipt.
+
+The correction retains only `SystemRoot` on Windows. A real child-process
+regression asserts that it is present and all other inherited environment
+variables are absent. The current SDK also returns the documented trailing
+`hdc` column and unrelated UART `Ready` rows; parser regressions cover these,
+malformed rows, and exact USB/Connected selection. The official format is
+documented in [OpenHarmony HDC](https://github.com/openharmony/docs/blob/master/zh-cn/application-dev/dfx/hdc.md#查询设备列表).
+
+### Local targeted checks
+
+Final commands exited 0 using the same fixed cache, two build jobs, native
+Windows target and static CRT. Exact commands and logs are in
+`windows-inbox-winusb-20261014/hdc-environment-final-checks.log` and `.json`:
+
+- `cargo fmt --all -- --check` (1.060 seconds).
+- Release/native-target Clippy, all targets/features with `-D warnings`, for
+  `arkforge-standalone` and its direct consumer `arkforge-cli` (3.011 seconds).
+- Sibling daemon build (0.248 seconds), then all-target tests for those two
+  crates: 102 passed, no failures (47.178 seconds). The ignored Windows child
+  assertion is explicitly executed by its parent test, which passed.
+- `git diff --check`.
+
+Full workspace/macOS/Swift checks are delegated to CI. No protocol, profile,
+permit, recovery-coverage declaration or conformance fixture was changed.
+
+### CI
+
+Pending on the correction's exact PR head; results will be recorded in the PR.

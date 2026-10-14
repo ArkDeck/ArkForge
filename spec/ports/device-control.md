@@ -45,3 +45,10 @@ maps: `enter-updater` → `hdc -t <key> target boot loader`-class command;
 under `device-facts` before they appear in any fact (`SHA-256(domain ||
 connectKey)`), never in clear. The ArkDeck adapter maps the same four actions
 onto ArkDeck's typed HDC provider (`adapters/arkforge-arkdeck-adapter/src/control.rs`).
+
+On Windows, the standalone child environment preserves only `SystemRoot` from
+the host after clearing inherited configuration. This OS prerequisite allows
+the hash-bound HDC client to initialize; HDC endpoint overrides and `PATH` are
+not inherited. The target-list parser accepts the legacy row and the documented
+row with a trailing `hdc` identifier. Only `USB` / `Connected` rows with the
+exact sealed serial digest can be selected; `Ready` UART entries are not targets.
