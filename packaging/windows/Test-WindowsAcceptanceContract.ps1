@@ -248,6 +248,54 @@ try {
 
     $workflowPath = Join-Path $repo '.github/workflows/windows-acceptance.yml'
     $workflow = [IO.File]::ReadAllText($workflowPath)
+    $preflight = [regex]::Match($workflow, '(?ms)^      - name: Require protected release and production acceptance inputs\r?\n.*?        run: \|\r?\n(?<body>.*?)(?=^      - name:)').Groups['body'].Value
+    if (-not $preflight) { throw 'Missing physical acceptance preflight.' }
+    $preflight = ($preflight -split '\r?\n' | ForEach-Object { $_ -replace '^          ', '' }) -join "`n"
+    $preflightBlock = [scriptblock]::Create($preflight)
+    $releaseInputNames = @(
+        'ARKFORGE_CERT_THUMBPRINT', 'ARKFORGE_TIMESTAMP_URL', 'ARKFORGE_HDC_PATH',
+        'ARKFORGE_DRIVER_PACKAGE', 'ARKFORGE_DENIED_ACCOUNT', 'ARKFORGE_DENIED_PASSWORD'
+    )
+    $preflightEnvironmentNames = $releaseInputNames + @('GITHUB_REF', 'GITHUB_REF_PROTECTED', 'ARKFORGE_DEFAULT_BRANCH')
+    $savedPreflightEnvironment = @{}
+    foreach ($name in $preflightEnvironmentNames) {
+        $savedPreflightEnvironment[$name] = [Environment]::GetEnvironmentVariable($name)
+    }
+    try {
+        # Execute only the actual input-check step with non-credential fixture
+        # strings. This does not dispatch the physical acceptance workflow.
+        foreach ($name in $releaseInputNames) { [Environment]::SetEnvironmentVariable($name, 'software-fixture') }
+        $env:ARKFORGE_DEFAULT_BRANCH = 'main'
+        $env:GITHUB_REF = 'refs/heads/main'
+        $env:GITHUB_REF_PROTECTED = 'true'
+        Check 'actual preflight accepts protected default branch with complete inputs' { & $preflightBlock }
+        Check 'actual preflight refuses unprotected missing or malformed protection state' {
+            foreach ($value in @('false', '', 'TRUE', '1')) {
+                $env:GITHUB_REF_PROTECTED = $value
+                Refuses { & $preflightBlock }
+            }
+            $env:GITHUB_REF_PROTECTED = 'true'
+        }
+        Check 'actual preflight refuses protected non-default branches tags and PR refs' {
+            foreach ($value in @('refs/heads/feature', 'refs/tags/main', 'refs/pull/1/merge')) {
+                $env:GITHUB_REF = $value
+                Refuses { & $preflightBlock }
+            }
+            $env:GITHUB_REF = 'refs/heads/main'
+        }
+        Check 'actual preflight refuses every missing production input despite branch protection' {
+            foreach ($name in $releaseInputNames) {
+                [Environment]::SetEnvironmentVariable($name, $null)
+                Refuses { & $preflightBlock }
+                [Environment]::SetEnvironmentVariable($name, 'software-fixture')
+            }
+        }
+    }
+    finally {
+        foreach ($name in $preflightEnvironmentNames) {
+            [Environment]::SetEnvironmentVariable($name, $savedPreflightEnvironment[$name])
+        }
+    }
     $export = [regex]::Match($workflow, '(?ms)^      - name: Bind immutable package, bundle and acceptance exports\r?\n.*?        run: \|\r?\n(?<body>.*?)(?=^      - name:)').Groups['body'].Value
     if (-not $export) { throw 'Missing delivery export step.' }
     $export = ($export -split '\r?\n' | ForEach-Object { $_ -replace '^          ', '' }) -join "`n"
