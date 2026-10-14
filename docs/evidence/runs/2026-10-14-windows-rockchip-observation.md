@@ -46,9 +46,13 @@ matches and refusal of vendor bulk claims. Fixtures perform no device I/O.
 
 ## CI
 
-Pending the first push at the time this record was committed. Read the PR's
-current-head checks for the actual run IDs and outcomes; this record does not
-claim a pending check passed.
+[PR #5](https://github.com/ArkDeck/ArkForge/pull/5) initial Windows run
+[`38506275173`](https://github.com/ArkDeck/ArkForge/actions/runs/38506275173)
+failed Clippy's `chunks_exact_to_as_chunks` check. UTF-16 decoding now uses
+`as_chunks::<2>()` and explicitly rejects a trailing byte, without suppressing
+the lint. The replacement-head checks are pending at this commit; read the
+PR's current-head checks for actual run IDs and outcomes. Pending checks are
+not represented as passing.
 
 ## Qualification boundary
 

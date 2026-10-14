@@ -693,9 +693,13 @@ fn utf16_string(bytes: &[u8]) -> Result<String, UsbError> {
 }
 
 fn decode_utf16(bytes: &[u8]) -> Result<String, UsbError> {
-    let units = bytes
-        .chunks_exact(2)
-        .map(|v| u16::from_le_bytes([v[0], v[1]]))
+    let (pairs, trailing) = bytes.as_chunks::<2>();
+    if !trailing.is_empty() {
+        return Err(invalid("incomplete UTF-16 code unit"));
+    }
+    let units = pairs
+        .iter()
+        .map(|v| u16::from_le_bytes(*v))
         .collect::<Vec<_>>();
     if units.contains(&0) {
         return Err(invalid("embedded null in USB identity"));
