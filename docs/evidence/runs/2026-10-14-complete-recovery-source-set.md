@@ -1,8 +1,8 @@
 # Complete outstanding recovery source set
 
-Status: software implementation under validation. The current Windows campaign
-remains blocked; this change does not reset a consumed recovery reservation or
-claim a hardware flash pass.
+Status: implementation merged as PR #18; published-runtime read-only validation
+completed. The current Windows campaign remains blocked by its consumed source
+allowance. No hardware flash pass or production support is claimed.
 
 The standalone authority previously sealed only the selected source job. An
 additional unknown job made the lane check refuse without checking whether the
@@ -63,5 +63,53 @@ Swift and the full cross-platform workspace are delegated to PR CI.
 
 ## CI
 
-Pending PR creation and current-head Windows / macOS Rust + Swift results.
-Device validation uses only a clean protected-main build after all checks pass.
+PR [#18](https://github.com/ArkDeck/ArkForge/pull/18) passed all four checks on
+final head `ed0d39953b7b60a9fcc04a157b893106fde1ec6f`:
+
+- PR Windows: [38567139025](https://github.com/ArkDeck/ArkForge/actions/runs/38567139025).
+- PR macOS Rust/Swift: [38567139002](https://github.com/ArkDeck/ArkForge/actions/runs/38567139002).
+- Push Windows: [38567130576](https://github.com/ArkDeck/ArkForge/actions/runs/38567130576).
+- Push macOS Rust/Swift: [38567130647](https://github.com/ArkDeck/ArkForge/actions/runs/38567130647).
+
+The PR merged at 12:56:06 UTC as
+`2c27f28bb143f13cdd8120a08c0a117834cba66b`. A clean checkout of that published
+revision produced the frozen binaries for read-only validation:
+
+- `arkforge.exe`: SHA-256
+  `6acf9264f902e3806c2c29c500a159e475bfb7da99da5520817df0b3f1a8b04c`.
+- `arkforged.exe`: SHA-256
+  `c9f773a78f1cf5eaae4823ab27a706472dd7219815680088556781ea0ed419c2`.
+
+Build exit 0; `published-complete-recovery-set-build.log` and its JSON inventory
+remain local. These unsigned source builds serve the explicitly named campaign;
+they are not a formal signed Windows release acceptance.
+
+## Published Runtime read-only result
+
+Pairing epoch 13 opened the existing Runtime namespace. Deep device discovery
+and probe succeeded with the current Loader observation and strong serial plus
+topology identity. Status reported three terminal jobs, two unknown, and zero
+active jobs. No historical identity was migrated or changed.
+
+`job recover` selected the newer unknown job but the authority enumerated both
+unknown sources. It exited 3 with `RECOVERY_PROOF_REQUIRED`, explicitly naming
+the original source's exhausted allowance and the complete two-job set. Both
+`plan` and `apply_command` were null. This is a budget refusal, not evidence that
+all later identity/coverage gates passed. No new job or device dispatch occurred.
+The result is recorded in `complete-recovery-set-authority-blocker.json`.
+
+After the request returned, typed `daemon stop` succeeded. All three historical
+journals retained their exact byte counts and SHA-256 values; the single proof,
+reservation and correlation retained their original hashes. No completion
+relation appeared. The final status and hash comparison are stored in
+`runtime-complete-recovery-set-final-status.json` and
+`complete-recovery-set-final-integrity.json`. The shared HDC server was left in
+place. No additional device operation remains running.
+
+The software path now proves a complete source set when every source is eligible
+and still has its original allowance. For this board, covering the newer unknown
+necessarily includes the already-consumed original source. A new plan id,
+source selection, runtime restart, user acknowledgement or later deadline cannot
+restore that allowance. Under the requested preservation constraints and
+POL-RECOVERY-001, further destructive dispatch stays zero. Windows full automatic
+flash acceptance remains incomplete.
