@@ -360,7 +360,7 @@ fn the_read_only_vertical_runs_over_the_api() {
         &request(Api::DiscoverDevices, Vec::new()),
         None,
     );
-    assert_eq!(response.status, Status::Ok);
+    assert_eq!(response.status, Status::Ok, "{:?}", decode_error(&response));
     // Every observation, then the one this vertical is about — not whichever
     // arrived last. Since AD-027 the daemon also enumerates real USB, so what
     // else is on the bus is the developer's business and must not decide

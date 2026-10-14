@@ -1,9 +1,9 @@
-//! Windows WinUSB transport and read-only Rockchip driver observation.
+//! Windows WinUSB transport and read-only hub observation.
 //!
 //! The companion INF registers `ARKFORGE_ROCKUSB_INTERFACE_GUID`; SetupAPI
 //! enumerates only that class, then WinUSB descriptors are checked against the
-//! same exact selector used by macOS. Rockchip-bound devices are observed only
-//! through Windows hub descriptor queries and cannot be claimed for bulk I/O.
+//! same exact selector used by macOS. Vendor-bound Loaders and HDC-normal
+//! devices are observed through hub queries and cannot be claimed for bulk I/O.
 //! No broad VID-only handle is claimed.
 
 use super::{BulkInterface, UsbError, UsbInterfaceDescriptor, UsbInterfaceSelector};
@@ -299,7 +299,7 @@ struct ServiceRecord {
 enum Binding {
     WinUsb,
     /// Descriptors came from the Windows hub, not vendor bulk I/O.
-    RockchipObservationOnly,
+    HubObservationOnly,
 }
 
 fn collect_services() -> Result<Vec<ServiceRecord>, UsbError> {
@@ -338,8 +338,8 @@ fn collect_services() -> Result<Vec<ServiceRecord>, UsbError> {
                 "SetupDiEnumDeviceInterfaces({index}) returned Windows error {error}"
             )));
         }
-        let (path, instance_id) = interface_path(set.0, &mut interface)?;
-        match WinUsbDevice::open(&path).and_then(|handle| handle.descriptor(&instance_id)) {
+        let (path, location_id) = interface_path(set.0, &mut interface)?;
+        match WinUsbDevice::open(&path).and_then(|handle| handle.descriptor(location_id)) {
             Ok(descriptor) => records.push(ServiceRecord {
                 path,
                 descriptor,
@@ -361,7 +361,7 @@ fn collect_services() -> Result<Vec<ServiceRecord>, UsbError> {
             .map(|descriptor| ServiceRecord {
                 path: Vec::new(),
                 descriptor,
-                binding: Binding::RockchipObservationOnly,
+                binding: Binding::HubObservationOnly,
             }),
     );
     Ok(records)
@@ -370,7 +370,7 @@ fn collect_services() -> Result<Vec<ServiceRecord>, UsbError> {
 fn interface_path(
     set: DeviceInfoSet,
     interface: &mut SpDeviceInterfaceData,
-) -> Result<(Vec<u16>, String), UsbError> {
+) -> Result<(Vec<u16>, u32), UsbError> {
     let mut required = 0;
     let mut device_info = SpDevInfoData::default();
     let _ = unsafe {
@@ -411,8 +411,8 @@ fn interface_path(
         .ok_or_else(|| UsbError::Enumeration("WinUSB device path is not terminated".into()))?;
     let mut path = unsafe { std::slice::from_raw_parts(path_start, path_length) }.to_vec();
     path.push(0);
-    let instance_id = device_instance_id(set, &mut device_info)?;
-    Ok((path, instance_id))
+    let location_id = vendor::device_location(set, &mut device_info)?;
+    Ok((path, location_id))
 }
 
 fn device_instance_id(
@@ -444,9 +444,10 @@ fn open_service(
     service: ServiceRecord,
     timeout_ms: u32,
 ) -> Result<Box<dyn BulkInterface>, UsbError> {
-    if matches!(service.binding, Binding::RockchipObservationOnly) {
+    if matches!(service.binding, Binding::HubObservationOnly) {
         return Err(UsbError::Claim(
-            "the exact Loader is bound to the Rockchip vendor driver; its bulk transport is not qualified, and no vendor handle was opened".into(),
+            "this interface was observed through its hub only; no bulk transport may be claimed"
+                .into(),
         ));
     }
     let device = WinUsbDevice::open(&service.path)?;
@@ -493,7 +494,7 @@ impl WinUsbDevice {
         Ok(Self { file, interface })
     }
 
-    fn descriptor(&self, instance_id: &str) -> Result<UsbInterfaceDescriptor, UsbError> {
+    fn descriptor(&self, location_id: u32) -> Result<UsbInterfaceDescriptor, UsbError> {
         let device: UsbDeviceDescriptor = self.get_descriptor(USB_DEVICE_DESCRIPTOR_TYPE, 0, 0)?;
         let mut interface = WinUsbInterfaceDescriptor::default();
         if unsafe { WinUsb_QueryInterfaceSettings(self.interface, 0, &mut interface) } == 0 {
@@ -504,7 +505,7 @@ impl WinUsbDevice {
             product_id: device.product_id,
             usb_specification: device.usb_specification,
             device_release: device.device_release,
-            location_id: instance_location(instance_id),
+            location_id,
             interface_class: interface.interface_class,
             interface_subclass: interface.interface_subclass,
             interface_protocol: interface.interface_protocol,
@@ -734,15 +735,6 @@ impl Drop for DeviceInfoSetGuard {
     }
 }
 
-fn instance_location(instance_id: &str) -> u32 {
-    let mut hash = 0x811c_9dc5u32;
-    for unit in instance_id.encode_utf16() {
-        hash ^= u32::from(unit);
-        hash = hash.wrapping_mul(0x0100_0193);
-    }
-    hash
-}
-
 fn last_error() -> Dword {
     unsafe { GetLastError() }
 }
@@ -775,9 +767,5 @@ mod tests {
     #[test]
     fn interface_guid_matches_the_packaged_inf() {
         assert_eq!(ARKFORGE_ROCKUSB_INTERFACE_GUID.data1, 0x6a4e_21f0);
-        assert_eq!(
-            instance_location("USB\\VID_2207&PID_350A\\ONE"),
-            0x6fd8_9561
-        );
     }
 }

@@ -71,13 +71,21 @@ all. Real-device behaviour is evidence (`docs/evidence/`), not a fixture.
 ## Windows hub observations (informative)
 
 Enumeration can return an exact Loader descriptor for a device bound to the
-Rockchip driver without opening a vendor bulk interface. The implementation
+Rockchip driver and a WinUSB-bound HDC-normal descriptor (2207:5000) without
+opening either device's bulk interface. The implementation
 uses the documented Windows hub connection, driver-key and GET_DESCRIPTOR
 queries. PnP instance, parent hub and port, driver key, device/configuration and
 USB string descriptors must remain consistent across the census. Missing or
 changing identity fails enumeration; the shared VID/PID alone is insufficient
 to classify Loader versus Maskrom. `open_unique` and `open_exact` return
 `USB_CLAIM` for these observation-only records before opening a vendor handle.
+
+Both WinUSB and hub observations derive `locationId` from the canonical,
+case-insensitive set of PnP `SPDRP_LOCATION_PATHS`, including path boundaries.
+Missing or malformed paths fail closed. The device instance ID is retained
+only for census continuity: PID and serial changes across a mode transition
+must not change the physical-port fact, and moving ports must change it.
+Already-sealed plans retain their original identity facts and are not migrated.
 
 One worker owns the synchronous hub query and its buffers. A five-second caller
 budget does not imply that Windows has cancelled an outstanding query. After
@@ -88,6 +96,11 @@ observation budget is separate from the caller's bulk-transfer timeout.
 API references: [connection information](https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/usbioctl/ni-usbioctl-ioctl_usb_get_node_connection_information_ex),
 [driver-key correlation](https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/usbioctl/ni-usbioctl-ioctl_usb_get_node_connection_driverkey_name),
 and [descriptor requests](https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/usbioctl/ni-usbioctl-ioctl_usb_get_descriptor_from_node_connection).
+The [PnP registry-property API](https://learn.microsoft.com/en-us/windows/win32/api/setupapi/nf-setupapi-setupdigetdeviceregistrypropertyw)
+defines location paths as a `REG_MULTI_SZ` physical device-tree location.
+The [hub driver-key structure](https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/usbioctl/ns-usbioctl-_usb_node_connection_driverkey_name)
+contains a terminated WCHAR key within its reported structure length. Only
+zero padding may follow the terminator; the full key must still match PnP.
 
 ---
 

@@ -409,3 +409,101 @@ fn abandoned_supervisor_clients_do_not_stop_the_paired_runtime() {
         assert_eq!(after.active_jobs, 0);
     }
 }
+
+#[test]
+fn campaign_jobs_remain_observable_and_cancellable_with_an_explicit_name() {
+    use arkforge_standalone::supervisor;
+
+    let sibling = Path::new(env!("CARGO_BIN_EXE_arkforge"))
+        .parent()
+        .unwrap()
+        .join(format!("arkforged{}", std::env::consts::EXE_SUFFIX));
+    if !sibling.exists() {
+        eprintln!(
+            "skipping the live contract: {} is not built",
+            sibling.display()
+        );
+        return;
+    }
+    let runtime = TempRuntime::new("campaign-commands");
+    // No HDC is configured. Only job/status calls cross the accepted gate;
+    // device calls below are refused before enumeration on a hardware host.
+    let started = runtime.json(&[
+        "daemon",
+        "start",
+        "--hardware-campaign",
+        "host-only-campaign",
+    ]);
+    assert!(started.status.success(), "{started:?}");
+    struct StopOnDrop<'a>(&'a Path);
+    impl Drop for StopOnDrop<'_> {
+        fn drop(&mut self) {
+            let _ = supervisor::stop(self.0);
+        }
+    }
+    let _stop = StopOnDrop(&runtime.root);
+    let before = supervisor::status(&runtime.root).unwrap();
+    for args in [
+        vec!["device", "list"],
+        vec![
+            "device",
+            "wait",
+            "--profile",
+            "org.example.absent@1.0.0",
+            "--mode",
+            "hdc-normal",
+            "--timeout-ms",
+            "0",
+        ],
+        vec!["job", "list"],
+        vec!["job", "show", "--job", "JOB-ABSENT"],
+        vec!["job", "reconcile", "--job", "JOB-ABSENT"],
+        vec!["watch", "--job", "JOB-ABSENT", "--timeout-ms", "0"],
+        vec!["cancel", "--job", "JOB-ABSENT", "--expect-sequence", "0"],
+    ] {
+        let missing = runtime.json(&args);
+        assert!(
+            stdout(&missing).contains("CAMPAIGN_ACKNOWLEDGEMENT_REQUIRED"),
+            "{args:?}: {missing:?}"
+        );
+        let mut wrong = args.clone();
+        wrong.extend(["--hardware-campaign", "different-campaign"]);
+        let refused = runtime.json(&wrong);
+        assert!(
+            stdout(&refused).contains("RUNTIME_CAMPAIGN_MISMATCH"),
+            "{args:?}: {refused:?}"
+        );
+        if args.first() == Some(&"device") {
+            continue;
+        }
+        let mut exact = args.clone();
+        exact.extend(["--hardware-campaign", "host-only-campaign"]);
+        let result = runtime.json(&exact);
+        let document = stdout(&result);
+        assert!(
+            !document.contains("CAMPAIGN_ACKNOWLEDGEMENT_REQUIRED"),
+            "{args:?}: {document}"
+        );
+        assert!(
+            !document.contains("RUNTIME_CAMPAIGN_MISMATCH"),
+            "{args:?}: {document}"
+        );
+        assert!(
+            !document.contains("INVALID_ARGUMENT"),
+            "{args:?}: {document}"
+        );
+        if args.last() == Some(&"list") {
+            assert!(result.status.success(), "{result:?}");
+        } else {
+            assert!(
+                !result.status.success(),
+                "an absent resource must be refused: {result:?}"
+            );
+        }
+    }
+    let after = supervisor::status(&runtime.root).unwrap();
+    assert_eq!(after.supervisor_pid, before.supervisor_pid);
+    assert_eq!(after.daemon_pid, before.daemon_pid);
+    assert_eq!(after.epoch, before.epoch);
+    assert_eq!(after.active_jobs, 0);
+}
