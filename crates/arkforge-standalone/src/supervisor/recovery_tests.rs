@@ -174,6 +174,7 @@ impl Fixture {
             replacement_authority: sha256(&encode_authority_plan(&new)).as_bytes().to_vec(),
             issued_at: 130_000,
             expires_at: 230_000,
+            additional_sources: Vec::new(),
         };
         (new, proof)
     }
@@ -410,4 +411,197 @@ fn completion_requires_each_write_verification_reset_and_postflight_receipt() {
     let mut changed = receipts.clone();
     changed.push(receipts[0].clone());
     assert!(complete(&changed).is_err());
+}
+
+fn with_additional_source(fixture: &Fixture, proof: &Proof) -> Proof {
+    let mut second = proof.clone();
+    second.assessment.job_id = "JOB-SECOND".into();
+    let source = second.assessment.source.as_mut().unwrap();
+    source.closed_control = None;
+    source.plan_id = "PLAN-SECOND".into();
+    source.plan_sha256 = sha256(b"second unknown plan").to_hex();
+    source.journal_head_sha256 = sha256(b"second journal").to_hex();
+    let mut old = fixture.old.clone();
+    old.plan.plan_id = source.plan_id.clone();
+    old.plan.plan_sha256 = source.plan_sha256.clone();
+    let mut lineage = fixture.lineage.clone();
+    lineage.plan_id = source.plan_id.clone();
+    persist_authority_plan(&fixture.root, &old).unwrap();
+    persist_job_lineage(&fixture.root, "JOB-SECOND", &lineage).unwrap();
+    second.source_authority = sha256(&encode_authority_plan(&old)).as_bytes().to_vec();
+    second.source_lineage = lineage_digest(&lineage);
+    second.source_permit.clear();
+    let mut set = proof.clone();
+    set.additional_sources.push(second);
+    set
+}
+
+#[test]
+fn complete_set_proof_seals_every_source_and_keeps_legacy_proof_bytes() {
+    let fixture = Fixture::new("set-seals");
+    let (new, old_proof) = fixture.replacement();
+    let old_bytes = old_proof.encode();
+    assert_eq!(Proof::decode(&old_bytes).unwrap().encode(), old_bytes);
+    let proof = with_additional_source(&fixture, &old_proof);
+    let decoded = Proof::decode(&proof.encode()).unwrap();
+    assert_eq!(decoded.sources().count(), 2);
+    for source in decoded.sources() {
+        validate_source_seals(&fixture.root, &new, source).unwrap();
+    }
+    let mut changed = decoded.additional_sources[0].clone();
+    changed.source_lineage = sha256(b"changed source lineage").as_bytes().to_vec();
+    assert!(validate_source_seals(&fixture.root, &new, &changed).is_err());
+    changed = decoded.additional_sources[0].clone();
+    changed.assessment.source.as_mut().unwrap().plan_sha256 =
+        sha256(b"different historical plan").to_hex();
+    assert!(validate_source_seals(&fixture.root, &new, &changed).is_err());
+    assert_eq!(old_proof.encode(), old_bytes);
+}
+
+#[test]
+fn source_set_refuses_omissions_additions_duplicates_nesting_and_budget_drift() {
+    let fixture = Fixture::new("set-format");
+    let (_, legacy) = fixture.replacement();
+    let proof = with_additional_source(&fixture, &legacy);
+    let expected = vec!["JOB-OLD".into(), "JOB-SECOND".into()];
+    validate_source_set(&expected, &expected).unwrap();
+    assert!(validate_source_set(&expected, &expected[..1]).is_err());
+    assert!(
+        validate_source_set(
+            &[
+                "JOB-NEW-UNKNOWN".into(),
+                "JOB-OLD".into(),
+                "JOB-SECOND".into()
+            ],
+            &expected
+        )
+        .is_err()
+    );
+    assert!(validate_source_set(&[], &expected).is_err());
+    for change in [
+        |source: &mut Proof| source.assessment.job_id = "JOB-OLD".into(),
+        |source: &mut Proof| source.expires_at += 1,
+        |source: &mut Proof| source.issued_at -= 1,
+        |source: &mut Proof| source.assessment.candidate_plan_id = "PLAN-OTHER".into(),
+        |source: &mut Proof| {
+            source.assessment.candidate_artifact_sha256 = sha256(b"different image").to_hex()
+        },
+        |source: &mut Proof| {
+            source.assessment.recovery_contract_sha256 = sha256(b"wider coverage").to_hex()
+        },
+        |source: &mut Proof| {
+            source.replacement_authority = sha256(b"different authority").as_bytes().to_vec()
+        },
+    ] {
+        let mut changed = proof.clone();
+        change(&mut changed.additional_sources[0]);
+        assert!(Proof::decode(&changed.encode()).is_err());
+    }
+    let mut nested = proof.clone();
+    nested.additional_sources[0]
+        .additional_sources
+        .push(legacy.clone());
+    assert!(Proof::decode(&nested.encode()).is_err());
+    let mut duplicate = proof.clone();
+    duplicate
+        .additional_sources
+        .push(proof.additional_sources[0].clone());
+    assert!(Proof::decode(&duplicate.encode()).is_err());
+    let mut oversized = legacy.clone();
+    for index in 0..MAX_RECOVERY_SOURCES {
+        let mut source = legacy.clone();
+        source.assessment.job_id = format!("JOB-SOURCE-{index:03}");
+        oversized.additional_sources.push(source);
+    }
+    assert!(Proof::decode(&oversized.encode()).is_err());
+}
+
+#[test]
+fn complete_set_reserves_and_correlates_all_sources_exactly_once() {
+    let fixture = Fixture::new("set-reservation");
+    let (new, legacy) = fixture.replacement();
+    let proof = with_additional_source(&fixture, &legacy);
+    persist(
+        &path(&fixture.root, &new.plan.plan_id, "proof"),
+        &proof.encode(),
+    )
+    .unwrap();
+    reserve_sources(&fixture.root, &proof).unwrap();
+    assert!(validate_reservations(&fixture.root, &proof, "JOB-NEW").is_err());
+    correlate(&fixture.root, &new, "JOB-NEW").unwrap();
+    validate_reservations(
+        &fixture.root,
+        &Proof::decode(&proof.encode()).unwrap(),
+        "JOB-NEW",
+    )
+    .unwrap();
+    assert!(validate_reservations(&fixture.root, &proof, "JOB-DIFFERENT").is_err());
+    assert!(reserve_sources(&fixture.root, &proof).is_err());
+    assert!(correlate(&fixture.root, &new, "JOB-DIFFERENT").is_err());
+    for source in proof.sources() {
+        assert_eq!(
+            read(&path(&fixture.root, &source.assessment.job_id, "reserved")).unwrap(),
+            proof.encode()
+        );
+        assert_eq!(
+            read(&path(&fixture.root, &source.assessment.job_id, "job")).unwrap(),
+            b"JOB-NEW"
+        );
+        assert!(!path(&fixture.root, &source.assessment.job_id, "complete").exists());
+    }
+}
+
+#[test]
+fn historical_spent_budget_blocks_a_new_source_without_overwriting_any_record() {
+    let fixture = Fixture::new("set-spent");
+    let (new, legacy) = fixture.replacement();
+    let proof = with_additional_source(&fixture, &legacy);
+    let reserved = path(&fixture.root, "JOB-OLD", "reserved");
+    persist(&reserved, &legacy.encode()).unwrap();
+    persist(&path(&fixture.root, "JOB-OLD", "job"), b"JOB-SECOND").unwrap();
+    let original = read(&reserved).unwrap();
+    let pending = vec!["JOB-OLD".into(), "JOB-SECOND".into()];
+    for _restart in 0..2 {
+        let error = require_unspent(&fixture.root, &pending).unwrap_err();
+        assert_eq!(error.code, "RECOVERY_PROOF_REQUIRED");
+        assert!(error.message.contains("budget exhausted for [JOB-OLD]"));
+        assert!(
+            error
+                .message
+                .contains("complete outstanding set is [JOB-OLD, JOB-SECOND]")
+        );
+        assert!(reserve_sources(&fixture.root, &proof).is_err());
+        assert_eq!(read(&reserved).unwrap(), original);
+        assert_eq!(
+            read(&path(&fixture.root, "JOB-OLD", "job")).unwrap(),
+            b"JOB-SECOND"
+        );
+        assert!(!path(&fixture.root, "JOB-SECOND", "reserved").exists());
+        assert!(!path(&fixture.root, &new.plan.plan_id, "proof").exists());
+    }
+}
+
+#[test]
+fn partial_set_publication_is_spent_and_never_authorizes_an_orphan() {
+    let fixture = Fixture::new("set-partial");
+    let (new, legacy) = fixture.replacement();
+    let proof = with_additional_source(&fixture, &legacy);
+    persist(
+        &path(&fixture.root, &new.plan.plan_id, "proof"),
+        &proof.encode(),
+    )
+    .unwrap();
+    persist(&path(&fixture.root, "JOB-OLD", "reserved"), &proof.encode()).unwrap();
+    assert!(correlate(&fixture.root, &new, "JOB-ORPHAN").is_err());
+    assert!(!path(&fixture.root, "JOB-OLD", "job").exists());
+    assert!(validate_reservations(&fixture.root, &proof, "JOB-ORPHAN").is_err());
+    assert!(reserve_sources(&fixture.root, &proof).is_err());
+    persist(
+        &path(&fixture.root, "JOB-SECOND", "reserved"),
+        &proof.encode(),
+    )
+    .unwrap();
+    persist(&path(&fixture.root, "JOB-OLD", "job"), b"JOB-ORPHAN").unwrap();
+    assert!(validate_reservations(&fixture.root, &proof, "JOB-ORPHAN").is_err());
+    assert!(!path(&fixture.root, "JOB-SECOND", "job").exists());
 }
