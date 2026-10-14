@@ -11,7 +11,9 @@ fn budget() -> Budget {
 fn candidate() -> Candidate {
     Candidate {
         instance_id: "USB\\VID_2207&PID_350A\\fixture".into(),
+        product_id: 0x350a,
         driver_key: "{fixture-driver}\\0001".into(),
+        location_paths: wide_bytes("PCIROOT(0)#PCI(1400)#USBROOT(0)#USB(3)\0\0"),
         hub_path: vec![0],
         port: 3,
     }
@@ -149,7 +151,7 @@ fn complete_hub_observation_retains_exact_identity_fields() {
     assert_eq!(record.device_release, 0x0200);
     assert_eq!(
         record.location_id,
-        instance_location(&candidate().instance_id)
+        location_from_property(&candidate().location_paths).unwrap()
     );
     assert_eq!(
         (
@@ -177,11 +179,108 @@ fn maskrom_is_not_reported_as_loader_from_shared_vid_pid() {
 }
 
 #[test]
+fn normal_mode_is_observed_without_opening_hdc_bulk_pipes() {
+    let mut normal = candidate();
+    normal.instance_id = "USB\\VID_2207&PID_5000\\different-normal-serial".into();
+    normal.product_id = 0x5000;
+    let mut hub = scripted(false);
+    for index in [0, 12] {
+        hub.replies[index].bytes[14..16].copy_from_slice(&0x5000u16.to_le_bytes());
+    }
+    for index in [2, 7] {
+        hub.replies[index].bytes[15] = 0x50;
+        hub.replies[index].bytes[16] = 1;
+    }
+    for index in [5, 10] {
+        hub.replies[index].bytes = string_bytes("HDC Device");
+    }
+    for index in [6, 11] {
+        hub.replies[index].bytes = string_bytes("different-normal-serial");
+    }
+    let observed = observe_candidate(&mut hub, &normal, &budget())
+        .unwrap()
+        .unwrap();
+    let loader = observe_candidate(&mut scripted(true), &candidate(), &budget())
+        .unwrap()
+        .unwrap();
+    assert_eq!(observed.product_id, 0x5000);
+    assert_eq!(observed.product_name.as_deref(), Some("HDC Device"));
+    assert_ne!(observed.serial, loader.serial);
+    assert_eq!(observed.location_id, loader.location_id);
+    assert!(!UsbInterfaceSelector::dayu200_loader().matches(&observed));
+    assert!(matches!(
+        super::super::open_service(service(observed), 30_000),
+        Err(UsbError::Claim(_))
+    ));
+    assert!(hub.replies.is_empty());
+}
+
+#[test]
+fn pnp_product_must_match_the_hub_descriptor() {
+    let mut normal = candidate();
+    normal.product_id = 0x5000;
+    let mut hub = scripted(true);
+    assert!(observe_candidate(&mut hub, &normal, &budget()).is_err());
+    assert_eq!(hub.seen, [Query::Connection]);
+}
+
+#[test]
+fn physical_topology_survives_personality_but_changes_with_port() {
+    let first = wide_bytes("PCIROOT(0)#USB(3)\0ACPI(0)#USB(3)\0\0");
+    let reordered = wide_bytes("acpi(0)#usb(3)\0pciroot(0)#usb(3)\0\0");
+    let other_port = wide_bytes("PCIROOT(0)#USB(4)\0ACPI(0)#USB(4)\0\0");
+    assert_eq!(
+        location_from_property(&first).unwrap(),
+        location_from_property(&reordered).unwrap()
+    );
+    assert_ne!(
+        location_from_property(&first).unwrap(),
+        location_from_property(&other_port).unwrap()
+    );
+    for bytes in [
+        vec![],
+        wide_bytes("\0\0"),
+        wide_bytes("USB(3)\0"),
+        wide_bytes("USB(3)\0\0USB(4)\0\0"),
+        vec![0, 0xd8, 0, 0, 0, 0],
+    ] {
+        assert!(location_from_property(&bytes).is_err());
+    }
+}
+
+#[test]
 fn wrong_driver_key_stops_before_any_descriptor_request() {
     let mut hub = scripted(true);
     hub.replies[1].bytes = driver_bytes("another-device");
     assert!(observe_candidate(&mut hub, &candidate(), &budget()).is_err());
     assert_eq!(hub.seen, [Query::Connection, Query::DriverKey]);
+}
+
+#[test]
+fn hub_driver_key_accepts_only_zero_padding_after_the_terminator() {
+    let key = candidate().driver_key;
+    let padded = wide_bytes(&format!("{key}\0\0\0"));
+    assert_eq!(hub_driver_key(&padded).unwrap(), key);
+    for malformed in [
+        wide_bytes(&key),
+        wide_bytes("\0\0"),
+        wide_bytes(&format!("{key}\0suffix\0")),
+        vec![65, 0, 0],
+    ] {
+        assert!(hub_driver_key(&malformed).is_err());
+    }
+    let mut hub = scripted(true);
+    for index in [1, 13] {
+        hub.replies[index].bytes.extend([0, 0, 0, 0]);
+        let length = hub.replies[index].bytes.len() as u32;
+        hub.replies[index].bytes[4..8].copy_from_slice(&length.to_le_bytes());
+    }
+    assert!(
+        observe_candidate(&mut hub, &candidate(), &budget())
+            .unwrap()
+            .is_some()
+    );
+    assert!(hub.replies.is_empty());
 }
 
 #[test]
@@ -314,16 +413,26 @@ fn language_descriptor_is_checked_before_selecting_a_language() {
 
 #[test]
 fn pnp_prefilter_is_bounded_to_the_exact_vid_pid() {
-    assert!(candidate_id("USB\\VID_2207&PID_350A\\one"));
-    assert!(candidate_id("usb\\vid_2207&pid_350a&rev_0200\\one"));
+    assert_eq!(
+        candidate_product("USB\\VID_2207&PID_350A\\one"),
+        Some(0x350a)
+    );
+    assert_eq!(
+        candidate_product("usb\\vid_2207&pid_350a&rev_0200\\one"),
+        Some(0x350a)
+    );
+    assert_eq!(
+        candidate_product("USB\\VID_2207&PID_5000\\one"),
+        Some(0x5000)
+    );
     for value in [
         "USB\\VID_2207&PID_350A1\\one",
         "USB\\VID_2207&PID_350B\\one",
-        "USB\\VID_2207&PID_5000\\one",
+        "USB\\VID_2207&PID_50001\\one",
         "OTHER\\VID_2207&PID_350A\\one",
         "USB\\VID_2207&PID_350A",
     ] {
-        assert!(!candidate_id(value));
+        assert_eq!(candidate_product(value), None);
     }
 }
 
@@ -433,7 +542,7 @@ fn service(descriptor: UsbInterfaceDescriptor) -> super::super::ServiceRecord {
     super::super::ServiceRecord {
         path: vec![0],
         descriptor,
-        binding: super::super::Binding::RockchipObservationOnly,
+        binding: super::super::Binding::HubObservationOnly,
     }
 }
 

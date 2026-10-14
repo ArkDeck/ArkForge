@@ -77,6 +77,11 @@ names a campaign (`--hardware-campaign <id>` on the daemon). The flag is not a
 `--force`; it is sealed into the plan (AF-PLAN-021) and never persisted as
 support.
 
+The same explicit per-call campaign option is available on device observation,
+`watch`, `cancel`, and job list/show/reconcile commands. Attaching with a missing
+or different name is refused before the query or control request; accepting
+the name does not weaken the exact cancellation sequence or permit boundary.
+
 ### AF-CLI-008 — rescue is a separate domain
 status: normative
 tests: []

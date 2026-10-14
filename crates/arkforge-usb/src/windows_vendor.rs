@@ -1,4 +1,4 @@
-//! Observe Rockchip-bound Loaders through documented Windows hub queries.
+//! Observe vendor-bound Loaders and HDC-normal through Windows hub queries.
 //!
 //! No Rockusb device/pipe is opened and no vendor IOCTL is issued. This is an
 //! observation path only; the parent refuses bulk claims for these records.
@@ -10,7 +10,7 @@ use super::{
     ERROR_INSUFFICIENT_BUFFER, ERROR_NO_MORE_ITEMS, FILE_ATTRIBUTE_NORMAL, FILE_SHARE_READ,
     FILE_SHARE_WRITE, GENERIC_READ, GENERIC_WRITE, Guid, Handle, INVALID_HANDLE_VALUE,
     OPEN_EXISTING, SetupDiGetClassDevsW, SpDevInfoData, UsbError, UsbInterfaceDescriptor,
-    UsbInterfaceSelector, device_instance_id, enumeration_error, instance_location,
+    UsbInterfaceSelector, device_instance_id, enumeration_error,
 };
 use std::ptr;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -21,6 +21,7 @@ const DIGCF_ALLCLASSES: u32 = 4;
 const SPDRP_SERVICE: u32 = 4;
 const SPDRP_DRIVER: u32 = 9;
 const SPDRP_ADDRESS: u32 = 28;
+const SPDRP_LOCATION_PATHS: u32 = 35;
 const MAX_PROPERTY_BYTES: usize = 65_536;
 const MAX_CANDIDATES: usize = 16;
 const OBSERVATION_BUDGET: Duration = Duration::from_secs(5);
@@ -82,7 +83,7 @@ unsafe extern "system" {
 }
 
 fn invalid(message: &str) -> UsbError {
-    UsbError::Enumeration(format!("Rockchip hub observation: {message}"))
+    UsbError::Enumeration(format!("USB hub observation: {message}"))
 }
 
 /// Only one observation worker may be outstanding. If a Windows query does
@@ -167,7 +168,9 @@ impl Budget {
 #[derive(Clone, PartialEq, Eq, PartialOrd, Ord)]
 struct Candidate {
     instance_id: String,
+    product_id: u16,
     driver_key: String,
+    location_paths: Vec<u8>,
     hub_path: Vec<u16>,
     port: u32,
 }
@@ -217,14 +220,25 @@ fn candidates(budget: &Budget) -> Result<Vec<Candidate>, UsbError> {
             return Err(enumeration_error("USB SetupDiEnumDeviceInfo"));
         }
         let instance_id = device_instance_id(set.0, &mut info)?;
-        if !candidate_id(&instance_id) {
+        let Some(product_id) = candidate_product(&instance_id) else {
             continue;
-        }
+        };
         let service = property(set.0, &mut info, SPDRP_SERVICE, 1)?;
-        if !utf16_string(&service)?.eq_ignore_ascii_case("Rockusb") {
+        let expected_service = if product_id == 0x350a {
+            "Rockusb"
+        } else {
+            "WINUSB"
+        };
+        if !utf16_string(&service)
+            .map_err(|error| invalid(&format!("PnP service: {error}")))?
+            .eq_ignore_ascii_case(expected_service)
+        {
             continue;
         }
-        let driver_key = utf16_string(&property(set.0, &mut info, SPDRP_DRIVER, 1)?)?;
+        let driver_key = utf16_string(&property(set.0, &mut info, SPDRP_DRIVER, 1)?)
+            .map_err(|error| invalid(&format!("PnP driver key: {error}")))?;
+        let location_paths = property(set.0, &mut info, SPDRP_LOCATION_PATHS, 7)?;
+        location_from_property(&location_paths)?;
         let address = property(set.0, &mut info, SPDRP_ADDRESS, 4)?;
         if address.len() != 4 {
             return Err(invalid("PnP port property has the wrong length"));
@@ -236,7 +250,9 @@ fn candidates(budget: &Budget) -> Result<Vec<Candidate>, UsbError> {
         let hub_path = parent_hub(info.dev_inst, budget)?;
         found.push(Candidate {
             instance_id,
+            product_id,
             driver_key,
+            location_paths,
             hub_path,
             port,
         });
@@ -249,12 +265,59 @@ fn candidates(budget: &Budget) -> Result<Vec<Candidate>, UsbError> {
     Err(invalid("USB PnP census exceeded its node bound"))
 }
 
-fn candidate_id(value: &str) -> bool {
+fn candidate_product(value: &str) -> Option<u16> {
     let upper = value.to_ascii_uppercase();
-    let Some(rest) = upper.strip_prefix("USB\\VID_2207&PID_350A") else {
-        return false;
-    };
-    rest.starts_with('\\') || rest.starts_with('&')
+    [
+        ("USB\\VID_2207&PID_350A", 0x350a),
+        ("USB\\VID_2207&PID_5000", 0x5000),
+    ]
+    .into_iter()
+    .find_map(|(prefix, product)| {
+        upper
+            .strip_prefix(prefix)
+            .filter(|rest| rest.starts_with('\\') || rest.starts_with('&'))
+            .map(|_| product)
+    })
+}
+
+/// PnP location paths name the physical port and survive PID/serial changes.
+/// An instance ID names a personality; it must never stand in for topology.
+pub(super) fn device_location(
+    set: DeviceInfoSet,
+    info: &mut SpDevInfoData,
+) -> Result<u32, UsbError> {
+    location_from_property(&property(set, info, SPDRP_LOCATION_PATHS, 7)?)
+}
+
+fn location_from_property(bytes: &[u8]) -> Result<u32, UsbError> {
+    if bytes.len() < 6 || !bytes.len().is_multiple_of(2) || !bytes.ends_with(&[0, 0, 0, 0]) {
+        return Err(invalid("missing or unterminated PnP location paths"));
+    }
+    let units = bytes[..bytes.len() - 4]
+        .as_chunks::<2>()
+        .0
+        .iter()
+        .map(|pair| u16::from_le_bytes(*pair))
+        .collect::<Vec<_>>();
+    let decoded =
+        String::from_utf16(&units).map_err(|_| invalid("invalid UTF-16 PnP location paths"))?;
+    let mut paths = decoded
+        .split('\0')
+        .map(str::to_ascii_uppercase)
+        .collect::<Vec<_>>();
+    if paths.iter().any(String::is_empty) {
+        return Err(invalid("PnP location paths contain an empty path"));
+    }
+    paths.sort();
+    paths.dedup();
+    let mut hash = 0x811c_9dc5u32;
+    for path in paths {
+        for unit in path.encode_utf16().chain(std::iter::once(0)) {
+            hash ^= u32::from(unit);
+            hash = hash.wrapping_mul(0x0100_0193);
+        }
+    }
+    Ok(hash)
 }
 
 fn property(
@@ -449,7 +512,12 @@ struct Connection {
     address: u16,
 }
 
-fn connection(hub: &mut impl Hub, port: u32, budget: &Budget) -> Result<Connection, UsbError> {
+fn connection(
+    hub: &mut impl Hub,
+    port: u32,
+    product_id: u16,
+    budget: &Budget,
+) -> Result<Connection, UsbError> {
     // Allow the hub to include all USB endpoint pipe records (packed 11 bytes
     // each). Identity consumes only the fixed header; no pipe handle is used.
     let mut request = vec![0; CONNECTION_BYTES + 32 * 11];
@@ -469,7 +537,7 @@ fn connection(hub: &mut impl Hub, port: u32, budget: &Budget) -> Result<Connecti
         || device[1] != 1
         || device[17] != 1
         || read_u16(&device, 8)? != 0x2207
-        || read_u16(&device, 10)? != 0x350a
+        || read_u16(&device, 10)? != product_id
         || bytes[22] == 0
     {
         return Err(invalid(
@@ -494,7 +562,28 @@ fn driver_key(hub: &mut impl Hub, port: u32, budget: &Budget) -> Result<String, 
     if total != bytes.len() {
         return Err(invalid("incomplete hub driver-key response"));
     }
-    utf16_string(&bytes[8..])
+    hub_driver_key(&bytes[8..])
+}
+
+fn hub_driver_key(bytes: &[u8]) -> Result<String, UsbError> {
+    // DriverKeyName is a terminated WCHAR array inside the returned structure.
+    // ActualLength can include zero padding after its terminator; those bytes
+    // are not part of the identity. Never accept nonzero data after the first
+    // terminator, and still compare the entire decoded key with PnP's key.
+    let (units, trailing) = bytes.as_chunks::<2>();
+    if !trailing.is_empty() {
+        return Err(invalid("hub driver key has an incomplete WCHAR"));
+    }
+    let end = units
+        .iter()
+        .position(|unit| *unit == [0, 0])
+        .ok_or_else(|| invalid("hub driver key is unterminated"))?;
+    if end == 0 || units[end..].iter().any(|unit| *unit != [0, 0]) {
+        return Err(invalid(
+            "hub driver key is empty or contains data after its terminator",
+        ));
+    }
+    decode_utf16(&bytes[..end * 2]).map_err(|error| invalid(&format!("hub driver key: {error}")))
 }
 
 fn descriptor(
@@ -530,7 +619,7 @@ fn observe_candidate(
     candidate: &Candidate,
     budget: &Budget,
 ) -> Result<Option<UsbInterfaceDescriptor>, UsbError> {
-    let before = connection(hub, candidate.port, budget)?;
+    let before = connection(hub, candidate.port, candidate.product_id, budget)?;
     if !driver_key(hub, candidate.port, budget)?.eq_ignore_ascii_case(&candidate.driver_key) {
         return Err(invalid("hub port and PnP driver key do not match"));
     }
@@ -544,7 +633,7 @@ fn observe_candidate(
             "USB identity descriptors changed during observation",
         ));
     }
-    let after = connection(hub, candidate.port, budget)?;
+    let after = connection(hub, candidate.port, candidate.product_id, budget)?;
     if before != after
         || !driver_key(hub, candidate.port, budget)?.eq_ignore_ascii_case(&candidate.driver_key)
     {
@@ -558,7 +647,7 @@ fn observe_candidate(
         product_id: read_u16(device, 10)?,
         usb_specification: read_u16(device, 2)?,
         device_release: read_u16(device, 12)?,
-        location_id: instance_location(&candidate.instance_id),
+        location_id: location_from_property(&candidate.location_paths)?,
         interface_number: interface[0],
         interface_class: interface[1],
         interface_subclass: interface[2],
@@ -569,9 +658,10 @@ fn observe_candidate(
     };
     // The discovery Profile maps this PID to Loader. Never emit a Maskrom
     // observation merely because Rockchip shares that VID/PID between modes.
-    Ok(UsbInterfaceSelector::dayu200_loader()
-        .matches(&record)
-        .then_some(record))
+    Ok(
+        (candidate.product_id == 0x5000 || UsbInterfaceSelector::dayu200_loader().matches(&record))
+            .then_some(record),
+    )
 }
 
 type IdentityDescriptors = (Vec<u8>, [Option<String>; 3]);
@@ -589,9 +679,10 @@ fn identity_descriptors(
         let mut result = [None, None, None];
         for (out, index) in result.iter_mut().zip(&device[14..17]) {
             if *index != 0 {
-                *out = Some(usb_string(&descriptor(
-                    hub, port, 3, *index, language, 255, budget,
-                )?)?);
+                *out = Some(
+                    usb_string(&descriptor(hub, port, 3, *index, language, 255, budget)?)
+                        .map_err(|error| invalid(&format!("USB string index {index}: {error}")))?,
+                );
             }
         }
         result

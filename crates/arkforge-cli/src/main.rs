@@ -1494,7 +1494,7 @@ fn run_device(arguments: &[String], globals: Globals) -> Result<i32, CliError> {
         "list" => {
             let selected = options.optional_one("device")?.map(str::to_string);
             let deep = options.flag("deep");
-            ensure_runtime(&globals, None)?;
+            ensure_runtime(&globals, options.optional_one("hardware-campaign")?)?;
             let registry = profile_registry()?;
             let mut client = public_client(&globals)?;
             let mut observations = client.device_list()?;
@@ -1527,7 +1527,7 @@ fn run_device(arguments: &[String], globals: Globals) -> Result<i32, CliError> {
                 .map(|value| parse_u64("--timeout-ms", value))
                 .transpose()?
                 .unwrap_or(30_000);
-            ensure_runtime(&globals, None)?;
+            ensure_runtime(&globals, options.optional_one("hardware-campaign")?)?;
             let probe = wait_for_device(&globals, profile, mode, timeout_ms)?;
             print_device_wait(globals.output, profile, mode, timeout_ms, &probe);
             Ok(0)
@@ -2178,7 +2178,7 @@ fn run_watch(arguments: &[String], globals: Globals) -> Result<i32, CliError> {
         .map(|value| parse_u64("--timeout-ms", value))
         .transpose()?
         .unwrap_or(30_000);
-    ensure_runtime(&globals, None)?;
+    ensure_runtime(&globals, options.optional_one("hardware-campaign")?)?;
     let job_id = match options.optional_one("job")? {
         Some(job) => job.to_string(),
         None => default_watch_job(&globals)?,
@@ -2264,7 +2264,7 @@ fn run_cancel(arguments: &[String], globals: Globals) -> Result<i32, CliError> {
     let options = Options::parse(arguments)?;
     let job_id = options.one("job")?;
     let expected_sequence = parse_u64("--expect-sequence", options.one("expect-sequence")?)?;
-    ensure_runtime(&globals, None)?;
+    ensure_runtime(&globals, options.optional_one("hardware-campaign")?)?;
     let runtime_dir = command_runtime_dir(&globals)?;
     let state = supervisor::cancel_job(&runtime_dir, job_id, expected_sequence)?;
     match globals.output {
@@ -3570,7 +3570,8 @@ fn run_job(arguments: &[String], globals: Globals) -> Result<i32, CliError> {
         print_help(help_spec(&["job".into()])?, globals.output);
         return Ok(0);
     };
-    ensure_runtime(&globals, None)?;
+    let options = Options::parse(&arguments[1..])?;
+    ensure_runtime(&globals, options.optional_one("hardware-campaign")?)?;
     match subcommand.as_str() {
         "list" => {
             let mut client = public_client(&globals)?;
@@ -6125,13 +6126,17 @@ static HELP: &[HelpSpec] = &[
     HelpSpec {
         command: "device list",
         summary: "List current observations with what this build can prove about each.",
-        usage: "arkforge device list [--device <observation-id>] [--deep]",
+        usage: "arkforge device list [--device <observation-id>] [--deep] [--hardware-campaign <campaign-id>]",
         effect: "Read-only discovery through runtime-dir/public.sock. --deep additionally probes every candidate profile. No observation is selected and no device is mutated.",
         requires: &["A running ArkForge runtime."],
         produces: &[
             "arkforge.device-list/v1 observations, each with an identification block reporting compatible profiles and physical model separately, with evidence and strength.",
         ],
         options: &[
+            (
+                "--hardware-campaign <campaign-id>",
+                "Exact campaign served by the running runtime; required for a campaign runtime and never inherited.",
+            ),
             (
                 "--device <observation-id>",
                 "Report only this exact current observation; optional.",
@@ -6159,11 +6164,15 @@ static HELP: &[HelpSpec] = &[
     HelpSpec {
         command: "device wait",
         summary: "Wait for exactly one observation matching an explicit profile and mode.",
-        usage: "arkforge device wait --profile <profile-id> --mode <mode> [--timeout-ms <u64>]",
+        usage: "arkforge device wait --profile <profile-id> --mode <mode> [--timeout-ms <u64>] [--hardware-campaign <campaign-id>]",
         effect: "Repeated read-only discovery and probing. It never chooses the first match; multiple matches are a typed ambiguity refusal.",
         requires: &["A loaded profile id and an explicit expected mode."],
         produces: &["arkforge.device-wait/v1 with the unique probed observation and facts digest."],
         options: &[
+            (
+                "--hardware-campaign <campaign-id>",
+                "Exact campaign served by the running runtime; required for a campaign runtime and never inherited.",
+            ),
             (
                 "--profile <profile-id>",
                 "Explicit loaded profile; required.",
@@ -6547,7 +6556,7 @@ static HELP: &[HelpSpec] = &[
     HelpSpec {
         command: "watch",
         summary: "Follow one job's durable events, defaulting to the job that is running.",
-        usage: "arkforge watch [--job <job-id>] [--after-sequence <u64>] [--timeout-ms <u64>]",
+        usage: "arkforge watch [--job <job-id>] [--after-sequence <u64>] [--timeout-ms <u64>] [--hardware-campaign <campaign-id>]",
         effect: "Read-only polling of durable events and point-in-time status. Timeout ends only this observation; it never cancels or changes the job.",
         requires: &[
             "A running ArkForge runtime, and a resume sequence no greater than the durable last_sequence.",
@@ -6556,6 +6565,10 @@ static HELP: &[HelpSpec] = &[
             "arkforge.job-watch/v1, arkforge.job-event/v1, and arkforge.command-result/v1 with strictly ordered typed events, terminal/timed-out status, and an exact resume command.",
         ],
         options: &[
+            (
+                "--hardware-campaign <campaign-id>",
+                "Exact campaign served by the running runtime; required for a campaign runtime and never inherited.",
+            ),
             (
                 "--job <job-id>",
                 "Exact durable job; defaults to the single running job, or the most recently active one when none is running.",
@@ -6596,13 +6609,17 @@ static HELP: &[HelpSpec] = &[
     HelpSpec {
         command: "cancel",
         summary: "Ask the authority to stop one job at a safe boundary.",
-        usage: "arkforge cancel --job <job-id> --expect-sequence <u64>",
+        usage: "arkforge cancel --job <job-id> --expect-sequence <u64> [--hardware-campaign <campaign-id>]",
         effect: "Mutating control only. It requests a safe stop at an optimistic sequence; it never edits the journal, replays an action, or reclassifies an outcome.",
         requires: &["A durable job and the exact expected last sequence."],
         produces: &[
             "arkforge.job-cancellation/v1 with one of four typed dispositions and no automatic replay.",
         ],
         options: &[
+            (
+                "--hardware-campaign <campaign-id>",
+                "Exact campaign served by the running runtime; required for a campaign runtime and never inherited.",
+            ),
             ("--job <job-id>", "Exact durable job; required."),
             (
                 "--expect-sequence <u64>",
@@ -6642,11 +6659,14 @@ static HELP: &[HelpSpec] = &[
     HelpSpec {
         command: "job list",
         summary: "List point-in-time durable status for every job in this runtime.",
-        usage: "arkforge job list",
+        usage: "arkforge job list [--hardware-campaign <campaign-id>]",
         effect: "Read-only. It does not watch, resume, cancel, reconcile, or mutate a job.",
         requires: &["A running ArkForge runtime."],
         produces: &["arkforge.job-list/v1, including an empty jobs array."],
-        options: &[],
+        options: &[(
+            "--hardware-campaign <campaign-id>",
+            "Exact campaign served by the running runtime; required for a campaign runtime and never inherited.",
+        )],
         examples: &["arkforge --output json job list"],
         next: &["arkforge job show --job <job-id>"],
         exits: &[
@@ -6658,13 +6678,19 @@ static HELP: &[HelpSpec] = &[
     HelpSpec {
         command: "job show",
         summary: "Show one durable job with its event tail, receipts, and recovery block.",
-        usage: "arkforge job show --job <job-id>",
+        usage: "arkforge job show --job <job-id> [--hardware-campaign <campaign-id>]",
         effect: "Read-only point-in-time status. It neither waits for events nor changes the job.",
         requires: &["One exact job id from job list or a prior command result."],
         produces: &[
             "arkforge.job/v1 with plan binding, state, progress, the last 20 durable events, every action receipt, and the no-replay recovery block. Each embedded section reports its own availability, so an unreadable one is never rendered as an absent one.",
         ],
-        options: &[("--job <job-id>", "Exact durable job id; required.")],
+        options: &[
+            (
+                "--hardware-campaign <campaign-id>",
+                "Exact campaign served by the running runtime; required for a campaign runtime and never inherited.",
+            ),
+            ("--job <job-id>", "Exact durable job id; required."),
+        ],
         examples: &["arkforge --output json job show --job <job-id>"],
         next: &["If state is outcomeUnknown, run 'arkforge job reconcile --job <job-id>'."],
         exits: &[
@@ -6680,13 +6706,19 @@ static HELP: &[HelpSpec] = &[
     HelpSpec {
         command: "job reconcile",
         summary: "Assess possible effects without replaying an unresolved job.",
-        usage: "arkforge job reconcile --job <job-id>",
+        usage: "arkforge job reconcile --job <job-id> [--hardware-campaign <campaign-id>]",
         effect: "Read-only controller assessment. It never dispatches, resumes, edits, or reclassifies the original job optimistically.",
         requires: &["A durable job in the selected paired runtime."],
         produces: &[
             "arkforge.job-reconciliation/v1 with immutable original state, possible-effect completeness, effects, and verdict.",
         ],
-        options: &[("--job <job-id>", "Exact durable job; required.")],
+        options: &[
+            (
+                "--hardware-campaign <campaign-id>",
+                "Exact campaign served by the running runtime; required for a campaign runtime and never inherited.",
+            ),
+            ("--job <job-id>", "Exact durable job; required."),
+        ],
         examples: &["arkforge --output json job reconcile --job JOB-EXAMPLE"],
         next: &["arkforge job show --job <job-id>"],
         exits: &[
