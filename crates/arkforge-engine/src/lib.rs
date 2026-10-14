@@ -18,6 +18,7 @@
 
 pub mod durable;
 pub mod journal;
+mod plan_codec;
 pub mod recovery;
 pub mod step;
 pub mod superseding;
@@ -121,29 +122,73 @@ pub struct StoredPlan {
     pub private_plan: StoredProviderPlan,
 }
 
-/// Holds materialized plans for the lifetime of the daemon.
-///
-/// Durable plan storage across restarts is AF-V2, together with the journal
-/// that makes a stored plan meaningful after a crash. What matters already is
-/// that a plan handed back out is verified against its own digest first:
-/// architecture.md 6.3 forbids trusting a plan whose store may have been
-/// corrupted.
+impl StoredPlan {
+    pub const MAX_STORAGE_BYTES: u64 = plan_codec::MAX_BYTES;
+
+    /// Private storage bytes, never an Agent/App IPC representation.
+    pub fn to_storage_bytes(&self) -> Result<Vec<u8>, EngineError> {
+        plan_codec::encode(self).map_err(EngineError::PlanStorage)
+    }
+
+    /// Restores sealed bytes and validates their full projection without lowering.
+    pub fn from_storage_bytes(bytes: &[u8]) -> Result<Self, EngineError> {
+        plan_codec::decode(bytes).map_err(EngineError::PlanStorage)
+    }
+}
+
+/// Host storage is supplied by the daemon; the engine owns only verification.
+/// `persist` must commit immutable bytes before returning success. Loading
+/// never creates authority, device sessions, or pending execution work.
+pub trait PlanStorage: std::fmt::Debug + Send {
+    fn load(&self) -> Result<Vec<StoredPlan>, EngineError>;
+    fn persist(&self, plan: &StoredPlan, bytes: &[u8]) -> Result<(), EngineError>;
+}
+
+/// Holds verified sealed plans. Production opens durable storage; isolated
+/// mechanics tests may use an in-memory store. Loading data never resumes a job.
 #[derive(Debug, Default)]
 pub struct PlanStore {
     plans: BTreeMap<String, StoredPlan>,
+    storage: Option<Box<dyn PlanStorage>>,
 }
 
 impl PlanStore {
     pub fn new() -> Self {
         PlanStore {
             plans: BTreeMap::new(),
+            storage: None,
         }
     }
 
+    pub fn open(storage: impl PlanStorage + 'static) -> Result<Self, EngineError> {
+        let mut plans = BTreeMap::new();
+        for plan in storage.load()? {
+            plan_codec::validate(&plan).map_err(EngineError::PlanStorage)?;
+            let id = plan.envelope.plan_id.to_string();
+            if plans.insert(id, plan).is_some() {
+                return Err(EngineError::PlanStorage(
+                    "duplicate sealed plan identifier".into(),
+                ));
+            }
+        }
+        Ok(Self {
+            plans,
+            storage: Some(Box::new(storage)),
+        })
+    }
+
     pub fn insert(&mut self, plan: StoredPlan) -> Result<(), EngineError> {
-        plan.envelope
-            .verify_self_digest()
-            .map_err(EngineError::Plan)?;
+        let bytes = plan_codec::encode(&plan).map_err(EngineError::PlanStorage)?;
+        if let Some(existing) = self.plans.get(plan.envelope.plan_id.as_str())
+            && plan_codec::encode(existing).map_err(EngineError::PlanStorage)? != bytes
+        {
+            return Err(EngineError::PlanStorage(
+                "a different sealed plan already owns this identifier".into(),
+            ));
+        }
+        if let Some(storage) = &self.storage {
+            storage.persist(&plan, &bytes)?;
+        }
         self.plans
             .insert(plan.envelope.plan_id.as_str().to_string(), plan);
         Ok(())
@@ -178,6 +223,7 @@ impl PlanStore {
                 stored: stored.envelope.plan_digest,
             });
         }
+        plan_codec::validate(stored).map_err(EngineError::PlanStorage)?;
         Ok(stored)
     }
 
@@ -324,6 +370,12 @@ impl Engine {
         }
     }
 
+    pub fn open(storage: impl PlanStorage + 'static) -> Result<Self, EngineError> {
+        Ok(Self {
+            plans: PlanStore::open(storage)?,
+        })
+    }
+
     pub fn plans(&self) -> &PlanStore {
         &self.plans
     }
@@ -380,6 +432,7 @@ pub enum EngineError {
     },
     ExecutionDisabled(Vec<ExecutionBlocker>),
     Plan(PlanError),
+    PlanStorage(String),
     Journal(journal::JournalError),
 }
 
@@ -421,6 +474,7 @@ impl fmt::Display for EngineError {
                 Ok(())
             }
             EngineError::Plan(error) => write!(f, "{error}"),
+            EngineError::PlanStorage(error) => write!(f, "private plan storage: {error}"),
             EngineError::Journal(error) => write!(f, "{error}"),
         }
     }
