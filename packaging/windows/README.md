@@ -20,6 +20,21 @@ observation budget bounds the caller; an outstanding Windows query retains its
 worker, handle and buffers, blocks another vendor census, and performs no next
 query after cancellation. It does not claim that Windows completed cancellation.
 
+Windows physical topology uses the hub driver's reciprocal USB 2/USB 3
+companion-port relation. A single connector can have different PnP paths when
+DAYU200 changes from SuperSpeed HDC-normal to high-speed Loader. WinUSB and
+hub-only discovery hash the same sorted hub/port endpoint set after observing
+the relation twice. Different connectors remain distinct; missing, changing,
+nonreciprocal or multiple-companion routing fails closed. This uses the
+documented read-only
+[USB connector query](https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/usbioctl/ni-usbioctl-ioctl_usb_get_port_connector_properties)
+and its
+[companion-port fields](https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/usbioctl/ns-usbioctl-_usb_port_connector_properties),
+without parsing ACPI names into assumed aliases. Older speed-specific topology
+digests are not migrated into the new identity: existing plans, permits,
+recovery reservations and unknown outcomes remain sealed and may refuse a new
+observation. This fix does not reset a consumed recovery budget.
+
 This observation support neither installs nor redistributes the vendor driver
 and does not qualify its undocumented transfer/reset behavior. The production
 WinUSB driver package, signer, AF-W1 and hardware evidence requirements below

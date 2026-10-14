@@ -153,7 +153,8 @@ areas:
   - area: TRN
     symbols:
       - req: AF-TRN-001..005
-        symbol: arkforge_transport::{DeviceObservation, DeviceTransport, TypedDiscoveryFilter}; arkforge_transport::usb
+        symbol: arkforge_transport::{DeviceObservation, DeviceTransport, TypedDiscoveryFilter}; arkforge_transport::usb; arkforge_usb::platform::vendor::topology
+        tests: [crates/arkforge-usb/src/windows_topology_tests.rs, crates/arkforge-usb/src/windows_vendor_tests.rs]
       - req: AF-TRN-010..018
         symbol: arkforge_transport::evaluate_rebind
         tests: [crates/arkforge-transport/src/lib.rs tests, arkforge-conformance rebind suite]

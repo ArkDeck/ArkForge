@@ -14,6 +14,7 @@ fn candidate() -> Candidate {
         product_id: 0x350a,
         driver_key: "{fixture-driver}\\0001".into(),
         location_paths: wide_bytes("PCIROOT(0)#PCI(1400)#USBROOT(0)#USB(3)\0\0"),
+        connector_location: 0x1234_5678,
         hub_path: vec![0],
         port: 3,
     }
@@ -149,10 +150,7 @@ fn complete_hub_observation_retains_exact_identity_fields() {
     assert_eq!(record.product_id, 0x350a);
     assert_eq!(record.usb_specification, 0x0201);
     assert_eq!(record.device_release, 0x0200);
-    assert_eq!(
-        record.location_id,
-        location_from_property(&candidate().location_paths).unwrap()
-    );
+    assert_eq!(record.location_id, candidate().connector_location);
     assert_eq!(
         (
             record.interface_number,
@@ -467,15 +465,19 @@ fn timed_out_query_retains_its_resources_and_blocks_another_worker() {
     // A zero caller wait makes this deterministic without a scheduler sleep.
     // The simulated in-flight OS call owns its resources until explicitly released.
     assert!(
-        bounded_observation(Arc::clone(&running), Duration::ZERO, move |budget| {
-            let _held = HeldQuery(dropped_tx);
-            entered_tx.send(()).unwrap();
-            release_rx.recv().unwrap();
-            let refused = budget.check().is_err();
-            cancelled_tx.send(refused).unwrap();
-            budget.check()?;
-            panic!("a cancelled query must not dispatch its next operation");
-        })
+        bounded_observation::<Vec<UsbInterfaceDescriptor>>(
+            Arc::clone(&running),
+            Duration::ZERO,
+            move |budget| {
+                let _held = HeldQuery(dropped_tx);
+                entered_tx.send(()).unwrap();
+                release_rx.recv().unwrap();
+                let refused = budget.check().is_err();
+                cancelled_tx.send(refused).unwrap();
+                budget.check()?;
+                panic!("a cancelled query must not dispatch its next operation");
+            }
+        )
         .is_err()
     );
     entered_rx.recv_timeout(Duration::from_secs(2)).unwrap();
@@ -485,9 +487,13 @@ fn timed_out_query_retains_its_resources_and_blocks_another_worker() {
     ));
     assert!(running.load(Ordering::Acquire));
     assert!(
-        bounded_observation(Arc::clone(&running), Duration::ZERO, |_| {
-            panic!("a second observation worker must not start");
-        })
+        bounded_observation::<Vec<UsbInterfaceDescriptor>>(
+            Arc::clone(&running),
+            Duration::ZERO,
+            |_| {
+                panic!("a second observation worker must not start");
+            }
+        )
         .is_err()
     );
     release_tx.send(()).unwrap();
@@ -499,17 +505,23 @@ fn timed_out_query_retains_its_resources_and_blocks_another_worker() {
 fn completed_or_panicked_worker_releases_its_gate() {
     let running = Arc::new(AtomicBool::new(false));
     assert!(
-        bounded_observation(Arc::clone(&running), Duration::from_secs(2), |_| {
-            Ok(Vec::new())
-        })
+        bounded_observation::<Vec<UsbInterfaceDescriptor>>(
+            Arc::clone(&running),
+            Duration::from_secs(2),
+            |_| { Ok(Vec::new()) }
+        )
         .unwrap()
         .is_empty()
     );
     assert!(!running.load(Ordering::Acquire));
     assert!(
-        bounded_observation(Arc::clone(&running), Duration::from_secs(2), |_| {
-            panic!("simulated worker failure");
-        })
+        bounded_observation::<Vec<UsbInterfaceDescriptor>>(
+            Arc::clone(&running),
+            Duration::from_secs(2),
+            |_| {
+                panic!("simulated worker failure");
+            }
+        )
         .is_err()
     );
     assert!(!running.load(Ordering::Acquire));
@@ -536,6 +548,7 @@ fn only_documented_read_only_hub_ioctl_codes_are_available() {
     assert_eq!(Query::Connection.code(), 0x220448);
     assert_eq!(Query::DriverKey.code(), 0x220420);
     assert_eq!(Query::Descriptor.code(), 0x220410);
+    assert_eq!(Query::Connector.code(), 0x220458);
 }
 
 fn service(descriptor: UsbInterfaceDescriptor) -> super::super::ServiceRecord {
