@@ -73,9 +73,21 @@ impl CommandPort for ProcessPort {
         if current_digest != self.expected_digest {
             return Err(ControlFailure::CommandChanged);
         }
-        let mut child = Command::new(&self.executable)
+        let mut command = Command::new(&self.executable);
+        command.env_clear();
+        // Windows HDC needs SystemRoot to initialize its local client. With
+        // an empty environment even `list targets` hangs. Keep only this OS
+        // prerequisite; PATH and HDC endpoint/configuration overrides remain
+        // excluded, and the executable is still absolute and hash-bound.
+        #[cfg(windows)]
+        {
+            let system_root = std::env::var_os("SystemRoot")
+                .filter(|value| !value.is_empty())
+                .ok_or(ControlFailure::CommandUnavailable)?;
+            command.env("SystemRoot", system_root);
+        }
+        let mut child = command
             .args(arguments)
-            .env_clear()
             .current_dir(&self.working_directory)
             .stdin(Stdio::null())
             .stdout(Stdio::piped())
@@ -177,16 +189,22 @@ fn parse_target_list(stdout: &[u8]) -> Result<Vec<TargetRow>, ControlFailure> {
     let mut rows = Vec::new();
     for line in lines {
         let columns = line.split('\t').collect::<Vec<_>>();
-        if columns.len() != 5
+        if !matches!(columns.len(), 5 | 6)
             || !columns[1].is_empty()
-            || columns[4] != "localhost"
+            || (columns.len() == 6 && columns[5] != "hdc")
+            || columns[4].is_empty()
+            || columns[4].len() > 128
+            || !columns[4].bytes().all(|byte| byte.is_ascii_graphic())
             || columns[0].is_empty()
             || columns[0].len() > 128
             || !columns[0]
                 .bytes()
                 .all(|byte| byte.is_ascii() && !byte.is_ascii_whitespace())
             || !matches!(columns[2], "USB" | "TCP" | "UART")
-            || !matches!(columns[3], "Connected" | "Unauthorized" | "Offline")
+            || !matches!(
+                columns[3],
+                "Unknown" | "Ready" | "Connected" | "Unauthorized" | "Offline"
+            )
         {
             return Err(ControlFailure::MalformedTargetList);
         }
@@ -814,6 +832,79 @@ mod tests {
         assert_eq!(rows.len(), 1);
         assert!(parse_target_list(b"serial USB Connected\n").is_err());
         assert_eq!(parse_target_list(b"[Empty]\n").unwrap(), Vec::new());
+    }
+
+    #[test]
+    fn target_parser_accepts_current_hdc_rows_without_selecting_ready_uart() {
+        let rows = parse_target_list(
+            b"serial\t\tUSB\tConnected\tlocalhost\thdc\r\nCOM3\t\tUART\tReady\tunknown...\thdc\r\n",
+        )
+        .unwrap();
+        assert_eq!(rows.len(), 2);
+        assert_eq!(rows[1].state, "Ready");
+        for malformed in [
+            "serial\t\tUSB\tConnected\tlocalhost\tother\n",
+            "serial\t\tUSB\tUnexpected\tlocalhost\thdc\n",
+            "serial\t\tUSB\tConnected\t\thdc\n",
+            "serial\t\tUSB\tConnected\tlocalhost\thdc\textra\n",
+        ] {
+            assert_eq!(
+                parse_target_list(malformed.as_bytes()),
+                Err(ControlFailure::MalformedTargetList)
+            );
+        }
+        let runner = ScriptedRunner {
+            calls: Vec::new(),
+            replies: VecDeque::from([Ok(
+                b"serial\t\tUART\tReady\tunknown...\thdc\nserial\t\tUSB\tConnected\tlocalhost\thdc\n".to_vec(),
+            )]),
+        };
+        let mut port = HdcControlPort {
+            runner,
+            sessions: BTreeMap::new(),
+            resolve_native_usb_target: false,
+        };
+        assert_eq!(
+            port.exact_target(
+                &digest_in_domain(Domain::DeviceSerial, b"serial").to_hex(),
+                "topology",
+                Instant::now(),
+            ),
+            Ok("serial".into())
+        );
+    }
+
+    #[cfg(windows)]
+    #[test]
+    #[ignore = "child-process assertion, launched by windows_process_keeps_only_os_environment"]
+    fn windows_child_environment() {
+        assert!(!std::env::var_os("SystemRoot").unwrap().is_empty());
+        for (name, _) in std::env::vars_os() {
+            assert!(name.to_string_lossy().eq_ignore_ascii_case("SystemRoot"));
+        }
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn windows_process_keeps_only_os_environment() {
+        let executable = std::env::current_exe().unwrap();
+        let mut port = ProcessPort {
+            expected_digest: arkforged::dispatch::executable_digest(&executable).unwrap(),
+            executable,
+            working_directory: std::env::temp_dir(),
+        };
+        let output = port
+            .run(
+                &[
+                    "--exact",
+                    "hdc_control::tests::windows_child_environment",
+                    "--ignored",
+                    "--nocapture",
+                ],
+                Instant::now() + Duration::from_secs(5),
+            )
+            .unwrap();
+        assert!(String::from_utf8(output).unwrap().contains("1 passed"));
     }
 
     #[test]
