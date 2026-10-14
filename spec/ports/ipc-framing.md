@@ -68,11 +68,15 @@ source evidence do not authorize the standalone recovery path.
 
 The standalone authority independently checks the old public plan, spent permit
 and target lineage against fresh strong device observations. It durably seals
-the assessment, reserves one replacement epoch, and correlates the new job
-before issuing new permits. Each admission rechecks the source and candidate.
+the assessment for every outstanding unknown job, reserves each source exactly
+once for the same replacement, and correlates that new job to every source before
+issuing permits. The authority-local proof includes a bounded, canonical source
+set; the daemon assessment wire remains one source at a time. Each admission
+rechecks all sources, their candidate coverage, and the exact outstanding set.
 The proof expires with the plan or after four hours, whichever occurs first.
-Another unresolved job, changed facts, missing correlation, cancellation or a
-spent reservation prevents further execution. A failed replacement does not
+A newly outstanding job, omitted source, changed facts, missing correlation,
+cancellation or any spent source reservation prevents further execution. Partial
+reservation/correlation publication fails closed and does not replenish budget. A failed replacement does not
 automatically create another epoch.
 
 Only the replacement's complete semantic receipts and successful postflight

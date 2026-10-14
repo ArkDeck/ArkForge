@@ -3,7 +3,8 @@
 //! The old job is only read. None of these records is an old permit, a new
 //! receipt for the old job, or permission to replay its plan. A crash before
 //! the new job correlation leaves a spent reservation with zero eligible
-//! permits. This deliberately bounded path admits one replacement epoch.
+//! permits. Each source admits at most one replacement epoch; a set proof
+//! spends every included source without replenishing any historical budget.
 
 use super::*;
 use arkforge_core::effect::DeviceMode;
@@ -16,6 +17,7 @@ use arkforge_ipc::recovery::{RecoverySourceEvidence, SupersedingRecoveryAssessme
 use std::io::Read;
 
 const MAX_RECORD_BYTES: u64 = 1024 * 1024;
+const MAX_RECOVERY_SOURCES: usize = 64;
 const RECOVERY_BUDGET_MS: u64 = 4 * 60 * 60 * 1000;
 
 fn blocked(reason: impl std::fmt::Display) -> StandaloneError {
@@ -31,6 +33,7 @@ struct Proof {
     replacement_authority: Vec<u8>,
     issued_at: u64,
     expires_at: u64,
+    additional_sources: Vec<Proof>,
 }
 
 impl Proof {
@@ -43,10 +46,21 @@ impl Proof {
         wire::write_bytes(&mut out, 5, &self.replacement_authority);
         wire::write_uint64(&mut out, 6, self.issued_at);
         wire::write_uint64(&mut out, 7, self.expires_at);
+        for source in &self.additional_sources {
+            wire::write_message(&mut out, 8, &source.encode());
+        }
         out
     }
 
+    fn sources(&self) -> impl Iterator<Item = &Self> {
+        std::iter::once(self).chain(self.additional_sources.iter())
+    }
+
     fn decode(input: &[u8]) -> Result<Self, StandaloneError> {
+        Self::decode_inner(input, true)
+    }
+
+    fn decode_inner(input: &[u8], allow_set: bool) -> Result<Self, StandaloneError> {
         let mut out = Self {
             assessment: Default::default(),
             source_authority: Vec::new(),
@@ -55,6 +69,7 @@ impl Proof {
             replacement_authority: Vec::new(),
             issued_at: 0,
             expires_at: 0,
+            additional_sources: Vec::new(),
         };
         let mut reader = wire::Reader::new(input);
         while let Some((field, value)) = reader.next_field().map_err(blocked)? {
@@ -70,6 +85,12 @@ impl Proof {
                 5 => out.replacement_authority = value.as_bytes().map_err(blocked)?.to_vec(),
                 6 => out.issued_at = value.as_u64().map_err(blocked)?,
                 7 => out.expires_at = value.as_u64().map_err(blocked)?,
+                8 if allow_set && out.additional_sources.len() + 1 < MAX_RECOVERY_SOURCES => {
+                    out.additional_sources.push(Self::decode_inner(
+                        value.as_bytes().map_err(blocked)?,
+                        false,
+                    )?);
+                }
                 _ => return Err(blocked("Unrecognized recovery proof field.")),
             }
         }
@@ -84,6 +105,32 @@ impl Proof {
             || out.expires_at - out.issued_at > RECOVERY_BUDGET_MS
         {
             return Err(blocked("Incomplete or noncanonical recovery proof."));
+        }
+        let mut previous = None;
+        for source in &out.additional_sources {
+            let id = source.assessment.job_id.as_str();
+            if id == out.assessment.job_id
+                || previous.is_some_and(|previous| previous >= id)
+                || source.issued_at != out.issued_at
+                || source.expires_at != out.expires_at
+                || source.replacement_authority != out.replacement_authority
+                || source.assessment.candidate_plan_id != out.assessment.candidate_plan_id
+                || source.assessment.candidate_plan_sha256 != out.assessment.candidate_plan_sha256
+                || source.assessment.candidate_profile_sha256
+                    != out.assessment.candidate_profile_sha256
+                || source.assessment.candidate_artifact_sha256
+                    != out.assessment.candidate_artifact_sha256
+                || source.assessment.recovery_contract_id != out.assessment.recovery_contract_id
+                || source.assessment.recovery_contract_version
+                    != out.assessment.recovery_contract_version
+                || source.assessment.recovery_contract_sha256
+                    != out.assessment.recovery_contract_sha256
+            {
+                return Err(blocked(
+                    "Recovery source set is duplicated, reordered or inconsistently sealed.",
+                ));
+            }
+            previous = Some(id);
         }
         Ok(out)
     }
@@ -379,6 +426,65 @@ fn validate_observations(
     Ok(())
 }
 
+/// This check reads every source reservation. An existing reservation remains
+/// spent even if its job failed, its plan expired, or the runtime restarted.
+fn require_unspent(runtime: &Path, sources: &[String]) -> Result<(), StandaloneError> {
+    let mut spent = Vec::new();
+    for job in sources {
+        if path(runtime, job, "reserved")
+            .try_exists()
+            .map_err(blocked)?
+        {
+            spent.push(job.as_str());
+        }
+    }
+    if !spent.is_empty() {
+        return Err(blocked(format!(
+            "Recovery source budget exhausted for [{}]; the complete outstanding set is [{}]. Existing reservations cannot be reset or replaced.",
+            spent.join(", "),
+            sources.join(", "),
+        )));
+    }
+    Ok(())
+}
+
+fn pending_sources(
+    runtime: &Path,
+    public: &mut PublicClient,
+    controller: &mut ControllerClient,
+    active: &str,
+) -> Result<Vec<String>, StandaloneError> {
+    let mut sources = Vec::new();
+    for job in public.job_list()? {
+        if !job.terminal && job.job_id != active {
+            return Err(blocked("Another job holds the serial execution lane."));
+        }
+        if matches!(job.state.as_str(), "outcomeUnknown" | "recoveryAssessable")
+            && !completed_relation(runtime, public, controller, &job.job_id)?
+        {
+            sources.push(job.job_id);
+        } else if job.state == "confirmedFailed"
+            && public.job_events(&job.job_id, 0)?.iter().any(|event| {
+                event
+                    .receipt
+                    .as_ref()
+                    .is_some_and(|receipt| receipt.disposition == "confirmedPartialEffect")
+            })
+        {
+            return Err(blocked(
+                "A separate confirmed partial effect is not covered by this recovery proof.",
+            ));
+        }
+    }
+    sources.sort();
+    if sources.len() > MAX_RECOVERY_SOURCES || sources.windows(2).any(|pair| pair[0] == pair[1]) {
+        return Err(blocked(
+            "The outstanding recovery source set is oversized or ambiguous.",
+        ));
+    }
+    Ok(sources)
+}
+
 pub(super) fn require_source(
     runtime: &Path,
     public: &mut PublicClient,
@@ -387,23 +493,29 @@ pub(super) fn require_source(
     profile: &str,
     device: &str,
 ) -> Result<(), StandaloneError> {
-    let assessment = assessment(controller, job)?;
-    if !assessment.eligible && assessment.blocker_code != "managedControlRecoveryNeedsPlan" {
-        return Err(blocked(assessment.blocker_reason));
+    let sources = pending_sources(runtime, public, controller, "")?;
+    if !sources.iter().any(|source| source == job) {
+        return Err(blocked(
+            "The requested source is not an outstanding unknown job.",
+        ));
     }
-    let source = assessment
-        .source
-        .as_ref()
-        .ok_or_else(|| blocked("No verified source journal."))?;
-    let (old, lineage, _) = source_records(runtime, job, source)?;
-    require_lane(runtime, public, controller, job, "")?;
-    if path(runtime, job, "reserved")
-        .try_exists()
-        .map_err(blocked)?
-    {
-        return Err(blocked("The source recovery epoch is already reserved."));
+    require_unspent(runtime, &sources)?;
+    for job in &sources {
+        let assessment = assessment(controller, job)?;
+        if !assessment.eligible && assessment.blocker_code != "managedControlRecoveryNeedsPlan" {
+            return Err(blocked(format!(
+                "Source {job}: {}",
+                assessment.blocker_reason
+            )));
+        }
+        let source = assessment
+            .source
+            .as_ref()
+            .ok_or_else(|| blocked("No verified source journal."))?;
+        let (old, lineage, _) = source_records(runtime, job, source)?;
+        fresh_identity(public, &old, &lineage, profile, device)?;
     }
-    fresh_identity(public, &old, &lineage, profile, device)
+    Ok(())
 }
 
 pub(super) fn authorize(
@@ -413,34 +525,49 @@ pub(super) fn authorize(
     plan: &ExecutablePlan,
 ) -> Result<(), StandaloneError> {
     let new = load_authority_plan(runtime, &plan.plan_id)?;
-    let assessment = controller.assess_recovery_candidate(
-        &new.supersedes_job_id,
-        &plan.plan_id,
-        &plan.plan_sha256,
-    )?;
-    if !assessment.eligible {
-        return Err(blocked(assessment.blocker_reason));
-    }
-    let source = assessment
-        .source
-        .as_ref()
-        .ok_or_else(|| blocked("Missing source evidence."))?;
-    let (old, lineage, permit_hash) = source_records(runtime, &new.supersedes_job_id, source)?;
-    validate_replacement(&old, &lineage, &new, &assessment)?;
-    fresh_identity(public, &old, &lineage, &new.profile_id, &new.device_id)?;
+    let mut sources = pending_sources(runtime, public, controller, "")?;
+    require_unspent(runtime, &sources)?;
+    let anchor = sources
+        .iter()
+        .position(|job| *job == new.supersedes_job_id)
+        .ok_or_else(|| blocked("The requested source is no longer outstanding."))?;
+    sources.remove(anchor);
+    sources.insert(0, new.supersedes_job_id.clone());
     let now = arkforged::rescue::now_epoch_ms()?;
-    let proof = Proof {
-        assessment,
-        source_authority: sha256(&encode_authority_plan(&old)).as_bytes().to_vec(),
-        source_lineage: lineage_digest(&lineage),
-        source_permit: permit_hash,
-        replacement_authority: sha256(&encode_authority_plan(&new)).as_bytes().to_vec(),
-        issued_at: now,
-        expires_at: now
-            .saturating_add(RECOVERY_BUDGET_MS)
-            .min(plan.expires_at_epoch_ms),
-    };
+    let mut proofs = Vec::new();
+    for job in sources {
+        let assessment =
+            controller.assess_recovery_candidate(&job, &plan.plan_id, &plan.plan_sha256)?;
+        if !assessment.eligible {
+            return Err(blocked(format!(
+                "Source {job}: {}",
+                assessment.blocker_reason
+            )));
+        }
+        let source = assessment
+            .source
+            .as_ref()
+            .ok_or_else(|| blocked("Missing source evidence."))?;
+        let (old, lineage, permit_hash) = source_records(runtime, &job, source)?;
+        validate_replacement(&old, &lineage, &new, &assessment)?;
+        fresh_identity(public, &old, &lineage, &new.profile_id, &new.device_id)?;
+        proofs.push(Proof {
+            assessment,
+            source_authority: sha256(&encode_authority_plan(&old)).as_bytes().to_vec(),
+            source_lineage: lineage_digest(&lineage),
+            source_permit: permit_hash,
+            replacement_authority: sha256(&encode_authority_plan(&new)).as_bytes().to_vec(),
+            issued_at: now,
+            expires_at: now
+                .saturating_add(RECOVERY_BUDGET_MS)
+                .min(plan.expires_at_epoch_ms),
+            additional_sources: Vec::new(),
+        });
+    }
+    let mut proof = proofs.remove(0);
+    proof.additional_sources = proofs;
     Proof::decode(&proof.encode())?;
+    require_lane(runtime, public, controller, Some(&proof), "")?;
     persist(&path(runtime, &plan.plan_id, "proof"), &proof.encode())
 }
 
@@ -451,7 +578,7 @@ fn validate_replacement(
     assessment: &SupersedingRecoveryAssessment,
 ) -> Result<(), StandaloneError> {
     if new.plan.execution_purpose != "supersedingRecovery"
-        || new.supersedes_job_id != assessment.job_id
+        || new.supersedes_job_id.is_empty()
         || new.plan.plan_id != assessment.candidate_plan_id
         || new.plan.plan_sha256 != assessment.candidate_plan_sha256
         || new.plan.plan_id == old.plan.plan_id
@@ -483,17 +610,24 @@ fn validate_proof(
     if now < proof.issued_at || now >= proof.expires_at {
         return Err(blocked("Recovery budget or plan has expired."));
     }
-    let assessment = controller.assess_recovery_candidate(
-        &record.supersedes_job_id,
-        &record.plan.plan_id,
-        &record.plan.plan_sha256,
-    )?;
-    if assessment != proof.assessment || !assessment.eligible {
+    if record.supersedes_job_id != proof.assessment.job_id {
         return Err(blocked(
-            "Recovery source, coverage or immutable candidate facts changed.",
+            "Recovery anchor differs from the sealed source set.",
         ));
     }
-    validate_source_seals(runtime, record, &proof)?;
+    for source in proof.sources() {
+        let assessment = controller.assess_recovery_candidate(
+            &source.assessment.job_id,
+            &record.plan.plan_id,
+            &record.plan.plan_sha256,
+        )?;
+        if assessment != source.assessment || !assessment.eligible {
+            return Err(blocked(
+                "Recovery source, coverage or immutable candidate facts changed.",
+            ));
+        }
+        validate_source_seals(runtime, record, source)?;
+    }
     Ok(proof)
 }
 
@@ -507,7 +641,7 @@ fn validate_source_seals(
         .source
         .as_ref()
         .ok_or_else(|| blocked("Missing source proof."))?;
-    let (old, lineage, permit_hash) = source_records(runtime, &record.supersedes_job_id, source)?;
+    let (old, lineage, permit_hash) = source_records(runtime, &proof.assessment.job_id, source)?;
     validate_replacement(&old, &lineage, record, &proof.assessment)?;
     if proof.source_authority != sha256(&encode_authority_plan(&old)).as_bytes()
         || proof.source_lineage != lineage_digest(&lineage)
@@ -535,32 +669,49 @@ pub(super) fn before_start(
             ));
         }
     }
-    require_lane(runtime, public, controller, &record.supersedes_job_id, "")?;
     if record.plan.execution_purpose == "primaryFlash" && record.supersedes_job_id.is_empty() {
-        return Ok(());
+        return require_lane(runtime, public, controller, None, "");
     }
     let proof = validate_proof(runtime, controller, record, now)?;
-    let (old, lineage, _) = source_records(
-        runtime,
-        &record.supersedes_job_id,
-        proof
-            .assessment
-            .source
-            .as_ref()
-            .ok_or_else(|| blocked("Missing source proof."))?,
-    )?;
-    fresh_identity(
-        public,
-        &old,
-        &lineage,
-        &record.profile_id,
-        &record.device_id,
-    )?;
-    // One replacement per source, including after crashes or failed starts.
-    persist(
-        &path(runtime, &record.supersedes_job_id, "reserved"),
-        &proof.encode(),
-    )
+    require_lane(runtime, public, controller, Some(&proof), "")?;
+    let sources: Vec<_> = proof
+        .sources()
+        .map(|source| source.assessment.job_id.clone())
+        .collect();
+    require_unspent(runtime, &sources)?;
+    for source in proof.sources() {
+        let (old, lineage, _) = source_records(
+            runtime,
+            &source.assessment.job_id,
+            source
+                .assessment
+                .source
+                .as_ref()
+                .ok_or_else(|| blocked("Missing source proof."))?,
+        )?;
+        fresh_identity(
+            public,
+            &old,
+            &lineage,
+            &record.profile_id,
+            &record.device_id,
+        )?;
+    }
+    reserve_sources(runtime, &proof)
+}
+
+fn reserve_sources(runtime: &Path, proof: &Proof) -> Result<(), StandaloneError> {
+    let sources: Vec<_> = proof
+        .sources()
+        .map(|source| source.assessment.job_id.clone())
+        .collect();
+    require_unspent(runtime, &sources)?;
+    // Partial publication is deliberately spent and cannot authorize a job:
+    // correlation and every effect require all reservations to match.
+    for source in &sources {
+        persist(&path(runtime, source, "reserved"), &proof.encode())?;
+    }
+    Ok(())
 }
 
 pub(super) fn correlate(
@@ -571,16 +722,25 @@ pub(super) fn correlate(
     if record.supersedes_job_id.is_empty() {
         return Ok(());
     }
-    let proof = read(&path(runtime, &record.plan.plan_id, "proof"))?;
-    if read(&path(runtime, &record.supersedes_job_id, "reserved"))? != proof {
-        return Err(blocked(
-            "Recovery reservation differs from its sealed proof.",
-        ));
+    let bytes = read(&path(runtime, &record.plan.plan_id, "proof"))?;
+    let proof = Proof::decode(&bytes)?;
+    if proof.assessment.job_id != record.supersedes_job_id {
+        return Err(blocked("Recovery correlation anchor differs."));
     }
-    persist(
-        &path(runtime, &record.supersedes_job_id, "job"),
-        job.as_bytes(),
-    )
+    for source in proof.sources() {
+        if read(&path(runtime, &source.assessment.job_id, "reserved"))? != bytes {
+            return Err(blocked(
+                "Recovery reservation differs from its sealed proof.",
+            ));
+        }
+    }
+    for source in proof.sources() {
+        persist(
+            &path(runtime, &source.assessment.job_id, "job"),
+            job.as_bytes(),
+        )?;
+    }
+    Ok(())
 }
 
 pub(super) fn before_effect(
@@ -590,15 +750,8 @@ pub(super) fn before_effect(
     record: &AuthorityPlanRecord,
     job_id: &str,
 ) -> Result<(), StandaloneError> {
-    require_lane(
-        runtime,
-        public,
-        controller,
-        &record.supersedes_job_id,
-        job_id,
-    )?;
     if record.plan.execution_purpose == "primaryFlash" && record.supersedes_job_id.is_empty() {
-        return Ok(());
+        return require_lane(runtime, public, controller, None, job_id);
     }
     let proof = validate_proof(
         runtime,
@@ -606,12 +759,24 @@ pub(super) fn before_effect(
         record,
         arkforged::rescue::now_epoch_ms()?,
     )?;
-    if read(&path(runtime, &record.supersedes_job_id, "reserved"))? != proof.encode()
-        || read(&path(runtime, &record.supersedes_job_id, "job"))? != job_id.as_bytes()
-    {
-        return Err(blocked(
-            "No single-use recovery reservation is correlated to this exact job.",
-        ));
+    require_lane(runtime, public, controller, Some(&proof), job_id)?;
+    validate_reservations(runtime, &proof, job_id)
+}
+
+fn validate_reservations(
+    runtime: &Path,
+    proof: &Proof,
+    job_id: &str,
+) -> Result<(), StandaloneError> {
+    let bytes = proof.encode();
+    for source in proof.sources() {
+        if read(&path(runtime, &source.assessment.job_id, "reserved"))? != bytes
+            || read(&path(runtime, &source.assessment.job_id, "job"))? != job_id.as_bytes()
+        {
+            return Err(blocked(
+                "No complete single-use recovery reservation set is correlated to this exact job.",
+            ));
+        }
     }
     Ok(())
 }
@@ -620,33 +785,24 @@ fn require_lane(
     runtime: &Path,
     public: &mut PublicClient,
     controller: &mut ControllerClient,
-    source: &str,
+    proof: Option<&Proof>,
     active: &str,
 ) -> Result<(), StandaloneError> {
-    for job in public.job_list()? {
-        if !job.terminal && job.job_id != active {
-            return Err(blocked("Another job holds the serial execution lane."));
-        }
-        if matches!(job.state.as_str(), "outcomeUnknown" | "recoveryAssessable")
-            && job.job_id != source
-            && !completed_relation(runtime, public, controller, &job.job_id)?
-        {
-            return Err(blocked(
-                "An outstanding unknown intent is not covered by this recovery proof.",
-            ));
-        }
-        if job.state == "confirmedFailed"
-            && public.job_events(&job.job_id, 0)?.iter().any(|event| {
-                event
-                    .receipt
-                    .as_ref()
-                    .is_some_and(|receipt| receipt.disposition == "confirmedPartialEffect")
-            })
-        {
-            return Err(blocked(
-                "A separate confirmed partial effect is not covered by this recovery proof.",
-            ));
-        }
+    let pending = pending_sources(runtime, public, controller, active)?;
+    let mut covered: Vec<_> = proof
+        .into_iter()
+        .flat_map(Proof::sources)
+        .map(|source| source.assessment.job_id.clone())
+        .collect();
+    covered.sort();
+    validate_source_set(&pending, &covered)
+}
+
+fn validate_source_set(pending: &[String], covered: &[String]) -> Result<(), StandaloneError> {
+    if pending != covered {
+        return Err(blocked(
+            "The sealed recovery proof does not cover the exact complete outstanding intent set.",
+        ));
     }
     Ok(())
 }
@@ -659,16 +815,25 @@ fn completion_bytes(
 ) -> Result<Vec<u8>, StandaloneError> {
     let proof_bytes = read(&path(runtime, source_job, "reserved"))?;
     let proof = Proof::decode(&proof_bytes)?;
-    if proof.assessment.job_id != source_job {
+    if !proof
+        .sources()
+        .any(|source| source.assessment.job_id == source_job)
+    {
         return Err(blocked("Recovery source correlation differs."));
     }
     let job_bytes = read(&path(runtime, source_job, "job"))?;
     let job_id = std::str::from_utf8(&job_bytes).map_err(blocked)?;
     JobId::new(job_id).map_err(blocked)?;
     let record = load_authority_plan(runtime, &proof.assessment.candidate_plan_id)?;
-    validate_source_seals(runtime, &record, &proof)?;
-    if assessment(controller, source_job)?.source != proof.assessment.source {
-        return Err(blocked("The original unknown journal changed."));
+    if record.supersedes_job_id != proof.assessment.job_id {
+        return Err(blocked("Recovery completion anchor differs."));
+    }
+    validate_reservations(runtime, &proof, job_id)?;
+    for source in proof.sources() {
+        validate_source_seals(runtime, &record, source)?;
+        if assessment(controller, &source.assessment.job_id)?.source != source.assessment.source {
+            return Err(blocked("An original unknown journal changed."));
+        }
     }
     let job = public.job_show(job_id)?;
     if job.job_id != job_id {
