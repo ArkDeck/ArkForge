@@ -1415,6 +1415,7 @@ impl Service {
     /// Assesses whether a distinct complete-overwrite plan may supersede an
     /// unknown outcome. This never starts or replays either plan.
     fn plan_superseding_recovery(&self, request: &Request) -> Response {
+        use arkforge_ipc::recovery::SupersedingRecoveryAssessment as Assessment;
         let job_id = first_string_field(&request.payload, 1).unwrap_or_default();
         let Some(job) = self.jobs.job(&job_id) else {
             return self.refuse(
@@ -1424,51 +1425,136 @@ impl Service {
                 &format!("no job {job_id}"),
             );
         };
-        let mut payload = Vec::new();
-        arkforge_ipc::wire::write_string(&mut payload, 1, &job_id);
+        let now = self.clock.now_epoch_ms();
         let context = self.recovery_surface_context(&job_id);
-        let recovered_possible = context
-            .is_none()
-            .then(|| recovered_managed_control_possible_effects(job.journal()))
-            .flatten();
-        let assessment = if job.state().as_str() != "outcomeUnknown" {
+        let source = crate::recovery_assessment::source(job, now);
+        let closed = source
+            .as_ref()
+            .is_some_and(|source| source.closed_control.is_some());
+        let original = if job.state() != arkforge_engine::JobState::OutcomeUnknown {
             SupersedingRecoveryAssessment::Ineligible(RecoveryBlocker::NothingToRecover)
         } else if let Some(context) = &context {
             assess_superseding_recovery(&context.possible, &context.declaration)
-        } else if recovered_possible.is_some() {
-            // A closed managed control can change mode or read facts, but it
-            // cannot leave a persistent partition effect for a complete
-            // overwrite to supersede. The original outcome remains unknown;
-            // there is simply no persistent effect to recover.
+        } else if closed {
             SupersedingRecoveryAssessment::Ineligible(RecoveryBlocker::NothingToRecover)
         } else {
             SupersedingRecoveryAssessment::Ineligible(RecoveryBlocker::EffectsUnbounded)
         };
-        match &assessment {
+        let mut out = Assessment {
+            job_id,
+            source,
+            ..Assessment::default()
+        };
+        if job.journal().records().iter().any(|record| {
+            record.kind == arkforge_engine::journal::JournalRecordKind::CancellationRequested
+        }) {
+            out.blocker_code = "recoveryCancellationPending".into();
+            out.blocker_reason =
+                "A cancellation on the unresolved source job forbids new recovery dispatch.".into();
+            return self.ok(request, out.encode());
+        }
+        match original {
             SupersedingRecoveryAssessment::Eligible { covers } => {
-                arkforge_ipc::wire::write_bool(&mut payload, 2, true);
-                for effect in covers {
-                    arkforge_ipc::wire::write_string(
-                        &mut payload,
-                        5,
-                        &persistent_effect_name(effect),
-                    );
-                }
+                out.eligible = true;
+                out.covered_effects = covers.iter().map(persistent_effect_name).collect();
+            }
+            SupersedingRecoveryAssessment::Ineligible(RecoveryBlocker::NothingToRecover)
+                if closed =>
+            {
+                out.blocker_code = "managedControlRecoveryNeedsPlan".into();
+                out.blocker_reason = "The original journal bounds one expired initial enter-updater request. A distinct complete recovery plan and fresh authority target proof are required; the old outcome remains unknown.".into();
             }
             SupersedingRecoveryAssessment::Ineligible(blocker) => {
-                arkforge_ipc::wire::write_bool(&mut payload, 2, false);
-                arkforge_ipc::wire::write_string(&mut payload, 3, recovery_blocker_code(blocker));
-                arkforge_ipc::wire::write_string(&mut payload, 4, &blocker.to_string());
+                out.blocker_code = recovery_blocker_code(&blocker).into();
+                out.blocker_reason = blocker.to_string();
             }
         }
-        if let Some(context) = context
-            && let Some(contract) = context.contract
+        if let Some(contract) = context
+            .as_ref()
+            .and_then(|context| context.contract.as_ref())
         {
-            arkforge_ipc::wire::write_string(&mut payload, 6, contract.id.as_str());
-            arkforge_ipc::wire::write_string(&mut payload, 7, &contract.version.to_string());
-            arkforge_ipc::wire::write_string(&mut payload, 8, &contract.digest.to_hex());
+            out.recovery_contract_id = contract.id.to_string();
+            out.recovery_contract_version = contract.version.to_string();
+            out.recovery_contract_sha256 = contract.digest.to_hex();
         }
-        self.ok(request, payload)
+        let candidate_id = first_string_field(&request.payload, 2).unwrap_or_default();
+        let candidate_digest = first_string_field(&request.payload, 3).unwrap_or_default();
+        if candidate_id.is_empty() && candidate_digest.is_empty() {
+            return self.ok(request, out.encode());
+        }
+        if !out.eligible && out.blocker_code != "managedControlRecoveryNeedsPlan" {
+            return self.ok(request, out.encode());
+        }
+        out.eligible = false;
+        let validation = (|| -> Result<_, String> {
+            let source = out
+                .source
+                .as_ref()
+                .ok_or("missing original durable source evidence")?;
+            let digest = crate::recovery_assessment::parse_digest(&candidate_digest)
+                .ok_or("candidate plan digest is malformed")?;
+            let id = PlanId::new(&candidate_id).map_err(|error| error.to_string())?;
+            let candidate = self
+                .engine
+                .plans()
+                .get(&id, digest)
+                .map_err(|error| error.to_string())?;
+            let profile = self
+                .profiles
+                .get(&profile_key(
+                    &candidate.envelope.profile.id,
+                    candidate.envelope.profile.version,
+                ))
+                .ok_or("the candidate's profile is not loaded")?;
+            if let Some(original) = self.stored_plan_for_job(job.job_id())
+                && (original.envelope.profile != candidate.envelope.profile
+                    || original.envelope.artifact != candidate.envelope.artifact)
+            {
+                return Err(
+                    "the replacement must retain the source profile and immutable artifact".into(),
+                );
+            }
+            let possible = context
+                .as_ref()
+                .map(|context| context.possible.effects.persistent.as_slice())
+                .unwrap_or(&[]);
+            crate::recovery_assessment::validate_candidate(
+                candidate, profile, source, possible, now,
+            )
+            .map_err(str::to_string)?;
+            Ok(candidate)
+        })();
+        match validation {
+            Ok(candidate) => {
+                out.eligible = true;
+                out.blocker_code.clear();
+                out.blocker_reason.clear();
+                out.candidate_plan_id = candidate.envelope.plan_id.to_string();
+                out.candidate_plan_sha256 = candidate.envelope.plan_digest.to_hex();
+                out.candidate_profile_sha256 = candidate.envelope.profile.digest.to_hex();
+                out.candidate_artifact_sha256 = candidate.envelope.artifact.content_digest.to_hex();
+                let contract = candidate
+                    .envelope
+                    .recovery_contract
+                    .as_ref()
+                    .expect("candidate validation requires a contract");
+                out.recovery_contract_id = contract.id.to_string();
+                out.recovery_contract_version = contract.version.to_string();
+                out.recovery_contract_sha256 = contract.digest.to_hex();
+                out.covered_effects = candidate
+                    .envelope
+                    .effect_set
+                    .persistent
+                    .iter()
+                    .map(persistent_effect_name)
+                    .collect();
+            }
+            Err(reason) => {
+                out.blocker_code = "recoveryCandidateInvalid".into();
+                out.blocker_reason = reason;
+            }
+        }
+        self.ok(request, out.encode())
     }
 
     /// A typed operator/agent guide available on the public read-only socket.

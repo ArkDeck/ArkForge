@@ -185,6 +185,10 @@ message KeyValue {
 
 message RecoveryJobRequest {
   string job_id = 1;
+  // Optional exact candidate for planSupersedingRecovery only. An assessment
+  // never starts either execution or accepts caller-supplied device facts.
+  string candidate_plan_id = 2;
+  string candidate_plan_sha256 = 3;
 }
 
 message ReconcileJobResponse {
@@ -207,6 +211,33 @@ message SupersedingRecoveryAssessment {
   string recovery_contract_id = 6;
   string recovery_contract_version = 7;
   string recovery_contract_sha256 = 8;
+  RecoverySourceEvidence source = 9;
+  string candidate_plan_id = 10;
+  string candidate_plan_sha256 = 11;
+  string candidate_profile_sha256 = 12;
+  string candidate_artifact_sha256 = 13;
+}
+
+message RecoverySourceEvidence {
+  string plan_id = 1;
+  string plan_sha256 = 2;
+  string journal_head_sha256 = 3;
+  uint64 journal_sequence = 4;
+  ClosedControlEvidence closed_control = 5;
+}
+
+// Produced only from the daemon's validated original journal. This is an
+// uncertainty bound, not a receipt for the old action or an execution permit.
+message ClosedControlEvidence {
+  string step_id = 1;
+  string permit_id = 2;
+  string request_id = 3;
+  ManagedControlAction action = 4;
+  string dispatch_record_sha256 = 5;
+  uint64 deadline_epoch_ms = 6;
+  uint64 dispatched_at_epoch_ms = 7;
+  string attempt_id = 8;
+  string controller_session_id = 9;
 }
 
 message RecoveryGuide {

@@ -35,6 +35,8 @@ use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
 use std::time::{Duration, Instant};
 
+mod recovery;
+
 const READY_TIMEOUT: Duration = Duration::from_secs(10);
 /// How long a supervisor request waits for its answer.
 ///
@@ -763,7 +765,7 @@ fn serve(
                         "apply-plan" => {
                             let result = handle_apply(
                                 runtime_dir,
-                                &public,
+                                &mut public,
                                 session.epoch,
                                 session.hdc_digest,
                                 session.hardware_campaign,
@@ -1001,39 +1003,15 @@ fn handle_recovery_plan(
         )
     })?;
     let mut controller = ControllerClient::connect(runtime_dir)?;
-    let assessment = controller.plan_superseding_recovery(job_id)?;
-    let mut eligible = false;
-    let mut blocker = String::new();
-    let mut detail = String::new();
-    let mut reader = wire::Reader::new(&assessment);
-    while let Some((field, value)) = reader
-        .next_field()
-        .map_err(|error| internal("decode superseding recovery assessment", error))?
-    {
-        match field {
-            2 => eligible = value.as_bool().map_err(status_decode)?,
-            3 => blocker = value.as_str(3).map_err(status_decode)?.to_string(),
-            4 => detail = value.as_str(4).map_err(status_decode)?.to_string(),
-            _ => {}
-        }
-    }
-    if !eligible {
-        return Err(StandaloneError::new(
-            if blocker.is_empty() {
-                "RECOVERY_NOT_ELIGIBLE".into()
-            } else {
-                blocker
-            },
-            if detail.is_empty() {
-                format!("Job {job_id} is not eligible for a superseding recovery plan.")
-            } else {
-                detail
-            },
-            3,
-            false,
-        ));
-    }
-    handle_materialize_for(
+    recovery::require_source(
+        runtime_dir,
+        public,
+        &mut controller,
+        job_id,
+        profile,
+        device,
+    )?;
+    let response = handle_materialize_for(
         runtime_dir,
         public,
         &[artifact.clone(), profile.clone(), device.clone()],
@@ -1044,7 +1022,11 @@ fn handle_recovery_plan(
         },
         hdc_digest,
         hardware_campaign,
-    )
+    )?;
+    if let MaterializePlanResponse::Plan(plan) = &response {
+        recovery::authorize(runtime_dir, public, &mut controller, plan)?;
+    }
+    Ok(response)
 }
 
 struct MaterializationKind<'a> {
@@ -1291,7 +1273,7 @@ fn require_current_authority_support(
 
 fn handle_apply(
     runtime_dir: &Path,
-    public: &PublicClient,
+    public: &mut PublicClient,
     epoch: u64,
     hdc_digest: Option<Sha256Digest>,
     hardware_campaign: Option<&str>,
@@ -1388,6 +1370,7 @@ fn handle_apply(
         ));
     }
     let mut controller = ControllerClient::connect(runtime_dir)?;
+    recovery::before_start(runtime_dir, public, &mut controller, &record, now)?;
     let session = format!("CLI-SESSION-{epoch}");
     let job_id = controller.start_execution(
         plan_id,
@@ -1406,6 +1389,7 @@ fn handle_apply(
             revision: 1,
         },
     )?;
+    recovery::correlate(runtime_dir, &record, &job_id)?;
     let mut out = Vec::new();
     wire::write_string(&mut out, 1, &job_id);
     wire::write_bool(&mut out, 2, detach);
@@ -1699,6 +1683,7 @@ fn drive_active_jobs(
     target_lineages: &mut BTreeMap<String, ActiveTargetLineage>,
 ) -> Result<(), StandaloneError> {
     let mut public = PublicClient::connect(runtime_dir)?;
+    recovery::finalize(runtime_dir, &mut public)?;
     let active = public
         .job_list()?
         .into_iter()
@@ -1743,6 +1728,18 @@ fn drive_active_jobs(
                     })?;
                     if let Some(port) = hdc.as_deref_mut() {
                         let record = load_authority_plan(runtime_dir, &job.plan_id)?;
+                        if let Err(error) = recovery::before_effect(
+                            runtime_dir,
+                            &mut public,
+                            &mut controller,
+                            &record,
+                            &job.job_id,
+                        ) {
+                            submit_control_refusal(&mut controller, request, &error.message)?;
+                            cursor = event.sequence;
+                            cursors.insert(job.job_id.clone(), cursor);
+                            continue;
+                        }
                         let lineage = match target_lineages.get(&job.job_id) {
                             Some(lineage) => lineage.clone(),
                             None => {
@@ -1854,6 +1851,11 @@ fn answer_admission(
     target_lineages: &mut BTreeMap<String, ActiveTargetLineage>,
 ) -> Result<(), StandaloneError> {
     let record = load_authority_plan(runtime_dir, &snapshot.plan_id)?;
+    if let Err(error) =
+        recovery::before_effect(runtime_dir, public, controller, &record, &snapshot.job_id)
+    {
+        return submit_permit_refusal(controller, snapshot, epoch, &error.message);
+    }
     let lineage = match target_lineages.get(&snapshot.job_id) {
         Some(lineage) => lineage.clone(),
         None => {

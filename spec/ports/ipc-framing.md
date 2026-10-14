@@ -48,6 +48,40 @@ process-local job or receipt cache is never recovery evidence.
 `SESSION_NOT_PERMITTED`, `IPC_IO_FAILED`, `IPC_RESPONSE_INVALID`,
 `IPC_RESPONSE_MISMATCH`, plus the `PB_*` decoder classes.
 
+## Recovery assessment references (informative)
+
+`planSupersedingRecovery` accepts optional `RecoveryJobRequest` fields 2 and 3:
+the already materialized candidate plan id and digest. Without those references,
+the API reports the source job's coverage assessment. With them, it checks the
+stored candidate's exact profile contract, complete writable target mapping,
+content-bound write/verification pairs, reset and postflight. It never executes
+either plan or accepts caller-supplied device facts.
+
+`SupersedingRecoveryAssessment` fields 9–13 add the verified source journal
+identity and candidate plan/profile/artifact digests. An optional
+`ClosedControlEvidence` describes exactly one expired initial `enter-updater`
+dispatch, correlated through admission, intent, consumption and dispatch.
+Cancellation, another intent, any checkpoint or semantic receipt excludes this
+narrow proof. It does not classify the old control as not executed. Missing
+historical private write actions remain unbounded. Older messages without
+source evidence do not authorize the standalone recovery path.
+
+The standalone authority independently checks the old public plan, spent permit
+and target lineage against fresh strong device observations. It durably seals
+the assessment, reserves one replacement epoch, and correlates the new job
+before issuing new permits. Each admission rechecks the source and candidate.
+The proof expires with the plan or after four hours, whichever occurs first.
+Another unresolved job, changed facts, missing correlation, cancellation or a
+spent reservation prevents further execution. A failed replacement does not
+automatically create another epoch.
+
+Only the replacement's complete semantic receipts and successful postflight
+produce an immutable `SupersedingRecoveryEpoch` relation. This releases the
+old job's lane obstruction without changing its journal or permitting its
+original plan to run again. Explicit readback skips retain their typed reason;
+they never become full-hash verification. No Profile coverage declaration or
+wire/digest fixture is changed by this implementation.
+
 ## Platform notes (informative)
 - Unix: a Unix domain socket under the runtime directory, mode owner-only.
 - Windows: byte-mode Named Pipe, `PIPE_REJECT_REMOTE_CLIENTS`,

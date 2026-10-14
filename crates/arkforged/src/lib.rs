@@ -14,6 +14,7 @@ pub mod jobs;
 pub mod packaging;
 pub mod plan_storage;
 pub mod profiles;
+mod recovery_assessment;
 pub mod rescue;
 pub mod service;
 

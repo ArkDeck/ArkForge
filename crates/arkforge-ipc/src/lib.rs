@@ -16,6 +16,7 @@
 
 pub mod framing;
 pub mod messages;
+pub mod recovery;
 pub mod wire;
 
 use core::fmt;
