@@ -243,6 +243,10 @@ pub fn enumerate() -> Result<Vec<UsbInterfaceDescriptor>, UsbError> {
         .collect())
 }
 
+pub fn observe_legacy_topologies() -> Result<Vec<crate::LegacyTopologyObservation>, UsbError> {
+    vendor::observe_legacy_topologies()
+}
+
 pub fn open_unique(
     selector: UsbInterfaceSelector,
     timeout_ms: u32,

@@ -32,3 +32,24 @@ and completion, but newly starting a legacy plan cannot allocate new budget.
 
 No new wire fields or generic override flags are exposed. No old source identity
 check is relaxed to make an exhausted budget usable.
+
+## Existing Windows topology encoding migration
+
+Some durable Normal identities precede canonical USB 2/3 companion-connector
+encoding. The live Windows hub observer can compute both encodings from the
+same present PnP node while checking that its binding and descriptors remain
+unchanged during the census. A projection is usable only for one Normal node
+whose current observation id, serial, descriptor and topology digests all
+match. Ghost nodes, caller values and shared-port guesses are not inputs.
+
+Runtime changes only observation id and topology encoding in copies of the
+fresh discovery/probe facts, then requires the full recomputed stable digest
+to equal the original durable identity exactly. Serial, mode, descriptor,
+profile, protocol facts and strength remain unchanged. The new plan binds
+the current canonical identity. A closed migration seal records both identity
+digests in each source proof; before start the live proof must match again.
+Subsequent effects retain the ordinary new job's bound mode lineage.
+
+This permits an encoding migration, not a Normal/Loader identity substitution.
+An old Normal-only lineage cannot be recovered from a currently different
+Loader serial without a real rebind relation. No historical record is edited.

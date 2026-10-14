@@ -22,6 +22,8 @@ const RECOVERY_BUDGET_MS: u64 = 4 * 60 * 60 * 1000;
 
 #[path = "recovery_budget.rs"]
 mod budget;
+#[path = "recovery_identity.rs"]
+mod identity;
 
 fn blocked(reason: impl std::fmt::Display) -> StandaloneError {
     StandaloneError::new("RECOVERY_PROOF_REQUIRED", reason.to_string(), 3, false)
@@ -38,6 +40,7 @@ struct Proof {
     expires_at: u64,
     additional_sources: Vec<Proof>,
     budget: Option<budget::Seal>,
+    identity_migration: Option<identity::Migration>,
 }
 
 impl Proof {
@@ -55,6 +58,9 @@ impl Proof {
         }
         if let Some(budget) = &self.budget {
             wire::write_message(&mut out, 9, &budget.encode());
+        }
+        if let Some(migration) = &self.identity_migration {
+            wire::write_message(&mut out, 10, &migration.encode());
         }
         out
     }
@@ -78,6 +84,7 @@ impl Proof {
             expires_at: 0,
             additional_sources: Vec::new(),
             budget: None,
+            identity_migration: None,
         };
         let mut reader = wire::Reader::new(input);
         while let Some((field, value)) = reader.next_field().map_err(blocked)? {
@@ -101,6 +108,11 @@ impl Proof {
                 }
                 9 if allow_set => {
                     out.budget = Some(budget::Seal::decode(value.as_bytes().map_err(blocked)?)?);
+                }
+                10 => {
+                    out.identity_migration = Some(identity::Migration::decode(
+                        value.as_bytes().map_err(blocked)?,
+                    )?);
                 }
                 _ => return Err(blocked("Unrecognized recovery proof field.")),
             }
@@ -390,8 +402,8 @@ fn fresh_identity(
     lineage: &ActiveTargetLineage,
     profile: &str,
     device: &str,
-) -> Result<(), StandaloneError> {
-    if profile != old.profile_id || device != lineage.current_device_id {
+) -> Result<Option<identity::Migration>, StandaloneError> {
+    if profile != old.profile_id {
         return Err(blocked(
             "Recovery must use the original profile and exact current target lineage.",
         ));
@@ -407,7 +419,11 @@ fn fresh_identity(
         return Err(blocked("The recovery target is ambiguous."));
     }
     let probe = public.device_probe(device, profile)?;
-    validate_observations(lineage, observation, &probe)
+    if validate_observations(lineage, observation, &probe).is_ok() {
+        Ok(None)
+    } else {
+        identity::fresh(lineage, observation, &probe).map(Some)
+    }
 }
 
 fn validate_observations(
@@ -560,8 +576,15 @@ pub(super) fn authorize(
             .as_ref()
             .ok_or_else(|| blocked("Missing source evidence."))?;
         let (old, lineage, permit_hash) = source_records(runtime, &job, source)?;
-        validate_replacement(&old, &lineage, &new, &assessment)?;
-        fresh_identity(public, &old, &lineage, &new.profile_id, &new.device_id)?;
+        let identity_migration =
+            fresh_identity(public, &old, &lineage, &new.profile_id, &new.device_id)?;
+        validate_replacement(
+            &old,
+            &lineage,
+            &new,
+            &assessment,
+            identity_migration.as_ref(),
+        )?;
         proofs.push(Proof {
             assessment,
             source_authority: sha256(&encode_authority_plan(&old)).as_bytes().to_vec(),
@@ -574,6 +597,7 @@ pub(super) fn authorize(
                 .min(plan.expires_at_epoch_ms),
             additional_sources: Vec::new(),
             budget: None,
+            identity_migration,
         });
     }
     let mut proof = proofs.remove(0);
@@ -589,7 +613,18 @@ fn validate_replacement(
     lineage: &ActiveTargetLineage,
     new: &AuthorityPlanRecord,
     assessment: &SupersedingRecoveryAssessment,
+    migration: Option<&identity::Migration>,
 ) -> Result<(), StandaloneError> {
+    if let Some(migration) = migration {
+        migration.validate(lineage, new)?;
+    } else if new.topology_sha256 != old.topology_sha256
+        || new.device_id != lineage.current_device_id
+        || new.stable_identity_sha256 != lineage.current_stable_identity_sha256
+    {
+        return Err(blocked(
+            "Recovery requires the exact original identity or a sealed live same-device topology migration.",
+        ));
+    }
     if new.plan.execution_purpose != "supersedingRecovery"
         || new.supersedes_job_id.is_empty()
         || new.plan.plan_id != assessment.candidate_plan_id
@@ -597,9 +632,6 @@ fn validate_replacement(
         || new.plan.plan_id == old.plan.plan_id
         || new.plan.plan_sha256 == old.plan.plan_sha256
         || new.profile_id != old.profile_id
-        || new.topology_sha256 != old.topology_sha256
-        || new.device_id != lineage.current_device_id
-        || new.stable_identity_sha256 != lineage.current_stable_identity_sha256
         || new.plan.persistent_effects.is_empty()
         || new.plan.persistent_effects != old.plan.persistent_effects
         || Sha256Digest::parse_hex(&assessment.candidate_profile_sha256).is_err()
@@ -660,7 +692,13 @@ fn validate_source_seals(
         .as_ref()
         .ok_or_else(|| blocked("Missing source proof."))?;
     let (old, lineage, permit_hash) = source_records(runtime, &proof.assessment.job_id, source)?;
-    validate_replacement(&old, &lineage, record, &proof.assessment)?;
+    validate_replacement(
+        &old,
+        &lineage,
+        record,
+        &proof.assessment,
+        proof.identity_migration.as_ref(),
+    )?;
     if proof.source_authority != sha256(&encode_authority_plan(&old)).as_bytes()
         || proof.source_lineage != lineage_digest(&lineage)
         || proof.source_permit != permit_hash
@@ -707,13 +745,18 @@ pub(super) fn before_start(
                 .as_ref()
                 .ok_or_else(|| blocked("Missing source proof."))?,
         )?;
-        fresh_identity(
+        let migration = fresh_identity(
             public,
             &old,
             &lineage,
             &record.profile_id,
             &record.device_id,
         )?;
+        if migration != source.identity_migration {
+            return Err(blocked(
+                "Fresh topology migration differs from the sealed identity proof.",
+            ));
+        }
     }
     reserve_sources(runtime, &proof)
 }

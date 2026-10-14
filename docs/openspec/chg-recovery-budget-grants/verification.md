@@ -12,6 +12,10 @@ Acceptance cases in `supervisor/recovery_tests.rs`:
 - Exact issuance and expiry boundaries apply independently to every proof.
 - Existing no-replay, source-seal, identity drift, complete-set and semantic
   receipt tests continue to pass.
+- Live same-node topology projection reconstructs the original full identity;
+  mode, serial, descriptor, profile, protocol-fact and strength changes fail.
+  The native selector requires a unique present Normal node and all current
+  identity digests. No projection can establish a missing mode transition.
 
 Local targeted checks and CI results are recorded in the PR and execution
 record. Unit tests are fixtures, not hardware evidence. Real acceptance must

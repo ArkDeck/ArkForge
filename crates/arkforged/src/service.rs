@@ -114,6 +114,86 @@ fn select_hdc_connect_key(
     }
 }
 
+/// Recompute the retired Windows location-path encoding from a live Normal
+/// node that exactly matches all current identity digests. No raw serial leaves
+/// this boundary, and no historical PnP node can contribute evidence.
+pub fn native_normal_topology_projection(
+    observation_id: &str,
+    topology_sha256: &str,
+    descriptor_sha256: &str,
+    serial_sha256: &str,
+) -> Result<Option<(String, String)>, String> {
+    let observations = arkforge_usb::NativeUsb::new(30_000)
+        .observe_windows_legacy_topologies()
+        .map_err(|error| error.to_string())?;
+    select_normal_topology_projection(
+        observations,
+        observation_id,
+        topology_sha256,
+        descriptor_sha256,
+        serial_sha256,
+    )
+}
+
+fn select_normal_topology_projection(
+    observations: Vec<arkforge_usb::LegacyTopologyObservation>,
+    observation_id: &str,
+    topology_sha256: &str,
+    descriptor_sha256: &str,
+    serial_sha256: &str,
+) -> Result<Option<(String, String)>, String> {
+    let mut matches = Vec::new();
+    for observed in observations {
+        let interface = observed.descriptor;
+        if interface.vendor_id != 0x2207
+            || interface.product_id != 0x5000
+            || interface.serial.as_ref().is_none_or(String::is_empty)
+        {
+            continue;
+        }
+        let record = UsbDeviceRecord {
+            vendor_id: interface.vendor_id,
+            product_id: interface.product_id,
+            location_id: interface.location_id,
+            serial: interface.serial,
+            product_name: interface.product_name,
+            vendor_name: interface.vendor_name,
+            bcd_device: Some(interface.device_release),
+        };
+        let current_id = format!(
+            "USB-{:04x}-{:04x}-{:08x}",
+            record.vendor_id, record.product_id, record.location_id
+        );
+        let serial = match record.serial_evidence() {
+            arkforge_transport::SerialEvidence::Descriptor { digest } => digest.to_hex(),
+            _ => continue,
+        };
+        if current_id != observation_id
+            || record.topology_digest().to_hex() != topology_sha256
+            || record.descriptor_digest().to_hex() != descriptor_sha256
+            || serial != serial_sha256
+        {
+            continue;
+        }
+        matches.push((
+            format!(
+                "USB-{:04x}-{:04x}-{:08x}",
+                record.vendor_id, record.product_id, observed.legacy_location_id
+            ),
+            digest_in_domain(
+                Domain::UsbTopology,
+                &observed.legacy_location_id.to_be_bytes(),
+            )
+            .to_hex(),
+        ));
+    }
+    match matches.as_slice() {
+        [] => Ok(None),
+        [one] => Ok(Some(one.clone())),
+        _ => Err("Multiple present USB nodes match the identity projection.".into()),
+    }
+}
+
 impl UsbEnumerator for NativeIokitEnumerator {
     fn enumerate(&self) -> Result<Vec<UsbDeviceRecord>, TransportError> {
         let interfaces = arkforge_usb::NativeUsb::new(30_000)
@@ -2797,6 +2877,82 @@ mod tests {
     use arkforge_core::identity::{MaturityKey, MaturityState};
 
     const DAYU200_PROFILE: &str = include_str!("../../../profiles/dayu200.yaml");
+
+    #[test]
+    fn legacy_topology_requires_one_present_normal_node_and_every_current_digest() {
+        let record = UsbDeviceRecord {
+            vendor_id: 0x2207,
+            product_id: 0x5000,
+            location_id: 0x1122_3344,
+            serial: Some("fixture-serial".into()),
+            product_name: Some("fixture-product".into()),
+            vendor_name: Some("fixture-vendor".into()),
+            bcd_device: Some(0x100),
+        };
+        let candidate = arkforge_usb::LegacyTopologyObservation {
+            descriptor: arkforge_usb::UsbInterfaceDescriptor {
+                vendor_id: record.vendor_id,
+                product_id: record.product_id,
+                usb_specification: 0x300,
+                device_release: 0x100,
+                location_id: record.location_id,
+                interface_class: 0xff,
+                interface_subclass: 0x50,
+                interface_protocol: 1,
+                interface_number: 0,
+                serial: record.serial.clone(),
+                product_name: record.product_name.clone(),
+                vendor_name: record.vendor_name.clone(),
+            },
+            legacy_location_id: 0x5566_7788,
+        };
+        let current_id = "USB-2207-5000-11223344";
+        let topology = record.topology_digest().to_hex();
+        let descriptor = record.descriptor_digest().to_hex();
+        let serial = digest_in_domain(Domain::DeviceSerial, b"fixture-serial").to_hex();
+        let project = |candidates| {
+            select_normal_topology_projection(
+                candidates,
+                current_id,
+                &topology,
+                &descriptor,
+                &serial,
+            )
+        };
+        assert_eq!(
+            project(vec![candidate.clone()]).unwrap(),
+            Some((
+                "USB-2207-5000-55667788".into(),
+                digest_in_domain(Domain::UsbTopology, &0x5566_7788_u32.to_be_bytes()).to_hex(),
+            ))
+        );
+        assert!(project(vec![candidate.clone(), candidate.clone()]).is_err());
+        assert_eq!(project(Vec::new()).unwrap(), None);
+        for mutate in [
+            |value: &mut arkforge_usb::UsbInterfaceDescriptor| value.product_id = 0x350a,
+            |value: &mut arkforge_usb::UsbInterfaceDescriptor| value.location_id += 1,
+            |value: &mut arkforge_usb::UsbInterfaceDescriptor| {
+                value.serial = Some("different".into())
+            },
+            |value: &mut arkforge_usb::UsbInterfaceDescriptor| value.serial = None,
+            |value: &mut arkforge_usb::UsbInterfaceDescriptor| value.device_release += 1,
+        ] {
+            let mut changed = candidate.clone();
+            mutate(&mut changed.descriptor);
+            assert_eq!(project(vec![changed]).unwrap(), None);
+        }
+        assert_eq!(
+            select_normal_topology_projection(
+                vec![candidate],
+                "USB-2207-5000-00000000",
+                &topology,
+                &descriptor,
+                &serial
+            )
+            .unwrap(),
+            None
+        );
+    }
 
     #[test]
     fn native_hdc_target_requires_both_sealed_usb_digests() {
