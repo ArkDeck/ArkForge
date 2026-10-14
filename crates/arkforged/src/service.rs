@@ -342,7 +342,10 @@ impl Service {
 
         Ok(Service {
             store,
-            engine: Engine::new(),
+            engine: Engine::open(crate::plan_storage::FilePlanStorage::new(
+                store_root.join("plans"),
+            ))
+            .map_err(|error| error.to_string())?,
             rockchip,
             unisoc,
             maturity,
@@ -1521,6 +1524,11 @@ impl Service {
             &stored.envelope.profile.id,
             stored.envelope.profile.version,
         ))?;
+        // Same name/version is insufficient after a restart: coverage and
+        // data-impact must still be the exact profile sealed by this plan.
+        if profile.identity().ok()? != stored.envelope.profile {
+            return None;
+        }
         let job = self.jobs.job(job_id)?;
         Some(RecoverySurfaceContext {
             possible: assess_possible_effects(

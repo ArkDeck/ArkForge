@@ -702,6 +702,148 @@ fn restart_rehydrates_an_unsettled_intent_as_outcome_unknown_without_replay() {
     assert_eq!(outcome, "outcomeUnknown");
 }
 
+#[test]
+fn daemon_restart_loads_the_original_private_plan_without_resuming_an_unknown_job() {
+    use arkforge_core::digest::CanonicalCbor;
+    use arkforge_engine::{PlanStore, StoredPlan};
+    use arkforge_ipc::messages::Request;
+    use arkforge_ipc::{Api, SessionKind, Status, wire};
+    use arkforged::{Clock, Service};
+
+    let root = TempRoot::new("durable-private-plan");
+    let fixture = plan_fixture();
+    let stored = StoredPlan {
+        envelope: fixture.envelope.clone(),
+        private_plan: fixture.private_plan.clone(),
+    };
+    PlanStore::open(arkforged::plan_storage::FilePlanStorage::new(
+        root.0.join("plans"),
+    ))
+    .unwrap()
+    .insert(stored)
+    .unwrap();
+    let job_id = {
+        let mut registry = JobRegistry::open(root.0.join("jobs")).unwrap();
+        let job_id = registry
+            .start(
+                &fixture.envelope,
+                &fixture.private_plan,
+                ControllerSessionId::new("SESSION-1").unwrap(),
+                &admission_facts(&fixture, "hdc-normal", NOW),
+                NOW,
+            )
+            .unwrap();
+        let snapshot = pending_snapshot(&mut registry, &fixture, &job_id, NOW);
+        let (permit, tag, epoch) = mint(&snapshot, "PERMIT-DURABLE-RESTART", NOW + 60_000);
+        registry
+            .submit_permit(
+                &job_id,
+                &snapshot.request_id,
+                Some((permit, tag, epoch)),
+                "",
+                &secret(),
+                &fixture.envelope,
+                &fixture.private_plan,
+                &fixture.profile,
+                Some(current_facts(&snapshot, NOW + 1)),
+                NOW + 1,
+            )
+            .unwrap();
+        job_id
+    };
+    let open = |profile| {
+        Service::new(
+            &root.0,
+            vec![profile],
+            Vec::new(),
+            Clock::Fixed(NOW + 2),
+            None,
+        )
+        .unwrap()
+    };
+    let mut service = open(fixture.profile.clone());
+    let restored = service
+        .engine()
+        .plans()
+        .get(&fixture.envelope.plan_id, fixture.envelope.plan_digest)
+        .unwrap();
+    assert_eq!(
+        restored.envelope.digest_body_bytes().unwrap(),
+        fixture.envelope.digest_body_bytes().unwrap()
+    );
+    assert_eq!(
+        restored.envelope.per_action_digests,
+        fixture.envelope.per_action_digests
+    );
+    let action_bytes = |plan: &StoredProviderPlan| {
+        plan.actions
+            .iter()
+            .map(|action| action.to_canonical_bytes().unwrap())
+            .collect::<Vec<_>>()
+    };
+    assert_eq!(
+        action_bytes(&restored.private_plan),
+        action_bytes(&fixture.private_plan)
+    );
+    assert_eq!(
+        service.jobs().job(&job_id).unwrap().state(),
+        JobState::OutcomeUnknown
+    );
+    assert!(service.take_pending_dispatch().is_none());
+    assert!(service.take_pending_preparation().is_none());
+    assert!(service.take_pending_reconcile().is_none());
+    let journal_path = root.0.join("jobs").join(format!("{job_id}.journal"));
+    let after_restart = std::fs::read(&journal_path).unwrap();
+    let mut payload = Vec::new();
+    wire::write_string(&mut payload, 1, &job_id);
+    let request = Request {
+        request_id: "REQ-RESTORED-GUIDE".into(),
+        api: Api::GetRecoveryGuide,
+        payload,
+    };
+    let response = service.handle(SessionKind::Public, &request, None);
+    assert_eq!(response.status, Status::Ok);
+    let mut reader = wire::Reader::new(&response.payload);
+    let mut contract = None;
+    while let Some((field, value)) = reader.next_field().unwrap() {
+        if field == 9 {
+            contract = Some(value.as_str(field).unwrap().to_string());
+        }
+    }
+    assert_eq!(
+        contract,
+        fixture
+            .envelope
+            .recovery_contract
+            .as_ref()
+            .map(|contract| contract.digest.to_hex())
+    );
+    drop(service);
+    let mut service = open(fixture.profile.clone());
+    assert_eq!(
+        service.jobs().job(&job_id).unwrap().state(),
+        JobState::OutcomeUnknown
+    );
+    assert!(service.take_pending_dispatch().is_none());
+    assert_eq!(std::fs::read(&journal_path).unwrap(), after_restart);
+    drop(service);
+
+    // A profile with the same id/version but changed coverage cannot supply
+    // recovery facts for the persisted envelope.
+    let mut changed_profile = fixture.profile;
+    changed_profile.recovery.supports_complete_overwrite =
+        !changed_profile.recovery.supports_complete_overwrite;
+    let mut service = open(changed_profile);
+    let response = service.handle(SessionKind::Public, &request, None);
+    assert_eq!(response.status, Status::Ok);
+    let mut reader = wire::Reader::new(&response.payload);
+    while let Some((field, _)) = reader.next_field().unwrap() {
+        assert_ne!(field, 9);
+    }
+    assert!(service.take_pending_dispatch().is_none());
+    assert_eq!(std::fs::read(journal_path).unwrap(), after_restart);
+}
+
 fn reconcile_fixture() -> (PossibleEffectSet, PersistentEffect) {
     let effect = PersistentEffect::WritePartition {
         partition: PartitionId::new("system").unwrap(),
@@ -718,6 +860,157 @@ fn reconcile_fixture() -> (PossibleEffectSet, PersistentEffect) {
         },
         effect,
     )
+}
+
+#[test]
+fn a_persisted_interrupted_write_keeps_recovery_coverage_after_restart() {
+    use arkforge_core::projection::validate_projection;
+    use arkforge_core::step::{FlashStepKind, SemanticTarget};
+    use arkforge_engine::{PlanStore, StoredPlan};
+    use arkforge_ipc::messages::Request;
+    use arkforge_ipc::{Api, SessionKind, Status, wire};
+    use arkforged::plan_storage::FilePlanStorage;
+    use arkforged::{Clock, Service};
+
+    let root = TempRoot::new("durable-write-recovery");
+    let mut fixture = plan_fixture();
+    // A sealed fixture containing one real provider write action. The test
+    // stops at the durable dispatch boundary and never runs the dispatcher.
+    let step = fixture
+        .envelope
+        .public_steps
+        .iter()
+        .find(|step| step.kind == FlashStepKind::WriteTarget)
+        .unwrap()
+        .clone();
+    let Some(SemanticTarget::Partition(partition)) = &step.semantic_target else {
+        panic!("partition write expected")
+    };
+    let partition = partition.clone();
+    fixture
+        .private_plan
+        .actions
+        .retain(|action| action.step_id == step.step_id);
+    fixture.envelope.public_steps = vec![step];
+    fixture
+        .envelope
+        .effect_set
+        .persistent
+        .retain(|effect| effect.partition() == Some(&partition));
+    fixture.envelope.effect_set.transient.clear();
+    let projection = validate_projection(
+        &fixture.envelope.public_steps,
+        &fixture.private_plan,
+        &fixture.envelope.effect_set,
+    )
+    .unwrap();
+    fixture.envelope.per_action_digests = projection.per_action;
+    fixture.envelope.provider_execution_plan_digest = projection.provider_execution_plan_digest;
+    fixture.envelope.public_projection_digest = projection.public_projection_digest;
+    fixture.envelope.plan_digest = fixture.envelope.recompute_digest().unwrap();
+    PlanStore::open(FilePlanStorage::new(root.0.join("plans")))
+        .unwrap()
+        .insert(StoredPlan {
+            envelope: fixture.envelope.clone(),
+            private_plan: fixture.private_plan.clone(),
+        })
+        .unwrap();
+    let job_id = {
+        let mut registry = JobRegistry::open(root.0.join("jobs")).unwrap();
+        let job_id = registry
+            .start(
+                &fixture.envelope,
+                &fixture.private_plan,
+                ControllerSessionId::new("SESSION-1").unwrap(),
+                &admission_facts(&fixture, "rockusb-loader", NOW),
+                NOW,
+            )
+            .unwrap();
+        let snapshot = pending_snapshot(&mut registry, &fixture, &job_id, NOW);
+        let (permit, tag, epoch) = mint(&snapshot, "PERMIT-INTERRUPTED-WRITE", NOW + 60_000);
+        registry
+            .submit_permit(
+                &job_id,
+                &snapshot.request_id,
+                Some((permit, tag, epoch)),
+                "",
+                &secret(),
+                &fixture.envelope,
+                &fixture.private_plan,
+                &fixture.profile,
+                Some(current_facts(&snapshot, NOW + 1)),
+                NOW + 1,
+            )
+            .unwrap();
+        job_id
+    };
+    let open = || {
+        Service::new(
+            &root.0,
+            vec![fixture.profile.clone()],
+            Vec::new(),
+            Clock::Fixed(NOW + 2),
+            None,
+        )
+        .unwrap()
+    };
+    let mut service = open();
+    let mut payload = Vec::new();
+    wire::write_string(&mut payload, 1, &job_id);
+    let request = Request {
+        request_id: "REQ-WRITE-RECOVERY".into(),
+        api: Api::PlanSupersedingRecovery,
+        payload,
+    };
+    let response = service.handle(SessionKind::Controller, &request, None);
+    assert_eq!(response.status, Status::Ok);
+    let mut reader = wire::Reader::new(&response.payload);
+    let mut eligible = false;
+    let mut covered = Vec::new();
+    while let Some((field, value)) = reader.next_field().unwrap() {
+        if field == 2 {
+            eligible = value.as_bool().unwrap();
+        }
+        if field == 5 {
+            covered.push(value.as_str(field).unwrap().to_string());
+        }
+    }
+    assert!(eligible);
+    assert!(
+        covered
+            .iter()
+            .any(|effect| effect.contains(partition.as_str()))
+    );
+    assert_eq!(
+        service.jobs().job(&job_id).unwrap().state(),
+        JobState::OutcomeUnknown
+    );
+    assert!(service.take_pending_dispatch().is_none());
+    assert!(service.take_pending_preparation().is_none());
+    drop(service);
+
+    // A pre-store journal cannot be repaired by reconstructing actions from
+    // today's provider. Its effects stay unbounded and recovery is refused.
+    for entry in std::fs::read_dir(root.0.join("plans")).unwrap() {
+        std::fs::remove_file(entry.unwrap().path()).unwrap();
+    }
+    let mut service = open();
+    let response = service.handle(SessionKind::Controller, &request, None);
+    assert_eq!(response.status, Status::Ok);
+    let mut reader = wire::Reader::new(&response.payload);
+    let mut blocker = String::new();
+    while let Some((field, value)) = reader.next_field().unwrap() {
+        if field == 2 {
+            assert!(!value.as_bool().unwrap());
+        }
+        if field == 3 {
+            blocker = value.as_str(field).unwrap().to_string();
+        }
+    }
+    assert_eq!(blocker, "effectsUnbounded");
+    assert!(service.engine().plans().is_empty());
+    assert!(service.take_pending_dispatch().is_none());
+    assert_eq!(std::fs::read_dir(root.0.join("plans")).unwrap().count(), 0);
 }
 
 #[test]

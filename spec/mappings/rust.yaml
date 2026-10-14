@@ -68,13 +68,13 @@ areas:
         symbol: arkforge_core::step::{PublicFlashStep, FlashStepKind::minimum_effect, validate_self_consistent}
         tests: [crates/arkforge-core/src/step.rs tests]
       - req: AF-PLAN-020..024
-        symbol: arkforge_core::plan::{FlashPlanEnvelope::seal, recompute_digest, verify_self_digest, digest_body_bytes, is_expired_at}; arkforge_engine::PlanStore::get
-        tests: [crates/arkforge-core/src/plan.rs tests, crates/arkforge-engine/src/lib.rs tests]
+        symbol: arkforge_core::plan::{FlashPlanEnvelope::seal, recompute_digest, verify_self_digest, digest_body_bytes, is_expired_at}; arkforge_engine::PlanStore::{open, insert, get}; arkforge_engine::plan_codec; arkforged::plan_storage
+        tests: [crates/arkforge-core/src/plan.rs tests, crates/arkforged/src/plan_storage_tests.rs, crates/arkforged/tests/admission_surface.rs daemon_restart_loads_the_original_private_plan_without_resuming_an_unknown_job]
   - area: PROJ
     symbols:
       - req: AF-PROJ-001..003, AF-PROJ-010..014
-        symbol: arkforge_core::projection::{PrivateActionRecord::digest, validate_projection, ProjectionError}
-        tests: [crates/arkforge-core/src/projection.rs tests]
+        symbol: arkforge_core::projection::{PrivateActionRecord::digest, validate_projection, ProjectionError}; arkforge_engine::plan_codec::{validate, decode}
+        tests: [crates/arkforge-core/src/projection.rs tests, crates/arkforged/src/plan_storage_tests.rs]
   - area: EFF
     symbols:
       - req: AF-EFF-001..003, AF-EFF-010..011

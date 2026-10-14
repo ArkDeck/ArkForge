@@ -60,3 +60,30 @@ settles it.
 The exhaustive torn-tail table (AF-CONF-JOURNAL-004) and the tamper cases
 (AF-CONF-JOURNAL-005..013) exercise `open` on byte-exact files; a port runs
 them against its own implementation with the fixture files.
+
+## Sealed private plans (reference storage, informative)
+
+The daemon opens `store/plans` before recovering job journals. Materialization
+commits the public envelope's canonical digest preimage and the complete
+private action records together, before returning the executable plan. Storage
+version 1 is a private CBOR container, not an IPC or plan-digest schema change.
+Files and the directory are owner-only. A synced temporary file is published
+under an immutable identifier-derived filename without replacing an existing
+plan; incomplete, unpublished `.pending` files are never adopted.
+
+Loading is bounded to 8 MiB per plan and rejects noncanonical, truncated,
+unknown-version, incorrectly named, symbolic-link/reparse-point, or digest-inconsistent data. The
+loader verifies the original public envelope and rechecks each public/private
+projection, including the provider execution and public projection digests.
+It never invokes provider lowering to reconstruct missing actions. Corrupt
+committed files refuse startup instead of being repaired or silently skipped.
+This has the same process-death guarantee and power-loss limitation stated above.
+
+Reloading a plan restores data for recovery assessment, not execution state or
+authority. Recovered jobs retain the journal's crash disposition; no pending
+dispatch, live observation session, or permit is recreated. A fresh execution
+still needs a freshly materialized observation context. Recovery coverage is
+read only from a loaded profile whose full digest matches the sealed identity.
+Older journals with no private-plan file retain that absence; there is no
+backfill from current provider code, an authority's public projection, or a
+caller-supplied file.
