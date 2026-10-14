@@ -185,14 +185,18 @@ normal device and original terminal jobs, then refused typed `job recover`
 with `nothingToRecover`, exit 3. There is no recovery plan, acknowledgement
 set, apply or additional flash dispatch.
 
-The mechanics `PlanStore` currently keeps private plans only for the daemon's
-lifetime (`crates/arkforge-engine/src/lib.rs`). Journals reload after restart,
-but the original private plan does not. The service consequently cannot load
+At that published revision, the mechanics `PlanStore` kept private plans only
+for the daemon's lifetime (`crates/arkforge-engine/src/lib.rs`). Journals
+reloaded after restart, but the original private plan did not. The service could not load
 the job's recovery contract via `stored_plan_for_job`; its closed managed-control
-fallback refuses supersession. The public guide's `eligible` field is not
-proof of materialization eligibility: the final guide has no contract and
+fallback refused supersession. The public guide's `eligible` field was not
+proof of materialization eligibility: the final guide had no contract and
 `complete_overwrite_supported=false`. These are the observed implementation
 limits, not permission to reconstruct or edit authority facts manually.
+
+The subsequent [private-plan persistence and restart validation](2026-10-14-durable-private-plans.md)
+fixes storage for newly materialized plans. It does not recover the missing
+historical bytes or change this campaign's unknown outcome.
 
 [AF-REC-001](../../../spec/requirements/recovery.md#af-rec-001--never-replay)
 prohibits re-sending the old intent or calling another full flash a retry.
