@@ -136,8 +136,8 @@ fn prove(
         || probed.topology_sha256 != observation.topology_sha256
         || probed.descriptor_sha256 != observation.descriptor_sha256
         || probed.serial_sha256 != observation.serial_sha256
-        || probed.serial_evidence_kind != "usbDescriptor"
-        || observation.serial_evidence_kind != "usbDescriptor"
+        || probed.serial_evidence_kind != "descriptor"
+        || observation.serial_evidence_kind != "descriptor"
     {
         return Err(blocked(
             "Topology projection requires identical fresh Normal identity facts.",

@@ -24,6 +24,10 @@ fixtures and do not establish hardware acceptance.
 
 ## CI
 
-Exact-head PR results are pending at this revision. The next execution record
-will record them without amending a green head. Device acceptance still needs
-fresh original-mode identity proof before any new grant can be consumed.
+[PR #21](https://github.com/ArkDeck/ArkForge/pull/21), head
+`6b978ee34a511acf92ae55208b25e5aaffc56e69`: Windows PR `38573350155`,
+macOS/Rust PR `38573350190`, and push runs `38573295280` / `38573295273`
+all succeeded. Merged at `2026-10-14T13:41:22Z` as
+`fd49c54a468cffdf5f098b764fcd91b31898b834` under the user's explicit all-green
+merge authorization. The published-source admission result follows in
+`2026-10-14-recovery-budget-admission.md`.
