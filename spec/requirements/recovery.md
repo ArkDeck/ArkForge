@@ -97,3 +97,30 @@ against its stored correlation and persist it before completing the original
 intent. An earlier `outcomeUnknown` observation is not final when the same
 finite event poll later contains a durable `succeeded` or `confirmedFailed`;
 passive recovery consumes the complete poll and uses the latest classification.
+
+### AF-REC-009 — standalone independent recovery budget grants
+status: draft
+source: docs/openspec/chg-recovery-budget-grants/design.md
+tests: [crates/arkforge-standalone/src/supervisor/recovery_tests.rs]
+gap: Authority-local durable format is covered by implementation tests; no cross-language fixture is published.
+
+Standalone authority MAY authorize a new independent complete-overwrite epoch
+after a previous grant has been consumed. It MUST retain every historical
+consumption and MUST NOT renew, replace or reuse an old grant, intent, permit,
+plan or job. A new grant MUST bind a distinct materialized plan, the complete
+outstanding source set, immutable content and coverage, fresh strong identity,
+and the exact prior budget history. It expires no later than its plan or four
+hours after issuance, whichever occurs first.
+
+The standalone runtime namespace MUST allow at most 16 consumed recovery epochs
+in total, including distinct legacy reservations and orphaned grants. Failure,
+expiration, completion, process restart and selecting a different source MUST
+NOT refund this budget. Planning does not consume an epoch. Before starting a
+new job, the authority MUST atomically consume its exact sealed ordinal and
+history; competing plans cannot both consume the same ordinal. No permit is
+eligible before the new job correlation is durable. A caller cannot set or
+increase the limit, provide trusted facts, or reset historical records.
+
+This authority policy does not relax AF-REC-001..005. A consumed source is not
+itself a proof failure; missing identity, coverage, journal, correlation or
+current complete-set proof still requires zero new dispatches.

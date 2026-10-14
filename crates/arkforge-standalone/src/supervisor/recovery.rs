@@ -3,8 +3,8 @@
 //! The old job is only read. None of these records is an old permit, a new
 //! receipt for the old job, or permission to replay its plan. A crash before
 //! the new job correlation leaves a spent reservation with zero eligible
-//! permits. Each source admits at most one replacement epoch; a set proof
-//! spends every included source without replenishing any historical budget.
+//! permits. New independent grants account for every historical consumption;
+//! they never replenish an old reservation or alter an unknown outcome.
 
 use super::*;
 use arkforge_core::effect::DeviceMode;
@@ -20,6 +20,9 @@ const MAX_RECORD_BYTES: u64 = 1024 * 1024;
 const MAX_RECOVERY_SOURCES: usize = 64;
 const RECOVERY_BUDGET_MS: u64 = 4 * 60 * 60 * 1000;
 
+#[path = "recovery_budget.rs"]
+mod budget;
+
 fn blocked(reason: impl std::fmt::Display) -> StandaloneError {
     StandaloneError::new("RECOVERY_PROOF_REQUIRED", reason.to_string(), 3, false)
 }
@@ -34,6 +37,7 @@ struct Proof {
     issued_at: u64,
     expires_at: u64,
     additional_sources: Vec<Proof>,
+    budget: Option<budget::Seal>,
 }
 
 impl Proof {
@@ -48,6 +52,9 @@ impl Proof {
         wire::write_uint64(&mut out, 7, self.expires_at);
         for source in &self.additional_sources {
             wire::write_message(&mut out, 8, &source.encode());
+        }
+        if let Some(budget) = &self.budget {
+            wire::write_message(&mut out, 9, &budget.encode());
         }
         out
     }
@@ -70,6 +77,7 @@ impl Proof {
             issued_at: 0,
             expires_at: 0,
             additional_sources: Vec::new(),
+            budget: None,
         };
         let mut reader = wire::Reader::new(input);
         while let Some((field, value)) = reader.next_field().map_err(blocked)? {
@@ -90,6 +98,9 @@ impl Proof {
                         value.as_bytes().map_err(blocked)?,
                         false,
                     )?);
+                }
+                9 if allow_set => {
+                    out.budget = Some(budget::Seal::decode(value.as_bytes().map_err(blocked)?)?);
                 }
                 _ => return Err(blocked("Unrecognized recovery proof field.")),
             }
@@ -499,7 +510,7 @@ pub(super) fn require_source(
             "The requested source is not an outstanding unknown job.",
         ));
     }
-    require_unspent(runtime, &sources)?;
+    budget::next(runtime)?;
     for job in &sources {
         let assessment = assessment(controller, job)?;
         if !assessment.eligible && assessment.blocker_code != "managedControlRecoveryNeedsPlan" {
@@ -526,7 +537,7 @@ pub(super) fn authorize(
 ) -> Result<(), StandaloneError> {
     let new = load_authority_plan(runtime, &plan.plan_id)?;
     let mut sources = pending_sources(runtime, public, controller, "")?;
-    require_unspent(runtime, &sources)?;
+    let budget = budget::next(runtime)?;
     let anchor = sources
         .iter()
         .position(|job| *job == new.supersedes_job_id)
@@ -562,10 +573,12 @@ pub(super) fn authorize(
                 .saturating_add(RECOVERY_BUDGET_MS)
                 .min(plan.expires_at_epoch_ms),
             additional_sources: Vec::new(),
+            budget: None,
         });
     }
     let mut proof = proofs.remove(0);
     proof.additional_sources = proofs;
+    proof.budget = Some(budget);
     Proof::decode(&proof.encode())?;
     require_lane(runtime, public, controller, Some(&proof), "")?;
     persist(&path(runtime, &plan.plan_id, "proof"), &proof.encode())
@@ -607,9 +620,7 @@ fn validate_proof(
     now: u64,
 ) -> Result<Proof, StandaloneError> {
     let proof = Proof::decode(&read(&path(runtime, &record.plan.plan_id, "proof"))?)?;
-    if now < proof.issued_at || now >= proof.expires_at {
-        return Err(blocked("Recovery budget or plan has expired."));
-    }
+    validate_time(&proof, now)?;
     if record.supersedes_job_id != proof.assessment.job_id {
         return Err(blocked(
             "Recovery anchor differs from the sealed source set.",
@@ -629,6 +640,13 @@ fn validate_proof(
         validate_source_seals(runtime, record, source)?;
     }
     Ok(proof)
+}
+
+fn validate_time(proof: &Proof, now: u64) -> Result<(), StandaloneError> {
+    if now < proof.issued_at || now >= proof.expires_at {
+        return Err(blocked("Recovery budget or plan has expired."));
+    }
+    Ok(())
 }
 
 fn validate_source_seals(
@@ -674,11 +692,11 @@ pub(super) fn before_start(
     }
     let proof = validate_proof(runtime, controller, record, now)?;
     require_lane(runtime, public, controller, Some(&proof), "")?;
-    let sources: Vec<_> = proof
-        .sources()
-        .map(|source| source.assessment.job_id.clone())
-        .collect();
-    require_unspent(runtime, &sources)?;
+    if proof.budget.is_none() {
+        return Err(blocked(
+            "A legacy recovery plan cannot allocate new budget; materialize a distinct plan with an independent grant.",
+        ));
+    }
     for source in proof.sources() {
         let (old, lineage, _) = source_records(
             runtime,
@@ -701,6 +719,9 @@ pub(super) fn before_start(
 }
 
 fn reserve_sources(runtime: &Path, proof: &Proof) -> Result<(), StandaloneError> {
+    if proof.budget.is_some() {
+        return budget::reserve(runtime, proof);
+    }
     let sources: Vec<_> = proof
         .sources()
         .map(|source| source.assessment.job_id.clone())
@@ -726,6 +747,11 @@ pub(super) fn correlate(
     let proof = Proof::decode(&bytes)?;
     if proof.assessment.job_id != record.supersedes_job_id {
         return Err(blocked("Recovery correlation anchor differs."));
+    }
+    if proof.budget.is_some() {
+        let ordinal = budget::validate(runtime, &proof)?;
+        JobId::new(job).map_err(blocked)?;
+        return persist(&budget::path(runtime, ordinal, "job"), job.as_bytes());
     }
     for source in proof.sources() {
         if read(&path(runtime, &source.assessment.job_id, "reserved"))? != bytes {
@@ -769,6 +795,15 @@ fn validate_reservations(
     job_id: &str,
 ) -> Result<(), StandaloneError> {
     let bytes = proof.encode();
+    if proof.budget.is_some() {
+        let ordinal = budget::validate(runtime, proof)?;
+        if read(&budget::path(runtime, ordinal, "job"))? != job_id.as_bytes() {
+            return Err(blocked(
+                "The independent grant is not correlated to this exact job.",
+            ));
+        }
+        return Ok(());
+    }
     for source in proof.sources() {
         if read(&path(runtime, &source.assessment.job_id, "reserved"))? != bytes
             || read(&path(runtime, &source.assessment.job_id, "job"))? != job_id.as_bytes()
@@ -823,12 +858,23 @@ fn completion_bytes(
     }
     let job_bytes = read(&path(runtime, source_job, "job"))?;
     let job_id = std::str::from_utf8(&job_bytes).map_err(blocked)?;
+    completion_for_proof(runtime, public, controller, &proof, job_id)
+}
+
+fn completion_for_proof(
+    runtime: &Path,
+    public: &mut PublicClient,
+    controller: &mut ControllerClient,
+    proof: &Proof,
+    job_id: &str,
+) -> Result<Vec<u8>, StandaloneError> {
+    let proof_bytes = proof.encode();
     JobId::new(job_id).map_err(blocked)?;
     let record = load_authority_plan(runtime, &proof.assessment.candidate_plan_id)?;
     if record.supersedes_job_id != proof.assessment.job_id {
         return Err(blocked("Recovery completion anchor differs."));
     }
-    validate_reservations(runtime, &proof, job_id)?;
+    validate_reservations(runtime, proof, job_id)?;
     for source in proof.sources() {
         validate_source_seals(runtime, &record, source)?;
         if assessment(controller, &source.assessment.job_id)?.source != source.assessment.source {
@@ -923,14 +969,67 @@ fn completed_relation(
     source: &str,
 ) -> Result<bool, StandaloneError> {
     let target = path(runtime, source, "complete");
-    if !target.try_exists().map_err(blocked)? {
-        return Ok(false);
+    if target.try_exists().map_err(blocked)?
+        && read(&target)? == completion_bytes(runtime, public, controller, source)?
+    {
+        return Ok(true);
     }
-    Ok(read(&target)? == completion_bytes(runtime, public, controller, source)?)
+    for proof in budget::grants(runtime)? {
+        if !proof
+            .sources()
+            .any(|value| value.assessment.job_id == source)
+        {
+            continue;
+        }
+        let ordinal = proof
+            .budget
+            .as_ref()
+            .ok_or_else(|| blocked("Missing grant seal."))?
+            .ordinal;
+        let complete = budget::path(runtime, ordinal, "complete");
+        if !complete.try_exists().map_err(blocked)? {
+            continue;
+        }
+        let job = read(&budget::path(runtime, ordinal, "job"))?;
+        if read(&complete)?
+            == completion_for_proof(
+                runtime,
+                public,
+                controller,
+                &proof,
+                std::str::from_utf8(&job).map_err(blocked)?,
+            )?
+        {
+            return Ok(true);
+        }
+    }
+    Ok(false)
 }
 
 pub(super) fn finalize(runtime: &Path, public: &mut PublicClient) -> Result<(), StandaloneError> {
     let mut controller = ControllerClient::connect(runtime)?;
+    for proof in budget::grants(runtime)? {
+        let ordinal = proof
+            .budget
+            .as_ref()
+            .ok_or_else(|| blocked("Missing grant seal."))?
+            .ordinal;
+        let complete = budget::path(runtime, ordinal, "complete");
+        let correlation = budget::path(runtime, ordinal, "job");
+        if complete.try_exists().map_err(blocked)? || !correlation.try_exists().map_err(blocked)? {
+            continue;
+        }
+        let job = read(&correlation)?;
+        if let Ok(bytes) = completion_for_proof(
+            runtime,
+            public,
+            &mut controller,
+            &proof,
+            std::str::from_utf8(&job).map_err(blocked)?,
+        ) {
+            persist(&complete, &bytes)?;
+        }
+    }
     for job in public.job_list()? {
         if job.state != "outcomeUnknown" {
             continue;
