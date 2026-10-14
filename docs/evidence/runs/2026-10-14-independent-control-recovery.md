@@ -144,3 +144,50 @@ are `independent-recovery-job-final.json`,
 `independent-recovery-pnp-topology-readonly.json` and
 `independent-recovery-journals-after.json`. No raw device instance, connect key,
 serial, machine/account name or user path is exported in this record.
+
+## Connector fix verification
+
+PR [#16](https://github.com/ArkDeck/ArkForge/pull/16), exact head
+`f89279d03a305cd3f3db07164a320d7940709cdb`, passed Windows PR run
+[38563286008](https://github.com/ArkDeck/ArkForge/actions/runs/38563286008)
+and macOS Rust/Swift PR run
+[38563286107](https://github.com/ArkDeck/ArkForge/actions/runs/38563286107).
+The corresponding push runs, Windows 38563230266 and Rust/Swift 38563230339,
+also passed. The merge is `e9dc26758c8435e6e0641bc2e9f3f50368c68c44`.
+
+An unsigned local campaign build from that clean merged source succeeded with
+the same fixed-cache release/static-CRT settings, exit 0. Frozen executable
+SHA-256 values are CLI
+`4e7ffe265bf1d20319f3d0b26f109a79cd6ad4516b3911d623e4e4def42c191b`
+and daemon
+`c9f773a78f1cf5eaae4823ab27a706472dd7219815680088556781ea0ed419c2`.
+The build log and inventory are `published-companion-topology-build.log` and
+`published-companion-topology-build.json` in the private campaign directory.
+
+Published-runtime `device list --deep` succeeded with one strong Loader
+observation, no malformed descriptor and no probe refusal. Descriptor and
+serial digests equal the preceding Loader observation; topology now uses the
+new connector calculation. `status` reports zero active jobs and retains the
+two unknown outcomes. The private captures are
+`companion-topology-loader-readonly.json` and
+`companion-topology-runtime-readonly.json`. This verifies current Loader
+discovery only, not the full normal/Loader round trip, flash, postflight or
+AF-W1 qualification. No reset, reboot, apply or partition write was issued in
+this verification.
+
+Read-only `job recover` planning for the new unknown job then returned
+`RECOVERY_PROOF_REQUIRED`, exit 3: an outstanding unknown intent is not covered
+by the recovery proof. The returned plan and apply command are both null; no
+new job was created. This is the expected fail-closed boundary, not a passing
+flash. Its result is `companion-topology-authority-blocker.json`. An earlier
+planning call lost its supervisor while still resolving the artifact and
+returned `DAEMON_UNAVAILABLE`; that diagnostic was retained separately and
+was not counted as a recovery-proof result.
+
+After the completed planning response, `daemon stop` succeeded. A final hash
+comparison found all three journals and all proof/reservation/correlation
+records byte-identical, with no new job or completion relation. See the private
+`companion-topology-final-integrity.json` and
+`runtime-companion-topology-final-stopped.json`. Full Windows automated flashing
+remains blocked by the unresolved lineage and already-consumed recovery epoch;
+historical identities and budgets have not been rewritten to proceed.
