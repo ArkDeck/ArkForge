@@ -1,7 +1,9 @@
 # Independent recovery after an unknown initial mode switch
 
-Status: implementation and fixture validation. This record does not report a
-new hardware flash pass or publish production support.
+Status: implementation merged; one published-runtime recovery attempted and
+stopped with an unknown initial mode-switch outcome. No partition write was
+dispatched by that recovery. This record does not report a hardware flash pass
+or publish production support.
 
 The existing Windows campaign has one unknown job whose original private plan
 predates durable plan storage. Its verified journal contains exactly one initial
@@ -77,7 +79,68 @@ paths, private plans and permit bytes are not exported here.
 
 ## CI
 
-The implementation PR's exact head must pass Windows and macOS Rust workflows,
-including macOS Swift tests, before merge and any published-runtime recovery.
-PR number, run ids and the actual hardware result will be recorded after those
-steps finish. Local fixtures do not establish `REAL_DEVICE_PASS`.
+PR [#15](https://github.com/ArkDeck/ArkForge/pull/15), head
+`826dfc7925de261557f826a5895cc11591180e51`, passed Windows PR run
+[38560275580](https://github.com/ArkDeck/ArkForge/actions/runs/38560275580)
+and macOS Rust/Swift PR run
+[38560275787](https://github.com/ArkDeck/ArkForge/actions/runs/38560275787).
+Push runs Windows 38560268167 and Rust/Swift 38560268251 also passed.
+The merged source is `75629a1592567a9eae1b7d0919b6e587afb2866c`.
+Local fixtures do not establish `REAL_DEVICE_PASS`.
+
+## Published-runtime attempt
+
+The named local campaign used an unsigned build of that merged source, CLI
+SHA-256 `a682e6a71f310e9bb4f8c0ef324d427378fa5c2c7e32b7b4cdea53a4b6b0ed0a`
+and daemon SHA-256
+`d0d8d98cc86739eabd67aba3c97061a14a765e3505732fc8c20d5b91649f0330`.
+The Runtime accepted its original-source proof, sealed a distinct 23-step
+complete-overwrite plan for the same immutable OpenHarmony 7.0.0.43 artifact,
+and wrote its own one-use reservation and exact new-job correlation. The user
+explicitly approved covering all nine partitions, including userdata, before
+apply. These facts do not confer formal AF-W1 or production qualification.
+
+The initial `enter-updater` control reached its 120-second deadline with
+`UNIQUE_LOADER_REBIND_NOT_OBSERVED`. The new job is `outcomeUnknown`, completed
+0/23 steps, with no semantic receipt, checkpoint, partition write or subsequent
+dispatch. Its eight-record journal is 3,138 bytes with SHA-256
+`1f7c0788e2a880236a701a7ddedddd99f3c6925ce74f1901edb0f58afa50b61b`.
+The two earlier journals retain their exact byte counts and hashes. The Runtime
+has a proof, consumed reservation and correlation, but no `.complete` relation.
+It was stopped through `daemon stop` after all jobs were terminal; the shared
+HDC server was left running.
+
+Read-only native discovery then found Loader with strong descriptor/serial
+identity but a different topology digest. Windows PnP metadata explains the
+mismatch: HDC-normal uses a SuperSpeed root port and Loader uses its high-speed
+companion. Hashing each speed-specific PnP location path made one physical
+connector look like two locations. The control's historical outcome remains
+unknown; observing Loader later does not rewrite it into success.
+
+The follow-up fix resolves physical connector identity from reciprocal Windows
+hub facts in both WinUSB and observation-only discovery. It retains exact-port,
+uniqueness, descriptor and serial checks, and does not widen Profile policy.
+Its tests cover both speed directions, neighboring ports, different hubs,
+one-port connectors, nonreciprocal/changing mappings and malformed query bytes.
+Local targeted checks for this follow-up passed: `cargo fmt --all -- --check`
+and `git diff --check` exit 0; clippy for `arkforge-usb`, `arkforge-transport`,
+`arkforged` and `arkforge-standalone`, all targets/features with `-D warnings`,
+exit 0; the same crates plus `arkforge-conformance`, `cargo test --all-targets`,
+exit 0 with 251 passed, zero failed and one explicitly launched child helper
+ignored by the harness. This includes six new connector tests and 25 existing
+USB tests. The fixed-cache Windows release/static-CRT flags above apply.
+Logs are `companion-topology-targeted-tests.log`,
+`companion-topology-clippy.log` and `companion-topology-final-tests.log` in the
+same private campaign directory. macOS Rust/Swift and full Windows verification
+run on the follow-up PR; exact run ids and conclusions are recorded in its
+delivery. No new hardware write is part of this fix's validation.
+
+The existing single-use recovery reservation is exhausted, and the old sealed
+topology is not translated or replaced. A further destructive dispatch remains
+blocked; neither a new caller confirmation nor starting another Runtime can
+replace the missing proof or replenish that reservation. Private local results
+are `independent-recovery-job-final.json`,
+`independent-recovery-loader-readonly.json`,
+`independent-recovery-pnp-topology-readonly.json` and
+`independent-recovery-journals-after.json`. No raw device instance, connect key,
+serial, machine/account name or user path is exported in this record.

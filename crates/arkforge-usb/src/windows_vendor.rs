@@ -17,6 +17,9 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, OnceLock, mpsc};
 use std::time::{Duration, Instant};
 
+#[path = "windows_topology.rs"]
+mod topology;
+
 const DIGCF_ALLCLASSES: u32 = 4;
 const SPDRP_SERVICE: u32 = 4;
 const SPDRP_DRIVER: u32 = 9;
@@ -100,11 +103,11 @@ pub(super) fn observe() -> Result<Vec<UsbInterfaceDescriptor>, UsbError> {
     )
 }
 
-fn bounded_observation(
+fn bounded_observation<T: Send + 'static>(
     running: Arc<AtomicBool>,
     wait: Duration,
-    observe: impl FnOnce(&Budget) -> Result<Vec<UsbInterfaceDescriptor>, UsbError> + Send + 'static,
-) -> Result<Vec<UsbInterfaceDescriptor>, UsbError> {
+    observe: impl FnOnce(&Budget) -> Result<T, UsbError> + Send + 'static,
+) -> Result<T, UsbError> {
     if running
         .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
         .is_err()
@@ -171,6 +174,7 @@ struct Candidate {
     product_id: u16,
     driver_key: String,
     location_paths: Vec<u8>,
+    connector_location: u32,
     hub_path: Vec<u16>,
     port: u32,
 }
@@ -248,11 +252,13 @@ fn candidates(budget: &Budget) -> Result<Vec<Candidate>, UsbError> {
             return Err(invalid("PnP port is outside the USB hub range"));
         }
         let hub_path = parent_hub(info.dev_inst, budget)?;
+        let connector_location = topology::location(&hub_path, port, budget)?;
         found.push(Candidate {
             instance_id,
             product_id,
             driver_key,
             location_paths,
+            connector_location,
             hub_path,
             port,
         });
@@ -280,13 +286,28 @@ fn candidate_product(value: &str) -> Option<u16> {
     })
 }
 
-/// PnP location paths name the physical port and survive PID/serial changes.
-/// An instance ID names a personality; it must never stand in for topology.
+/// Windows exposes separate USB 2 and USB 3 ports for one connector. Use
+/// reciprocal OS companion-port facts, not the device's speed-specific path.
 pub(super) fn device_location(
     set: DeviceInfoSet,
     info: &mut SpDevInfoData,
 ) -> Result<u32, UsbError> {
-    location_from_property(&property(set, info, SPDRP_LOCATION_PATHS, 7)?)
+    location_from_property(&property(set, info, SPDRP_LOCATION_PATHS, 7)?)?;
+    let address = property(set, info, SPDRP_ADDRESS, 4)?;
+    if address.len() != 4 {
+        return Err(invalid("PnP port property has the wrong length"));
+    }
+    let port = read_u32(&address, 0)?;
+    let budget = Budget {
+        started: Instant::now(),
+        cancelled: Arc::new(AtomicBool::new(false)),
+    };
+    let hub_path = parent_hub(info.dev_inst, &budget)?;
+    bounded_observation(
+        Arc::clone(OBSERVATION_RUNNING.get_or_init(|| Arc::new(AtomicBool::new(false)))),
+        OBSERVATION_BUDGET,
+        move |budget| topology::location(&hub_path, port, budget),
+    )
 }
 
 fn location_from_property(bytes: &[u8]) -> Result<u32, UsbError> {
@@ -423,6 +444,7 @@ enum Query {
     Connection,
     DriverKey,
     Descriptor,
+    Connector,
 }
 
 impl Query {
@@ -432,6 +454,7 @@ impl Query {
             Self::Connection => 274,
             Self::DriverKey => 264,
             Self::Descriptor => 260,
+            Self::Connector => 278,
         };
         (0x22 << 16) | (function << 2)
     }
@@ -647,7 +670,7 @@ fn observe_candidate(
         product_id: read_u16(device, 10)?,
         usb_specification: read_u16(device, 2)?,
         device_release: read_u16(device, 12)?,
-        location_id: location_from_property(&candidate.location_paths)?,
+        location_id: candidate.connector_location,
         interface_number: interface[0],
         interface_class: interface[1],
         interface_subclass: interface[2],
