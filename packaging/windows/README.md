@@ -169,6 +169,13 @@ self-hosted runner labelled `arkforge-dayu200`. It will not downgrade missing
 certificate, Microsoft-signed catalog, HDC, second-account or physical-device
 inputs into a software pass.
 
+Before signing or installing anything, the workflow checks both the exact
+default-branch ref and GitHub's `GITHUB_REF_PROTECTED=true` signal. A branch
+name alone does not prove protection; missing or false protection refuses the
+run even when all production inputs are present. This check does not create
+branch protection or configure the production environment. The signal is
+defined in [GitHub's workflow variable reference](https://docs.github.com/en/actions/reference/workflows-and-actions/variables).
+
 The repository readiness readback on 2026-10-07 found zero registered
 self-hosted runners (`total_count: 0`), and the `windows-production` environment
 request returned HTTP 404. AF-W1 therefore still needs these deployment inputs;

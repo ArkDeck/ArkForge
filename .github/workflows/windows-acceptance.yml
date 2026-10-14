@@ -28,6 +28,9 @@ jobs:
           if ($env:GITHUB_REF -cne ('refs/heads/' + $env:ARKFORGE_DEFAULT_BRANCH)) {
             throw 'Physical acceptance requires the protected default-branch release source.'
           }
+          if ($env:GITHUB_REF_PROTECTED -cne 'true') {
+            throw 'Physical acceptance requires GitHub-confirmed protection on the default branch.'
+          }
           $required = @(
             'ARKFORGE_CERT_THUMBPRINT', 'ARKFORGE_TIMESTAMP_URL', 'ARKFORGE_HDC_PATH',
             'ARKFORGE_DRIVER_PACKAGE', 'ARKFORGE_DENIED_ACCOUNT', 'ARKFORGE_DENIED_PASSWORD'
