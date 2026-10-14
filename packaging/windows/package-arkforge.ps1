@@ -45,6 +45,12 @@ function Invoke-Checked([string]$Program, [string[]]$Arguments) {
     }
 }
 
+function Assert-DriverCatalog([string]$SignToolPath, [string]$Catalog, [string]$Inf) {
+    # SignTool rejects /all together with the kernel-mode /kp policy.
+    Invoke-Checked $SignToolPath @('verify', '/kp', '/v', $Catalog)
+    Invoke-Checked $SignToolPath @('verify', '/kp', '/c', $Catalog, $Inf)
+}
+
 function Get-RelativeFileFacts([string]$Root) {
     $rootPath = (Resolve-Path -LiteralPath $Root).Path.TrimEnd('\')
     return @(Get-ChildItem -LiteralPath $Root -File -Recurse | Sort-Object FullName | ForEach-Object {
@@ -80,8 +86,7 @@ $canonicalInf = Join-Path $scriptRoot 'driver\arkforge-rockusb.inf'
 if ((Get-FileHash -LiteralPath $driverInf -Algorithm SHA256).Hash -ne (Get-FileHash -LiteralPath $canonicalInf -Algorithm SHA256).Hash) {
     throw 'The signed driver INF does not match the canonical ArkForge WinUSB binding.'
 }
-Invoke-Checked $signToolPath @('verify', '/kp', '/all', '/v', $driverCatalog)
-Invoke-Checked $signToolPath @('verify', '/kp', '/c', $driverCatalog, $driverInf)
+Assert-DriverCatalog $signToolPath $driverCatalog $driverInf
 $certificate = Get-ChildItem -Path @('Cert:\CurrentUser\My', 'Cert:\LocalMachine\My') |
     Where-Object { $_.Thumbprint -ieq $CertificateThumbprint } |
     Select-Object -First 1

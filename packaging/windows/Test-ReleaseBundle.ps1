@@ -168,8 +168,10 @@ Case 'package integration signs before bundle and binds it in the outer manifest
     $verified = $source.IndexOf("@('verify', '/pa', '/all', '/v', `$file)", [StringComparison]::Ordinal)
     $outer = $source.IndexOf('$trustedManifest = [ordered]@{', [StringComparison]::Ordinal)
     Assert-True ($verified -ge 0 -and $produce -gt $verified -and $outer -gt $produce) 'Trusted signed outer manifest must follow verified-image bundle construction.'
-    Assert-True ($source.Contains("@('verify', '/kp', '/all', '/v', `$driverCatalog)") -and
-        $source.Contains("@('verify', '/kp', '/c', `$driverCatalog, `$driverInf)")) 'Existing kernel driver trust checks must remain.'
+    Assert-True ($source.Contains("@('verify', '/kp', '/v', `$Catalog)") -and
+        $source.Contains("@('verify', '/kp', '/c', `$Catalog, `$Inf)") -and
+        $source.Contains('Assert-DriverCatalog $signToolPath $driverCatalog $driverInf') -and
+        -not $source.Contains("'verify', '/kp', '/all'")) 'Kernel policy and exact INF membership checks must remain with compatible SignTool options.'
 }
 Case 'host CRT and app-local dependencies are refused' {
     Assert-Refused { & $module { Assert-SystemImageDependencies @('kernel32.dll', 'vcruntime140.dll') } } 'system closure'
