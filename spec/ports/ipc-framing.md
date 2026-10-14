@@ -68,16 +68,21 @@ source evidence do not authorize the standalone recovery path.
 
 The standalone authority independently checks the old public plan, spent permit
 and target lineage against fresh strong device observations. It durably seals
-the assessment for every outstanding unknown job, reserves each source exactly
-once for the same replacement, and correlates that new job to every source before
-issuing permits. The authority-local proof includes a bounded, canonical source
+the assessment for every outstanding unknown job and correlates the new job to
+the complete source set before issuing permits. The authority-local proof includes a bounded, canonical source
 set; the daemon assessment wire remains one source at a time. Each admission
 rechecks all sources, their candidate coverage, and the exact outstanding set.
 The proof expires with the plan or after four hours, whichever occurs first.
 A newly outstanding job, omitted source, changed facts, missing correlation,
-cancellation or any spent source reservation prevents further execution. Partial
-reservation/correlation publication fails closed and does not replenish budget. A failed replacement does not
-automatically create another epoch.
+cancellation prevents further execution. Legacy per-source reservations remain
+spent. New proofs carry an independent budget seal (local field 9), binding the
+next ordinal and hash of the entire previous consumption history. The authority
+atomically publishes `authority/recovery-grants/NN.grant`, then a distinct job
+correlation; only that exact new job can use it. At most 16 total epochs can be
+consumed in this runtime namespace, including legacy and orphaned consumptions.
+Partial publication fails closed and never refunds an epoch. A failed replacement
+does not automatically create another plan: the existing typed recovery request
+must materialize a distinct candidate and satisfy every proof gate again.
 
 Only the replacement's complete semantic receipts and successful postflight
 produce an immutable `SupersedingRecoveryEpoch` relation. This releases the

@@ -175,6 +175,7 @@ impl Fixture {
             issued_at: 130_000,
             expires_at: 230_000,
             additional_sources: Vec::new(),
+            budget: None,
         };
         (new, proof)
     }
@@ -604,4 +605,198 @@ fn partial_set_publication_is_spent_and_never_authorizes_an_orphan() {
     persist(&path(&fixture.root, "JOB-OLD", "job"), b"JOB-ORPHAN").unwrap();
     assert!(validate_reservations(&fixture.root, &proof, "JOB-ORPHAN").is_err());
     assert!(!path(&fixture.root, "JOB-SECOND", "job").exists());
+}
+
+fn grant(fixture: &Fixture, name: &str) -> (AuthorityPlanRecord, Proof) {
+    let (mut record, mut proof) = fixture.replacement();
+    record.plan.plan_id = format!("PLAN-{name}");
+    record.plan.plan_sha256 = sha256(name.as_bytes()).to_hex();
+    proof.assessment.candidate_plan_id = record.plan.plan_id.clone();
+    proof.assessment.candidate_plan_sha256 = record.plan.plan_sha256.clone();
+    proof.replacement_authority = sha256(&encode_authority_plan(&record)).as_bytes().to_vec();
+    proof.budget = Some(budget::next(&fixture.root).unwrap());
+    persist(
+        &path(&fixture.root, &record.plan.plan_id, "proof"),
+        &proof.encode(),
+    )
+    .unwrap();
+    (record, proof)
+}
+
+#[test]
+fn independent_grant_preserves_spent_legacy_records_and_requires_exact_new_correlation() {
+    let fixture = Fixture::new("independent-grant");
+    let (old_replacement, old_proof) = fixture.replacement();
+    persist(
+        &path(&fixture.root, &old_replacement.plan.plan_id, "proof"),
+        &old_proof.encode(),
+    )
+    .unwrap();
+    reserve_sources(&fixture.root, &old_proof).unwrap();
+    correlate(&fixture.root, &old_replacement, "JOB-FAILED-REPLACEMENT").unwrap();
+    let before = ["reserved", "job"].map(|ext| read(&path(&fixture.root, "JOB-OLD", ext)).unwrap());
+    let (record, proof) = grant(&fixture, "INDEPENDENT");
+    assert_eq!(proof.budget.as_ref().unwrap().ordinal, 2);
+    assert_eq!(Proof::decode(&proof.encode()).unwrap(), proof);
+    assert!(validate_reservations(&fixture.root, &proof, "JOB-NEW").is_err());
+    reserve_sources(&fixture.root, &proof).unwrap();
+    assert!(validate_reservations(&fixture.root, &proof, "JOB-NEW").is_err());
+    correlate(&fixture.root, &record, "JOB-NEW").unwrap();
+    validate_reservations(&fixture.root, &proof, "JOB-NEW").unwrap();
+    assert!(validate_reservations(&fixture.root, &proof, "JOB-OLD").is_err());
+    assert!(correlate(&fixture.root, &record, "JOB-OTHER").is_err());
+    assert!(reserve_sources(&fixture.root, &proof).is_err());
+    assert_eq!(budget::next(&fixture.root).unwrap().ordinal, 3);
+    assert_eq!(
+        before,
+        ["reserved", "job"].map(|ext| read(&path(&fixture.root, "JOB-OLD", ext)).unwrap())
+    );
+    assert!(!path(&fixture.root, "JOB-OLD", "complete").exists());
+}
+
+#[test]
+fn competing_plans_share_one_ordinal_and_orphaned_consumption_is_not_refunded() {
+    let fixture = Fixture::new("grant-race");
+    let (_, first) = grant(&fixture, "RACE-A");
+    let (_, second) = grant(&fixture, "RACE-B");
+    assert_eq!(first.budget, second.budget);
+    let barrier = std::sync::Barrier::new(2);
+    let results = std::thread::scope(|scope| {
+        let a = scope.spawn(|| {
+            barrier.wait();
+            reserve_sources(&fixture.root, &first)
+        });
+        let b = scope.spawn(|| {
+            barrier.wait();
+            reserve_sources(&fixture.root, &second)
+        });
+        [a.join().unwrap(), b.join().unwrap()]
+    });
+    assert_eq!(results.iter().filter(|result| result.is_ok()).count(), 1);
+    assert_eq!(budget::grants(&fixture.root).unwrap().len(), 1);
+    for _restart in 0..2 {
+        assert_eq!(budget::next(&fixture.root).unwrap().ordinal, 2);
+        assert!(validate_reservations(&fixture.root, &first, "JOB-ORPHAN").is_err());
+        assert!(validate_reservations(&fixture.root, &second, "JOB-ORPHAN").is_err());
+    }
+}
+
+#[test]
+fn all_consumed_epochs_count_toward_a_fixed_limit_even_without_jobs_or_after_expiry() {
+    let fixture = Fixture::new("grant-limit");
+    for ordinal in 1..=budget::MAX_EPOCHS {
+        let (_, proof) = grant(&fixture, &format!("LIMIT-{ordinal}"));
+        assert_eq!(proof.budget.as_ref().unwrap().ordinal, ordinal);
+        reserve_sources(&fixture.root, &proof).unwrap();
+    }
+    assert_eq!(budget::grants(&fixture.root).unwrap().len(), 16);
+    for _restart in 0..2 {
+        assert!(
+            budget::next(&fixture.root)
+                .unwrap_err()
+                .message
+                .contains("16 independent epochs")
+        );
+    }
+}
+
+#[test]
+fn grant_chain_rejects_changed_legacy_records_missing_middle_and_orphan_correlations() {
+    let fixture = Fixture::new("grant-chain");
+    let (_, old) = fixture.replacement();
+    persist(
+        &path(&fixture.root, &old.assessment.candidate_plan_id, "proof"),
+        &old.encode(),
+    )
+    .unwrap();
+    reserve_sources(&fixture.root, &old).unwrap();
+    let (_, first) = grant(&fixture, "CHAIN-A");
+    reserve_sources(&fixture.root, &first).unwrap();
+    let (_, second) = grant(&fixture, "CHAIN-B");
+    reserve_sources(&fixture.root, &second).unwrap();
+    let legacy = path(&fixture.root, "JOB-OLD", "reserved");
+    std::fs::remove_file(&legacy).unwrap();
+    assert!(budget::next(&fixture.root).is_err());
+    persist(&legacy, &old.encode()).unwrap();
+    budget::next(&fixture.root).unwrap();
+    let middle = budget::path(&fixture.root, 2, "grant");
+    std::fs::remove_file(&middle).unwrap();
+    assert!(budget::next(&fixture.root).is_err());
+    persist(&middle, &first.encode()).unwrap();
+    std::fs::write(&middle, b"corrupt").unwrap();
+    assert!(budget::next(&fixture.root).is_err());
+    std::fs::write(&middle, first.encode()).unwrap();
+    persist(&budget::path(&fixture.root, 4, "job"), b"JOB-NO-GRANT").unwrap();
+    assert!(budget::next(&fixture.root).is_err());
+}
+
+#[test]
+fn budget_seal_cannot_be_nested_widened_or_changed_after_commit() {
+    let fixture = Fixture::new("grant-seal");
+    let (_, proof) = grant(&fixture, "SEALED");
+    reserve_sources(&fixture.root, &proof).unwrap();
+    for mutate in [
+        |seal: &mut budget::Seal| seal.ordinal = 0,
+        |seal: &mut budget::Seal| seal.ordinal = 17,
+        |seal: &mut budget::Seal| seal.previous.clear(),
+    ] {
+        let mut changed = proof.clone();
+        mutate(changed.budget.as_mut().unwrap());
+        assert!(Proof::decode(&changed.encode()).is_err());
+    }
+    let mut changed = proof.clone();
+    changed.budget.as_mut().unwrap().previous = sha256(b"other ledger").as_bytes().to_vec();
+    assert!(budget::validate(&fixture.root, &changed).is_err());
+    let mut nested = proof.clone();
+    nested.additional_sources.push(proof.clone());
+    assert!(Proof::decode(&nested.encode()).is_err());
+}
+
+#[test]
+fn new_grant_covers_all_sources_without_extending_an_expired_grant() {
+    let fixture = Fixture::new("grant-set-time");
+    let (_, old) = fixture.replacement();
+    let set = with_additional_source(&fixture, &old);
+    persist(
+        &path(&fixture.root, &set.assessment.candidate_plan_id, "proof"),
+        &set.encode(),
+    )
+    .unwrap();
+    reserve_sources(&fixture.root, &set).unwrap();
+    // Both source reservations represent one consumed legacy epoch.
+    assert_eq!(budget::next(&fixture.root).unwrap().ordinal, 2);
+    let (mut record, mut new) = fixture.replacement();
+    record.plan.plan_id = "PLAN-COMPLETE-SET-GRANT".into();
+    record.plan.plan_sha256 = sha256(b"complete set grant").to_hex();
+    new.assessment.candidate_plan_id = record.plan.plan_id.clone();
+    new.assessment.candidate_plan_sha256 = record.plan.plan_sha256.clone();
+    new.replacement_authority = sha256(&encode_authority_plan(&record)).as_bytes().to_vec();
+    new.additional_sources = set.additional_sources.clone();
+    for source in &mut new.additional_sources {
+        source.assessment.candidate_plan_id = record.plan.plan_id.clone();
+        source.assessment.candidate_plan_sha256 = record.plan.plan_sha256.clone();
+        source.replacement_authority = new.replacement_authority.clone();
+    }
+    new.budget = Some(budget::next(&fixture.root).unwrap());
+    persist(
+        &path(&fixture.root, &record.plan.plan_id, "proof"),
+        &new.encode(),
+    )
+    .unwrap();
+    Proof::decode(&new.encode()).unwrap();
+    reserve_sources(&fixture.root, &new).unwrap();
+    correlate(&fixture.root, &record, "JOB-COMPLETE-SET").unwrap();
+    validate_reservations(&fixture.root, &new, "JOB-COMPLETE-SET").unwrap();
+    for proof in [&set, &new] {
+        assert!(validate_time(proof, proof.issued_at - 1).is_err());
+        validate_time(proof, proof.issued_at).unwrap();
+        validate_time(proof, proof.expires_at - 1).unwrap();
+        assert!(validate_time(proof, proof.expires_at).is_err());
+    }
+    for source in set.sources() {
+        assert_eq!(
+            read(&path(&fixture.root, &source.assessment.job_id, "reserved")).unwrap(),
+            set.encode()
+        );
+    }
 }
