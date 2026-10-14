@@ -46,6 +46,18 @@ const READY_TIMEOUT: Duration = Duration::from_secs(10);
 /// help because it is only consulted between calls, never inside one.
 const REQUEST_TIMEOUT: Duration = Duration::from_secs(10);
 
+fn request_read_timeout(verb: &str) -> Duration {
+    match verb {
+        // Parsing and hashing a firmware archive is not a lifecycle handshake.
+        // Use the controller client's existing materialization idle-read
+        // budget for the CLI-to-supervisor hop too.
+        "assess-plan" | "materialize-plan" | "materialize-recovery-plan" => {
+            ControllerClient::MATERIALIZATION_READ_TIMEOUT
+        }
+        _ => REQUEST_TIMEOUT,
+    }
+}
+
 #[derive(Debug, Clone, Default)]
 pub struct DaemonOptions {
     profile_files: Vec<PathBuf>,
@@ -599,7 +611,7 @@ fn request(runtime_dir: &Path, verb: &str, arguments: &[&str]) -> Result<Vec<u8>
         )
     })?;
     stream
-        .set_read_timeout(Some(REQUEST_TIMEOUT))
+        .set_read_timeout(Some(request_read_timeout(verb)))
         .map_err(|error| internal("bound the supervisor response wait", error))?;
     let mut payload = Vec::new();
     wire::write_string(&mut payload, 1, verb);
@@ -658,129 +670,148 @@ fn serve(
         }
         match listener.accept() {
             Ok(mut stream) => {
-                let Some(request) = read_frame(&mut stream)
-                    .map_err(|error| internal("read supervisor request", error))?
-                else {
-                    continue;
-                };
-                let (command, arguments) = decode_request(&request)?;
-                let mut public = PublicClient::connect(runtime_dir)?;
-                let runtime_info = public.runtime_info().clone();
-                let active_jobs = public
-                    .job_list()?
-                    .into_iter()
-                    .filter(|job| !job.terminal)
-                    .count();
-                let mut blockers = runtime_info.execution_blockers.clone();
-                if session.hdc_digest.is_none() {
-                    blockers.push("AUTHORITY_HDC_UNBOUND".into());
-                }
-                if session.hardware_campaign.is_none()
-                    && !authority_support::has_reviewed_support_records()
-                {
-                    blockers.push("AUTHORITY_SUPPORT_UNPUBLISHED".into());
-                }
-                let authority_support_available = session.hdc_digest.is_some()
-                    && (session.hardware_campaign.is_some()
-                        || authority_support::has_reviewed_support_records());
-                let status = DaemonStatus {
-                    supervisor_pid: std::process::id(),
-                    daemon_pid: daemon.id(),
-                    epoch: session.epoch,
-                    protocol_major: runtime_info.protocol_major,
-                    protocol_minor: runtime_info.protocol_minor,
-                    daemon_version: runtime_info.daemon_version.clone(),
-                    mechanics_ready: runtime_info.execution_ready,
-                    authority_support_available,
-                    hdc_bound: session.hdc_digest.is_some(),
-                    hdc_sha256: session
-                        .hdc_digest
-                        .map_or_else(String::new, |digest| digest.to_hex()),
-                    hardware_campaign: session.hardware_campaign.unwrap_or_default().to_string(),
-                    active_jobs,
-                    blockers,
-                };
-                match command.as_str() {
-                    "status" => write_reply(&mut stream, Ok(encode_status(&status)))?,
-                    "stop" if active_jobs == 0 => {
-                        write_reply(&mut stream, Ok(encode_status(&status)))?;
-                        return Ok(());
+                // A caller may time out, terminate, or abandon a response.
+                // Its connection does not own the durable runtime or its jobs.
+                // Handle this request once; never replay it after a failed reply.
+                let handled = (|| -> Result<bool, StandaloneError> {
+                    let Some(request) = read_frame(&mut stream)
+                        .map_err(|error| internal("read supervisor request", error))?
+                    else {
+                        return Ok(false);
+                    };
+                    let (command, arguments) = decode_request(&request)?;
+                    let mut public = PublicClient::connect(runtime_dir)?;
+                    let runtime_info = public.runtime_info().clone();
+                    let active_jobs = public
+                        .job_list()?
+                        .into_iter()
+                        .filter(|job| !job.terminal)
+                        .count();
+                    let mut blockers = runtime_info.execution_blockers.clone();
+                    if session.hdc_digest.is_none() {
+                        blockers.push("AUTHORITY_HDC_UNBOUND".into());
                     }
-                    "stop" => {
-                        write_reply(
-                            &mut stream,
-                            Err(StandaloneError::new(
-                                "ACTIVE_JOBS",
-                                format!(
-                                    "The runtime has {active_jobs} active job(s); request cancellation and wait for a terminal state before stopping."
-                                ),
-                                6,
-                                true,
-                            )),
-                        )?;
+                    if session.hardware_campaign.is_none()
+                        && !authority_support::has_reviewed_support_records()
+                    {
+                        blockers.push("AUTHORITY_SUPPORT_UNPUBLISHED".into());
                     }
-                    "materialize-plan" => {
-                        let result = handle_materialize(
-                            runtime_dir,
-                            &mut public,
-                            &arguments,
-                            session.hdc_digest,
-                            session.hardware_campaign,
-                        )
-                        .map(|response| response.encode());
-                        write_reply(&mut stream, result)?;
+                    let authority_support_available = session.hdc_digest.is_some()
+                        && (session.hardware_campaign.is_some()
+                            || authority_support::has_reviewed_support_records());
+                    let status = DaemonStatus {
+                        supervisor_pid: std::process::id(),
+                        daemon_pid: daemon.id(),
+                        epoch: session.epoch,
+                        protocol_major: runtime_info.protocol_major,
+                        protocol_minor: runtime_info.protocol_minor,
+                        daemon_version: runtime_info.daemon_version.clone(),
+                        mechanics_ready: runtime_info.execution_ready,
+                        authority_support_available,
+                        hdc_bound: session.hdc_digest.is_some(),
+                        hdc_sha256: session
+                            .hdc_digest
+                            .map_or_else(String::new, |digest| digest.to_hex()),
+                        hardware_campaign: session
+                            .hardware_campaign
+                            .unwrap_or_default()
+                            .to_string(),
+                        active_jobs,
+                        blockers,
+                    };
+                    match command.as_str() {
+                        "status" => write_reply(&mut stream, Ok(encode_status(&status)))?,
+                        "stop" if active_jobs == 0 => {
+                            write_reply(&mut stream, Ok(encode_status(&status)))?;
+                            return Ok(true);
+                        }
+                        "stop" => {
+                            write_reply(
+                                &mut stream,
+                                Err(StandaloneError::new(
+                                    "ACTIVE_JOBS",
+                                    format!(
+                                        "The runtime has {active_jobs} active job(s); request cancellation and wait for a terminal state before stopping."
+                                    ),
+                                    6,
+                                    true,
+                                )),
+                            )?;
+                        }
+                        "materialize-plan" => {
+                            let result = handle_materialize(
+                                runtime_dir,
+                                &mut public,
+                                &arguments,
+                                session.hdc_digest,
+                                session.hardware_campaign,
+                            )
+                            .map(|response| response.encode());
+                            write_reply(&mut stream, result)?;
+                        }
+                        "assess-plan" => {
+                            let result = handle_assess(
+                                runtime_dir,
+                                &mut public,
+                                &arguments,
+                                session.hdc_digest,
+                                session.hardware_campaign,
+                            )
+                            .map(|response| response.encode());
+                            write_reply(&mut stream, result)?;
+                        }
+                        "apply-plan" => {
+                            let result = handle_apply(
+                                runtime_dir,
+                                &public,
+                                session.epoch,
+                                session.hdc_digest,
+                                session.hardware_campaign,
+                                &arguments,
+                            );
+                            write_reply(&mut stream, result)?;
+                        }
+                        "materialize-recovery-plan" => {
+                            let result = handle_recovery_plan(
+                                runtime_dir,
+                                &mut public,
+                                &arguments,
+                                session.hdc_digest,
+                                session.hardware_campaign,
+                            )
+                            .map(|response| response.encode());
+                            write_reply(&mut stream, result)?;
+                        }
+                        "cancel-job" => {
+                            let result = handle_cancel(runtime_dir, &arguments);
+                            write_reply(&mut stream, result)?;
+                        }
+                        "reconcile-job" => {
+                            let result = handle_reconcile(runtime_dir, &arguments);
+                            write_reply(&mut stream, result)?;
+                        }
+                        _ => {
+                            write_reply(
+                                &mut stream,
+                                Err(StandaloneError::new(
+                                    "SUPERVISOR_REQUEST_INVALID",
+                                    "The authority supervisor does not recognize this request.",
+                                    2,
+                                    false,
+                                )),
+                            )?;
+                        }
                     }
-                    "assess-plan" => {
-                        let result = handle_assess(
-                            runtime_dir,
-                            &mut public,
-                            &arguments,
-                            session.hdc_digest,
-                            session.hardware_campaign,
-                        )
-                        .map(|response| response.encode());
-                        write_reply(&mut stream, result)?;
-                    }
-                    "apply-plan" => {
-                        let result = handle_apply(
-                            runtime_dir,
-                            &public,
-                            session.epoch,
-                            session.hdc_digest,
-                            session.hardware_campaign,
-                            &arguments,
+                    Ok(false)
+                })();
+                match handled {
+                    Ok(true) => return Ok(()),
+                    Ok(false) => {}
+                    Err(error) => {
+                        eprintln!(
+                            "arkforge supervisor client: {}: {}",
+                            error.code, error.message
                         );
-                        write_reply(&mut stream, result)?;
-                    }
-                    "materialize-recovery-plan" => {
-                        let result = handle_recovery_plan(
-                            runtime_dir,
-                            &mut public,
-                            &arguments,
-                            session.hdc_digest,
-                            session.hardware_campaign,
-                        )
-                        .map(|response| response.encode());
-                        write_reply(&mut stream, result)?;
-                    }
-                    "cancel-job" => {
-                        let result = handle_cancel(runtime_dir, &arguments);
-                        write_reply(&mut stream, result)?;
-                    }
-                    "reconcile-job" => {
-                        let result = handle_reconcile(runtime_dir, &arguments);
-                        write_reply(&mut stream, result)?;
-                    }
-                    _ => {
-                        write_reply(
-                            &mut stream,
-                            Err(StandaloneError::new(
-                                "SUPERVISOR_REQUEST_INVALID",
-                                "The authority supervisor does not recognize this request.",
-                                2,
-                                false,
-                            )),
-                        )?;
                     }
                 }
             }
@@ -2777,6 +2808,53 @@ fn internal(context: &str, error: impl std::fmt::Display) -> StandaloneError {
 mod tests {
     use super::*;
     use arkforge_ipc::messages::KeyValue;
+
+    #[test]
+    fn archive_requests_keep_the_materialization_budget() {
+        for verb in [
+            "assess-plan",
+            "materialize-plan",
+            "materialize-recovery-plan",
+        ] {
+            assert_eq!(
+                request_read_timeout(verb),
+                ControllerClient::MATERIALIZATION_READ_TIMEOUT
+            );
+        }
+        for verb in ["status", "stop", "apply-plan", "cancel-job", "unknown"] {
+            assert_eq!(request_read_timeout(verb), REQUEST_TIMEOUT);
+        }
+    }
+
+    #[test]
+    fn an_archive_reply_can_arrive_after_the_lifecycle_deadline() {
+        let root = std::env::temp_dir().join(format!(
+            "arkforge-supervisor-archive-deadline-{}",
+            std::process::id()
+        ));
+        std::fs::create_dir_all(&root).unwrap();
+        let endpoint = LocalEndpoint::for_runtime(&root, LocalChannel::Supervisor);
+        let mut listener = LocalListener::bind(&endpoint).unwrap();
+        let (release, pending_work) = std::sync::mpsc::channel::<()>();
+        let server = std::thread::spawn(move || {
+            let mut stream = listener.accept().unwrap();
+            let frame = read_frame(&mut stream).unwrap().unwrap();
+            assert_eq!(decode_request(&frame).unwrap().0, "assess-plan");
+            // Model a quiet parser, past the lifecycle deadline. This waits on
+            // pending work, not an increased retry delay or a device operation.
+            assert!(matches!(
+                pending_work.recv_timeout(REQUEST_TIMEOUT + Duration::from_secs(1)),
+                Err(std::sync::mpsc::RecvTimeoutError::Timeout)
+            ));
+            write_reply(&mut stream, Ok(vec![42]))
+        });
+        let response = request(&root, "assess-plan", &["artifact", "profile", "device"]);
+        let sent = server.join().unwrap();
+        drop(release);
+        let _ = std::fs::remove_dir_all(root);
+        assert_eq!(response.unwrap(), vec![42]);
+        sent.unwrap();
+    }
 
     fn stable_observation(observed_at_epoch_ms: u64) -> DeviceObservationView {
         DeviceObservationView {

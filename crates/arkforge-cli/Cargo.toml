@@ -22,3 +22,4 @@ arkforged = { path = "../arkforged" }
 
 [dev-dependencies]
 arkforge-artifact = { path = "../arkforge-artifact" }
+arkforge-platform = { path = "../arkforge-platform" }

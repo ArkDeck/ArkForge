@@ -434,6 +434,18 @@ impl Listener {
                 return Err(error);
             }
         }
+        // Keep a listening instance published while this accepted connection
+        // is being served. Otherwise the last instance can disappear between
+        // requests, and WaitNamedPipe returns immediately instead of waiting
+        // for the live listener to accept the next client.
+        self.pending = match create_pipe_instance(&self.endpoint, self.nonblocking, false) {
+            Ok(pending) => Some(pending),
+            Err(error) => {
+                let _ = unsafe { DisconnectNamedPipe(handle) };
+                let _ = unsafe { CloseHandle(handle) };
+                return Err(error);
+            }
+        };
         Ok(Stream {
             handle,
             server_end: true,
