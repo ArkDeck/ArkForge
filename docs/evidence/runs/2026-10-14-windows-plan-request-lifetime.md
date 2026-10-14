@@ -66,7 +66,11 @@ surviving truncated/malformed frames and an abandoned response. They do not
 flash a device. The original tests first caught the listener gap; the isolated
 reproduction also failed before its fix. A later broader run required the
 already-installed Git `gzip` directory on test PATH. Both original logs remain
-preserved; no assertions were relaxed. macOS and Swift checks run in CI.
+preserved; no assertions were relaxed. macOS CI then caught test socket paths
+that exceeded `SUN_LEN`. The new runtime tests use the short `/private/tmp`
+base there, and platform tests use their already-unique short labels plus the
+process ID rather than appending the full test name. Windows paths retain
+their normal temporary base. macOS and Swift checks run in CI.
 
 ## CI
 

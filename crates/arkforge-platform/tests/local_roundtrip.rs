@@ -14,11 +14,7 @@ impl TempRoot {
         let temporary_base = PathBuf::from("/private/tmp");
         #[cfg(not(target_os = "macos"))]
         let temporary_base = std::env::temp_dir();
-        let root = temporary_base.join(format!(
-            "arkforge-platform-{label}-{}-{}",
-            std::process::id(),
-            std::thread::current().name().unwrap_or("test")
-        ));
+        let root = temporary_base.join(format!("arkforge-platform-{label}-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&root);
         std::fs::create_dir_all(&root).unwrap();
         Self(root)
