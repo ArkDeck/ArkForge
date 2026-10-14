@@ -33,7 +33,7 @@ function Snapshot {
     return $value
 }
 $now = [DateTimeOffset]::Parse('2026-10-14T00:00:00Z')
-$candidate = [ordered]@{ Inf = 'fixture-system\winusb.inf'; Section = 'WINUSB'; HardwareId = 'USB\MS_COMP_WINUSB'; Provider = 'Microsoft'; Version = 1 }
+$candidate = [ordered]@{ Inf = 'C:\fixture-system\winusb.inf'; Section = 'WINUSB'; HardwareId = 'USB\MS_COMP_WINUSB'; Provider = 'Microsoft'; Version = 1 }
 $inbox = [ordered]@{ 'INF\winusb.inf' = @{ sha256 = 'a' * 64 }; 'System32\drivers\winusb.sys' = @{ sha256 = 'b' * 64 } }
 $sources = [ordered]@{ 'Bind-InboxWinUsb.ps1' = 'c' * 64; 'InboxWinUsb.psm1' = 'd' * 64; 'InboxWinUsb.cs' = 'e' * 64 }
 function Plan {
@@ -75,6 +75,16 @@ Check 'changed helper signed-file facts or selected driver refuse' {
     $plan = Plan; $plan.sourceDigests.'InboxWinUsb.cs' = '0' * 64; Refuses { Validate $plan }
     $plan = Plan; $plan.inboxFiles.'INF\winusb.inf'.sha256 = '0' * 64; Refuses { Validate $plan }
     $plan = Plan; $plan.candidate.Section = 'BILLBOARD'; Refuses { Validate $plan }
+}
+Check 'elevation path casing accepts the same file but other paths and versions refuse' {
+    $plan = Plan; $plan.candidate.Inf = $candidate.Inf.ToUpperInvariant()
+    [void](Validate $plan)
+    foreach ($otherPath in @('C:\other-system\winusb.inf', 'fixture-system\winusb.inf', 'C:\fixture-system\other.inf')) {
+        $plan = Plan; $plan.candidate.Inf = $otherPath; Refuses { Validate $plan }
+    }
+    $plan = Plan; $plan.candidate.Version = 2; Refuses { Validate $plan }
+    $plan = Plan; $plan.candidate.Version = '1'; Refuses { Validate $plan }
+    $plan = Plan; $plan.candidate.Provider = 'other'; Refuses { Validate $plan }
 }
 Check 'missing or malformed snapshot data refuses' {
     $plan = Plan; $plan.before.PSObject.Properties.Remove('LocationPaths'); Refuses { Validate $plan }
