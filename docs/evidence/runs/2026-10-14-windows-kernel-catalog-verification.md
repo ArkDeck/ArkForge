@@ -26,6 +26,7 @@ repository at `D:/src/ArkDeck-wt/tools/afw1-driver-investigation-20261014`.
 | Same test with explicit original Rockchip catalog and INF | 0 | Four checks; unchanged Microsoft-signed vendor bytes | `driver-catalog-rockusb.log` |
 | Invoke test in the workflow shell and return `$LASTEXITCODE` | 0 | Expected negative cases do not fail the workflow shell | `driver-catalog-ci-shell.log` |
 | `pwsh -NoProfile -File packaging/windows/Test-WindowsAcceptanceContract.ps1` on host | 0 | 31 software guards | `acceptance-contract-host.log` |
+| Full Windows packaging software step on host after guard corrections | 0 | Acceptance, bundle, HDC and native catalog checks | `packaging-workflow-final.log` |
 | Parse all packaging PowerShell sources | 0 | Nine files, zero parse errors | `powershell-parse.json` |
 | `cargo fmt --all -- --check` | 0 | Updated Rust packaging guard is formatted | Console check |
 | `git diff --check` | 0 | No whitespace errors | Git check |
@@ -49,9 +50,9 @@ substituting it for ArkForge's canonical WinUSB package. The vendor INF binds
 not install either driver, open a USB device, establish vendor-backend support,
 sign a release, or produce AF-W1/GJ-4 hardware evidence.
 
-Rust runtime, Swift and wire sources did not change. CI identified an existing
-Rust packaging guard that literally required the invalid `/kp /all` command.
-The guard now checks both kernel-policy verification and exact INF membership,
+Rust runtime, Swift and wire sources did not change. CI identified existing
+Rust and PowerShell packaging guards that literally required the invalid
+`/kp /all` command. The guards now check both kernel-policy verification and exact INF membership,
 the producer call site, rejection of the incompatible option combination, and
 inclusion of the native regression in Windows CI. Local compilation was not
 repeated during the ongoing host soak. Existing bundle and HDC closure
@@ -60,7 +61,11 @@ implementations were unchanged. Full verification runs on the PR's CI lanes.
 ## CI
 
 PR #4, initial head `6f35e38d79c6ffb8592e800b0420e680a125c6c9`: Rust run
-`38502638529` failed at the stale packaging guard described above. That is a
-source-test correction, not an invalid load run. Updated-head CI is pending.
+`38502638529` failed at the stale Rust packaging guard described above.
+At head `d91ffe33b8a0f9c1a81209d5c2280bdfe88dcb5f`, Rust/Swift run
+`38503153149` passed; Windows run `38503153058` passed the native Rust suite
+but failed the second stale guard in `Test-ReleaseBundle.ps1`. Both guards
+were corrected and the full Windows packaging software step passed locally.
+These are source-test corrections, not invalid load runs. Updated-head CI is pending.
 A green software run will not replace the exact signed production inputs and
 full physical AF-W1 acceptance.
