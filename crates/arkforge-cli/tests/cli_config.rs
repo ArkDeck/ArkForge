@@ -63,8 +63,14 @@ struct TempRuntime {
 
 impl TempRuntime {
     fn new(name: &str) -> Self {
+        // macOS's per-user temporary directory can exhaust sun_path before a
+        // descriptive test name and the supervisor socket filename fit.
+        #[cfg(target_os = "macos")]
+        let temporary_base = PathBuf::from("/private/tmp");
+        #[cfg(not(target_os = "macos"))]
+        let temporary_base = std::env::temp_dir();
         let root =
-            std::env::temp_dir().join(format!("arkforge-cli-config-{}-{name}", std::process::id()));
+            temporary_base.join(format!("arkforge-cli-config-{}-{name}", std::process::id()));
         let _ = std::fs::remove_dir_all(&root);
         std::fs::create_dir_all(&root).unwrap();
         Self { root }

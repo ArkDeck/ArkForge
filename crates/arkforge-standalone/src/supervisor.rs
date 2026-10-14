@@ -2828,7 +2828,11 @@ mod tests {
 
     #[test]
     fn an_archive_reply_can_arrive_after_the_lifecycle_deadline() {
-        let root = std::env::temp_dir().join(format!(
+        #[cfg(target_os = "macos")]
+        let temporary_base = PathBuf::from("/private/tmp");
+        #[cfg(not(target_os = "macos"))]
+        let temporary_base = std::env::temp_dir();
+        let root = temporary_base.join(format!(
             "arkforge-supervisor-archive-deadline-{}",
             std::process::id()
         ));
