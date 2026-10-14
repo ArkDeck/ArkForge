@@ -96,11 +96,12 @@ The outer installer signature is not a substitute for the inventory checks.
 Its bundle path is the nested
 `ArkForge.release-bundle` directory, not the installer/package root.
 
-Software producer regressions run without launching any image or device:
+Software producer regressions run without launching packaged images or accessing devices:
 
 ```powershell
 .\packaging\windows\Test-ReleaseBundle.ps1
 .\packaging\windows\Test-HdcPackage.ps1
+.\packaging\windows\Test-DriverCatalog.ps1
 ```
 
 The test uses signed public Windows executable bytes as explicitly labelled
@@ -108,6 +109,14 @@ fixture data. A successful fixture check or bundle build does not establish
 AF-W1, a hardware campaign, or production device support. The protected physical
 acceptance workflow must separately accept the exact immutable package/bundle
 and produce the corresponding real acceptance evidence before release export.
+
+`Test-DriverCatalog.ps1` runs the producer's signature helpers with the installed
+Windows SDK SignTool. It reads an existing driver catalog and its INF as
+cryptographic fixture data, then verifies rejection of an unsigned catalog,
+changed INF and missing member. `-Catalog`, `-Inf` and `-SignTool` select explicit
+fixture/tool paths. No driver is installed or opened. Kernel-policy verification
+uses `/kp`; SignTool rejects combining that policy with `/all`. The unchanged
+canonical ArkForge INF check still precedes these helpers in production.
 
 Install and accept from an elevated PowerShell:
 
