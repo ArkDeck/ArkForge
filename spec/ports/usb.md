@@ -1,6 +1,6 @@
 # Port: bulk USB interface
 status: draft
-source: crates/arkforge-usb/src/lib.rs (safe surface), platform.rs (IOKit), platform_windows.rs (WinUSB); crates/arkforge-transport/src/usb.rs
+source: crates/arkforge-usb/src/lib.rs (safe surface), platform.rs (IOKit), platform_windows.rs (WinUSB), windows_vendor.rs (hub observations); crates/arkforge-transport/src/usb.rs
 
 ## Purpose
 Enumerate USB interfaces, claim exactly one, move bytes over its bulk pipes,
@@ -67,6 +67,27 @@ protocol-identity facts `usb.productName` / `usb.vendorName` (AF-TRN-002).
 A mock implementing `BulkInterface` over scripted reads/writes is enough for
 the protocol engine's tests; the replay transport does not need this port at
 all. Real-device behaviour is evidence (`docs/evidence/`), not a fixture.
+
+## Windows hub observations (informative)
+
+Enumeration can return an exact Loader descriptor for a device bound to the
+Rockchip driver without opening a vendor bulk interface. The implementation
+uses the documented Windows hub connection, driver-key and GET_DESCRIPTOR
+queries. PnP instance, parent hub and port, driver key, device/configuration and
+USB string descriptors must remain consistent across the census. Missing or
+changing identity fails enumeration; the shared VID/PID alone is insufficient
+to classify Loader versus Maskrom. `open_unique` and `open_exact` return
+`USB_CLAIM` for these observation-only records before opening a vendor handle.
+
+One worker owns the synchronous hub query and its buffers. A five-second caller
+budget does not imply that Windows has cancelled an outstanding query. After
+timeout the worker retains those resources until the query returns, issues no
+next query, and prevents another vendor census from accumulating workers. This
+observation budget is separate from the caller's bulk-transfer timeout.
+
+API references: [connection information](https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/usbioctl/ni-usbioctl-ioctl_usb_get_node_connection_information_ex),
+[driver-key correlation](https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/usbioctl/ni-usbioctl-ioctl_usb_get_node_connection_driverkey_name),
+and [descriptor requests](https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/usbioctl/ni-usbioctl-ioctl_usb_get_descriptor_from_node_connection).
 
 ---
 
