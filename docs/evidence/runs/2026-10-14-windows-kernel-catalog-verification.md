@@ -27,6 +27,7 @@ repository at `D:/src/ArkDeck-wt/tools/afw1-driver-investigation-20261014`.
 | Invoke test in the workflow shell and return `$LASTEXITCODE` | 0 | Expected negative cases do not fail the workflow shell | `driver-catalog-ci-shell.log` |
 | `pwsh -NoProfile -File packaging/windows/Test-WindowsAcceptanceContract.ps1` on host | 0 | 31 software guards | `acceptance-contract-host.log` |
 | Parse all packaging PowerShell sources | 0 | Nine files, zero parse errors | `powershell-parse.json` |
+| `cargo fmt --all -- --check` | 0 | Updated Rust packaging guard is formatted | Console check |
 | `git diff --check` | 0 | No whitespace errors | Git check |
 
 The first acceptance-contract attempt could not create its task-owned junction
@@ -48,11 +49,18 @@ substituting it for ArkForge's canonical WinUSB package. The vendor INF binds
 not install either driver, open a USB device, establish vendor-backend support,
 sign a release, or produce AF-W1/GJ-4 hardware evidence.
 
-Rust, Swift and wire sources did not change; their local build suites were not
-run. Existing bundle and HDC closure implementations were unchanged. Full
-repository verification remains on the PR's CI lanes.
+Rust runtime, Swift and wire sources did not change. CI identified an existing
+Rust packaging guard that literally required the invalid `/kp /all` command.
+The guard now checks both kernel-policy verification and exact INF membership,
+the producer call site, rejection of the incompatible option combination, and
+inclusion of the native regression in Windows CI. Local compilation was not
+repeated during the ongoing host soak. Existing bundle and HDC closure
+implementations were unchanged. Full verification runs on the PR's CI lanes.
 
 ## CI
 
-Pending publication of this source increment. A green software run will not
-replace the exact signed production inputs and full physical AF-W1 acceptance.
+PR #4, initial head `6f35e38d79c6ffb8592e800b0420e680a125c6c9`: Rust run
+`38502638529` failed at the stale packaging guard described above. That is a
+source-test correction, not an invalid load run. Updated-head CI is pending.
+A green software run will not replace the exact signed production inputs and
+full physical AF-W1 acceptance.

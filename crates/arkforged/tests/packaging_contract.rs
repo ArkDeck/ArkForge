@@ -85,7 +85,13 @@ fn the_windows_release_refuses_unsigned_or_unbound_payloads() {
     const INSTALLER: &str = include_str!("../../../packaging/windows/Install-ArkForge.ps1");
     const ACCEPTANCE: &str = include_str!("../../../packaging/windows/Test-ArkForgePackage.ps1");
 
-    assert!(PACKAGER.contains("'verify', '/kp', '/all', '/v', $driverCatalog"));
+    assert!(PACKAGER.contains("'verify', '/kp', '/v', $Catalog"));
+    assert!(PACKAGER.contains("'verify', '/kp', '/c', $Catalog, $Inf"));
+    assert!(PACKAGER.contains("Assert-DriverCatalog $signToolPath $driverCatalog $driverInf"));
+    assert!(!PACKAGER.contains("'verify', '/kp', '/all'"));
+    assert!(
+        include_str!("../../../.github/workflows/windows.yml").contains("Test-DriverCatalog.ps1")
+    );
     assert!(PACKAGER.contains("arkforge.windows-trusted-manifest/v1"));
     assert!(PACKAGER.contains("Set-AuthenticodeSignature"));
     assert!(PACKAGER.contains("tools\\hdc.exe"));
