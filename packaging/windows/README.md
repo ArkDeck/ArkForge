@@ -10,6 +10,21 @@ This package keeps three trust decisions explicit:
 - runtime startup supplies the exact HDC SHA-256 and enables
   `--require-release-signing`; no PATH lookup or unsigned fallback exists.
 
+Native discovery can also observe an already Rockchip-driver-bound DAYU200
+Loader through documented Windows USB hub descriptor queries. It checks the
+exact active PnP driver key, parent hub/port, device/configuration/interface and
+string descriptors, including the Loader bit, and rejects changing or incomplete
+identity. These observations do not enable vendor bulk transfers: an attempt to
+claim one returns `USB_CLAIM` before opening a Rockusb handle. The five-second
+observation budget bounds the caller; an outstanding Windows query retains its
+worker, handle and buffers, blocks another vendor census, and performs no next
+query after cancellation. It does not claim that Windows completed cancellation.
+
+This observation support neither installs nor redistributes the vendor driver
+and does not qualify its undocumented transfer/reset behavior. The production
+WinUSB driver package, signer, AF-W1 and hardware evidence requirements below
+remain in force.
+
 Build the release from an x64 Native Tools PowerShell 7 session:
 
 ```powershell

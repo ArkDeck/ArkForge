@@ -1,12 +1,17 @@
-//! Windows WinUSB binding for the ArkForge RockUSB interface.
+//! Windows WinUSB transport and read-only Rockchip driver observation.
 //!
 //! The companion INF registers `ARKFORGE_ROCKUSB_INTERFACE_GUID`; SetupAPI
 //! enumerates only that class, then WinUSB descriptors are checked against the
-//! same exact selector used by macOS. No broad VID-only handle is claimed.
+//! same exact selector used by macOS. Rockchip-bound devices are observed only
+//! through Windows hub descriptor queries and cannot be claimed for bulk I/O.
+//! No broad VID-only handle is claimed.
 
 use super::{BulkInterface, UsbError, UsbInterfaceDescriptor, UsbInterfaceSelector};
 use core::ffi::c_void;
 use std::ptr;
+
+#[path = "windows_vendor.rs"]
+mod vendor;
 
 type Handle = *mut c_void;
 type DeviceInfoSet = Handle;
@@ -242,17 +247,10 @@ pub fn open_unique(
     selector: UsbInterfaceSelector,
     timeout_ms: u32,
 ) -> Result<Box<dyn BulkInterface>, UsbError> {
-    let mut matches = collect_services()?
-        .into_iter()
-        .filter(|service| selector.matches(&service.descriptor))
-        .collect::<Vec<_>>();
-    match matches.len() {
-        0 => Err(UsbError::NoMatchingInterface(selector)),
-        1 => open_service(matches.pop().expect("one match"), timeout_ms),
-        _ => Err(UsbError::AmbiguousInterfaces(
-            matches.into_iter().map(|item| item.descriptor).collect(),
-        )),
-    }
+    open_service(
+        select_service(collect_services()?, selector, None)?,
+        timeout_ms,
+    )
 }
 
 pub fn open_exact(
@@ -260,13 +258,30 @@ pub fn open_exact(
     expected: &UsbInterfaceDescriptor,
     timeout_ms: u32,
 ) -> Result<Box<dyn BulkInterface>, UsbError> {
-    let mut matches = collect_services()?
+    open_service(
+        select_service(collect_services()?, selector, Some(expected))?,
+        timeout_ms,
+    )
+}
+
+fn select_service(
+    records: Vec<ServiceRecord>,
+    selector: UsbInterfaceSelector,
+    expected: Option<&UsbInterfaceDescriptor>,
+) -> Result<ServiceRecord, UsbError> {
+    let mut matches = records
         .into_iter()
-        .filter(|service| selector.matches(&service.descriptor) && service.descriptor == *expected)
+        .filter(|service| {
+            selector.matches(&service.descriptor)
+                && expected.is_none_or(|expected| service.descriptor == *expected)
+        })
         .collect::<Vec<_>>();
     match matches.len() {
-        0 => Err(UsbError::NoExactInterface(expected.clone())),
-        1 => open_service(matches.pop().expect("one exact match"), timeout_ms),
+        0 => Err(match expected {
+            Some(expected) => UsbError::NoExactInterface(expected.clone()),
+            None => UsbError::NoMatchingInterface(selector),
+        }),
+        1 => Ok(matches.pop().expect("one match")),
         _ => Err(UsbError::AmbiguousInterfaces(
             matches.into_iter().map(|item| item.descriptor).collect(),
         )),
@@ -277,6 +292,14 @@ pub fn open_exact(
 struct ServiceRecord {
     path: Vec<u16>,
     descriptor: UsbInterfaceDescriptor,
+    binding: Binding,
+}
+
+#[derive(Debug)]
+enum Binding {
+    WinUsb,
+    /// Descriptors came from the Windows hub, not vendor bulk I/O.
+    RockchipObservationOnly,
 }
 
 fn collect_services() -> Result<Vec<ServiceRecord>, UsbError> {
@@ -317,19 +340,31 @@ fn collect_services() -> Result<Vec<ServiceRecord>, UsbError> {
         }
         let (path, instance_id) = interface_path(set.0, &mut interface)?;
         match WinUsbDevice::open(&path).and_then(|handle| handle.descriptor(&instance_id)) {
-            Ok(descriptor) => records.push(ServiceRecord { path, descriptor }),
+            Ok(descriptor) => records.push(ServiceRecord {
+                path,
+                descriptor,
+                binding: Binding::WinUsb,
+            }),
             Err(error) if first_failure.is_none() => first_failure = Some(error),
             Err(_) => {}
         }
         index += 1;
     }
-    if records.is_empty()
-        && let Some(error) = first_failure
-    {
-        Err(error)
-    } else {
-        Ok(records)
+    // An unreadable candidate must not disappear from an otherwise successful
+    // census and turn an ambiguous selection into a unique claim.
+    if let Some(error) = first_failure {
+        return Err(error);
     }
+    records.extend(
+        vendor::observe()?
+            .into_iter()
+            .map(|descriptor| ServiceRecord {
+                path: Vec::new(),
+                descriptor,
+                binding: Binding::RockchipObservationOnly,
+            }),
+    );
+    Ok(records)
 }
 
 fn interface_path(
@@ -409,6 +444,11 @@ fn open_service(
     service: ServiceRecord,
     timeout_ms: u32,
 ) -> Result<Box<dyn BulkInterface>, UsbError> {
+    if matches!(service.binding, Binding::RockchipObservationOnly) {
+        return Err(UsbError::Claim(
+            "the exact Loader is bound to the Rockchip vendor driver; its bulk transport is not qualified, and no vendor handle was opened".into(),
+        ));
+    }
     let device = WinUsbDevice::open(&service.path)?;
     let (bulk_in, bulk_out) = device.bulk_pipes()?;
     device.set_timeout(bulk_in, timeout_ms)?;
