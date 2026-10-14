@@ -34,6 +34,14 @@ pub struct UsbInterfaceDescriptor {
     pub vendor_name: Option<String>,
 }
 
+/// Two topology encodings observed on the same present Windows USB node.
+/// This is not a cross-mode identity assertion or a cached/ghost-device fact.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct LegacyTopologyObservation {
+    pub descriptor: UsbInterfaceDescriptor,
+    pub legacy_location_id: u32,
+}
+
 /// Exact descriptor match for the interface ArkForge is allowed to claim.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct UsbInterfaceSelector {
@@ -163,6 +171,19 @@ impl NativeUsb {
 
     pub fn enumerate(&self) -> Result<Vec<UsbInterfaceDescriptor>, UsbError> {
         platform::enumerate()
+    }
+
+    pub fn observe_windows_legacy_topologies(
+        &self,
+    ) -> Result<Vec<LegacyTopologyObservation>, UsbError> {
+        #[cfg(windows)]
+        {
+            platform::observe_legacy_topologies()
+        }
+        #[cfg(not(windows))]
+        {
+            Ok(Vec::new())
+        }
     }
 
     pub fn open_unique(

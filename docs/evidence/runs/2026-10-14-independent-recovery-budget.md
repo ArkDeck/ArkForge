@@ -23,7 +23,11 @@ These checks use fixtures and provide no new device-execution evidence.
 
 ## CI
 
-PR and exact-head run results are pending at this source revision. They will
-be recorded in the next dependent change after CI completes. Hardware
-acceptance still requires published main and fresh proof linking the current
-device to every original source identity; budget availability cannot replace it.
+[PR #20](https://github.com/ArkDeck/ArkForge/pull/20), head
+`03977903b9b835bf6826891b8b104788fe464ae8`: Windows PR run `38571978580`,
+macOS/Rust PR run `38571978778`, and push runs `38571928961` / `38571928985`
+all succeeded. Merged at `2026-10-14T13:33:48Z` as
+`6ecf79994a7154e841e8ce4b52024609aedea9a5` under the user's explicit all-green
+merge authorization. Hardware acceptance still requires fresh proof linking
+the current device to every original source identity; budget availability
+cannot replace it.

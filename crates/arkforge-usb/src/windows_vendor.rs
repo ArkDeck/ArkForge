@@ -96,6 +96,14 @@ fn invalid(message: &str) -> UsbError {
 static OBSERVATION_RUNNING: OnceLock<Arc<AtomicBool>> = OnceLock::new();
 
 pub(super) fn observe() -> Result<Vec<UsbInterfaceDescriptor>, UsbError> {
+    Ok(observe_legacy_topologies()?
+        .into_iter()
+        .map(|value| value.descriptor)
+        .collect())
+}
+
+pub(super) fn observe_legacy_topologies() -> Result<Vec<crate::LegacyTopologyObservation>, UsbError>
+{
     bounded_observation(
         Arc::clone(OBSERVATION_RUNNING.get_or_init(|| Arc::new(AtomicBool::new(false)))),
         OBSERVATION_BUDGET,
@@ -179,14 +187,17 @@ struct Candidate {
     port: u32,
 }
 
-fn observe_inner(budget: &Budget) -> Result<Vec<UsbInterfaceDescriptor>, UsbError> {
+fn observe_inner(budget: &Budget) -> Result<Vec<crate::LegacyTopologyObservation>, UsbError> {
     let candidates = candidates(budget)?;
     let mut records = Vec::new();
     for candidate in &candidates {
         budget.check()?;
         let mut hub = NativeHub::open(&candidate.hub_path, budget)?;
         if let Some(descriptor) = observe_candidate(&mut hub, candidate, budget)? {
-            records.push(descriptor);
+            records.push(crate::LegacyTopologyObservation {
+                descriptor,
+                legacy_location_id: location_from_property(&candidate.location_paths)?,
+            });
         }
     }
     // Reject unplug/rebind/driver/parent/port changes during the whole census.

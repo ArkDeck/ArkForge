@@ -176,6 +176,7 @@ impl Fixture {
             expires_at: 230_000,
             additional_sources: Vec::new(),
             budget: None,
+            identity_migration: None,
         };
         (new, proof)
     }
@@ -246,18 +247,39 @@ fn fresh_identity_rejects_drift_weak_identity_and_changed_probe_facts() {
 fn replacement_cannot_change_content_or_identity_and_proof_has_a_hard_budget() {
     let fixture = Fixture::new("replacement");
     let (new, proof) = fixture.replacement();
-    validate_replacement(&fixture.old, &fixture.lineage, &new, &proof.assessment).unwrap();
+    validate_replacement(
+        &fixture.old,
+        &fixture.lineage,
+        &new,
+        &proof.assessment,
+        None,
+    )
+    .unwrap();
     assert_eq!(Proof::decode(&proof.encode()).unwrap(), proof);
     validate_source_seals(&fixture.root, &new, &proof).unwrap();
     let mut changed = new.clone();
     changed.plan.persistent_effects[0].content_sha256 = sha256(b"other firmware").to_hex();
     assert!(
-        validate_replacement(&fixture.old, &fixture.lineage, &changed, &proof.assessment).is_err()
+        validate_replacement(
+            &fixture.old,
+            &fixture.lineage,
+            &changed,
+            &proof.assessment,
+            None
+        )
+        .is_err()
     );
     let mut changed = new.clone();
     changed.stable_identity_sha256 = sha256(b"other board").as_bytes().to_vec();
     assert!(
-        validate_replacement(&fixture.old, &fixture.lineage, &changed, &proof.assessment).is_err()
+        validate_replacement(
+            &fixture.old,
+            &fixture.lineage,
+            &changed,
+            &proof.assessment,
+            None
+        )
+        .is_err()
     );
     let mut changed = proof.clone();
     changed.expires_at = changed.issued_at + RECOVERY_BUDGET_MS + 1;

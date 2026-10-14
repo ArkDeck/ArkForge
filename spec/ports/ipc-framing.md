@@ -84,6 +84,15 @@ Partial publication fails closed and never refunds an epoch. A failed replacemen
 does not automatically create another plan: the existing typed recovery request
 must materialize a distinct candidate and satisfy every proof gate again.
 
+For Windows Normal identities recorded before canonical companion-connector
+topology, a source proof may carry a closed encoding migration (local field 10).
+Both location encodings must come from the same live native USB node. Runtime
+projects only observation id/topology in fresh facts and requires the entire
+original stable digest to match; changed serial, mode, descriptor or protocol
+facts still fail. Before start, that proof is observed again. The new plan
+binds the current canonical identity. No public IPC field, historical identity
+record or cross-mode binding is synthesized by this migration.
+
 Only the replacement's complete semantic receipts and successful postflight
 produce an immutable `SupersedingRecoveryEpoch` relation. This releases the
 old job's lane obstruction without changing its journal or permitting its
