@@ -25,6 +25,60 @@ and does not qualify its undocumented transfer/reset behavior. The production
 WinUSB driver package, signer, AF-W1 and hardware evidence requirements below
 remain in force.
 
+## Using the system WinUSB driver for a local hardware campaign
+
+`Bind-InboxWinUsb.ps1` provides a separate host setup path for one present
+DAYU200 Loader. It selects the existing Microsoft Windows `winusb.inf` function
+driver and registers the same private interface GUID used by the native
+transport. It needs no Rockchip transfer driver, custom INF/catalog, test
+certificate or change to Windows signature enforcement. The RockUSB protocol
+and flash/readback implementation remain shared with macOS.
+
+This follows Microsoft's documented
+[system-provided WinUSB installation](https://learn.microsoft.com/en-us/windows-hardware/drivers/usbcon/winusb-installation).
+SetupAPI's
+[driver-list inheritance](https://learn.microsoft.com/en-us/windows/win32/api/setupapi/nf-setupapi-setupdiopendeviceinfow)
+associates the inbox driver with the exact existing device, and
+[DiInstallDevice](https://learn.microsoft.com/en-us/windows/win32/api/newdev/nf-newdev-diinstalldevice)
+performs that device's installation. No hardware/compatible ID is fabricated.
+
+Use Windows x64 PowerShell 7.2 or later with the board already in Loader mode:
+
+```powershell
+.\packaging\windows\Bind-InboxWinUsb.ps1 -Action Inspect
+.\packaging\windows\Bind-InboxWinUsb.ps1 -Action Plan -PlanPath C:\local-records\loader-binding.json
+# Within ten minutes, from an elevated PowerShell, supply the returned digest:
+.\packaging\windows\Bind-InboxWinUsb.ps1 -Action Apply `
+  -PlanPath C:\local-records\loader-binding.json -PlanSha256 <exact-plan-sha256>
+```
+
+Inspection and planning only read PnP metadata, system signatures and local
+driver lists. Apply rechecks the same device instance, physical location,
+hardware IDs, old binding, registered interface GUIDs, helper bytes and signed
+system files. It refuses absent/ambiguous devices, filter stacks, stale plans
+and identity drift. Before the registry/install calls, it exclusively creates
+and flushes an intent next to the plan. A used plan cannot be applied again at
+that path. An incomplete/failed result is retained as unknown; there is no
+automatic reinstall, rollback, host reboot or firmware operation.
+
+The local plan/result contain device instance and location identifiers. Keep
+them local and redact them before sharing. The previous OEM INF, its hash,
+service, class, version and interface settings are preserved in the plan; the
+original driver package is not deleted from the Driver Store. If restoration
+is needed, inspect the actual device state and explicitly select that retained
+driver in Device Manager. Do not infer rollback safety from a failed install
+exit code or copy a consumed plan to retry it. Binding can be specific to the
+device instance/USB port; after moving the cable, inspect that instance again.
+
+A verified host binding is not proof of USB transfers, a completed flash,
+AF-W1 or published production support. Continue through the typed ArkForge
+discovery and separately authorized hardware campaign. The existing signed
+production package and AF-W1 acceptance path above are not changed by this
+local setup tool. Its software-only checks are
+`packaging/windows/Test-InboxWinUsb.ps1`; they never install or open a device.
+
+## Signed production package
+
 Build the release from an x64 Native Tools PowerShell 7 session:
 
 ```powershell
