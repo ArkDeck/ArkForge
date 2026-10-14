@@ -6733,18 +6733,21 @@ static HELP: &[HelpSpec] = &[
     },
     HelpSpec {
         command: "job recover",
-        summary: "Seal a distinct plan that supersedes one unresolved job.",
+        summary: "Seal a distinct plan covering the complete outstanding unknown set.",
         usage: "arkforge job recover --job <job-id> (--file <firmware-file> | --artifact <artifact-id>) [--device <observation-id> | --target <selector>] [--profile <id@version>] [--intent <full-restore>] [--hardware-campaign <campaign-id>] [--wait-device <u64>]",
-        effect: "Reads the exact device through the paired runtime and stores a sealed host object. It never resumes, edits, replays, or reclassifies the original job, whose outcome and journal stay exactly as they are.",
+        effect: "Reads the exact device through the paired runtime and stores a sealed host object. It never resumes, edits, replays, or reclassifies any original job; their outcomes and journals stay exactly as they are.",
         requires: &[
-            "One exact durable job whose recovery contract covers every possible effect.",
+            "One exact anchor job in the complete outstanding unknown set; every source requires independent coverage, identity proof and unspent recovery allowance.",
             "Firmware content, and enough evidence to name exactly one device and profile.",
         ],
         produces: &[
-            "arkforge.flash-plan/v2 whose plan supersedes the named job under a new epoch and intent, and whose apply_command carries the recovery:supersedes-job token as well as the effect tokens. The assessment section projects the same target's effects and gate state.",
+            "arkforge.flash-plan/v2 whose plan covers the complete outstanding unknown set under a new epoch and intent. The named job anchors the recovery:supersedes-job token; the Runtime seals and rechecks every source. The assessment projects the same target's effects and gate state.",
         ],
         options: &[
-            ("--job <job-id>", "Exact unresolved durable job; required."),
+            (
+                "--job <job-id>",
+                "Exact unresolved anchor job; does not narrow the complete outstanding set. Required.",
+            ),
             (
                 "--file <firmware-file>",
                 "Firmware container imported into the content store before the plan binds it.",

@@ -11,7 +11,9 @@ outstanding set and assesses the exact sealed candidate against each verified
 journal, old authority plan, spent control permit where required, immutable
 content and fresh target lineage. Each source must independently pass the
 published complete-overwrite coverage checks. The authority-local proof binds
-all sources to one candidate, with a bounded canonical source list. Existing
+all sources to one candidate, with a bounded canonical source list. The CLI
+`--job` selects the anchor, not a subset; machine help explains the complete-set
+requirement. Existing
 single-source proof bytes remain readable and unchanged.
 
 Every admission rechecks the exact complete outstanding set. An added or omitted
@@ -44,6 +46,8 @@ Commands use the fixed external Cargo cache, two build jobs, static CRT and
   --all-features -- -D warnings`: exit 0.
   Log: `complete-recovery-set-clippy.log`.
 - `cargo fmt --all -- --check`: exit 0.
+- After updating machine help, CLI Clippy and all-target tests passed again
+  (exit 0, 56 tests); `complete-recovery-set-cli-final.log`.
 - `cargo test -p arkforge-standalone -p arkforge-cli -p arkforge-conformance
   --all-targets`: exit 0, 124 passed, 0 failed, 1 ignored child-only
   helper (its parent launches and validates it).
