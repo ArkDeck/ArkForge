@@ -46,3 +46,4 @@ jobs:
           & .\packaging\windows\Test-ReleaseBundle.ps1
           & .\packaging\windows\Test-HdcPackage.ps1
           & .\packaging\windows\Test-DriverCatalog.ps1
+          & .\packaging\windows\Test-InboxWinUsb.ps1
