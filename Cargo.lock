@@ -35,6 +35,7 @@ dependencies = [
  "arkforge-client",
  "arkforge-core",
  "arkforge-ipc",
+ "arkforge-platform",
  "arkforge-standalone",
  "arkforge-transport",
  "arkforged",

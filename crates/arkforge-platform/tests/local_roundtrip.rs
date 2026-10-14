@@ -14,11 +14,7 @@ impl TempRoot {
         let temporary_base = PathBuf::from("/private/tmp");
         #[cfg(not(target_os = "macos"))]
         let temporary_base = std::env::temp_dir();
-        let root = temporary_base.join(format!(
-            "arkforge-platform-{label}-{}-{}",
-            std::process::id(),
-            std::thread::current().name().unwrap_or("test")
-        ));
+        let root = temporary_base.join(format!("arkforge-platform-{label}-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&root);
         std::fs::create_dir_all(&root).unwrap();
         Self(root)
@@ -56,6 +52,26 @@ fn the_local_channel_round_trips_bytes() {
     client.read_exact(&mut reply).unwrap();
     assert_eq!(&reply, b"pong");
     server.join().unwrap();
+}
+
+#[test]
+fn a_bound_listener_stays_connectable_while_serving_a_client() {
+    let root = TempRoot::new("continuous-listener");
+    for (channel, nonblocking) in [
+        (LocalChannel::Public, false),
+        (LocalChannel::Controller, true),
+    ] {
+        let endpoint = LocalEndpoint::for_runtime(&root.0, channel);
+        let mut listener = LocalListener::bind(&endpoint).unwrap();
+        listener.set_nonblocking(nonblocking).unwrap();
+        let first_client = LocalStream::connect(&endpoint).unwrap();
+        let first_server = listener.accept().unwrap();
+        // A second client must connect before the server finishes the first
+        // request or calls accept again. No timing or retry can hide a gap.
+        let second_client = LocalStream::connect(&endpoint).unwrap();
+        let second_server = listener.accept().unwrap();
+        drop((first_server, first_client, second_server, second_client));
+    }
 }
 
 #[test]

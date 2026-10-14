@@ -1,6 +1,7 @@
 //! Process-level contract for reusable bindings and runtime auto-ensure
 //! (WF-AC-23..25).
 
+use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output, Stdio};
 use std::sync::mpsc;
@@ -62,8 +63,14 @@ struct TempRuntime {
 
 impl TempRuntime {
     fn new(name: &str) -> Self {
+        // macOS's per-user temporary directory can exhaust sun_path before a
+        // descriptive test name and the supervisor socket filename fit.
+        #[cfg(target_os = "macos")]
+        let temporary_base = PathBuf::from("/private/tmp");
+        #[cfg(not(target_os = "macos"))]
+        let temporary_base = std::env::temp_dir();
         let root =
-            std::env::temp_dir().join(format!("arkforge-cli-config-{}-{name}", std::process::id()));
+            temporary_base.join(format!("arkforge-cli-config-{}-{name}", std::process::id()));
         let _ = std::fs::remove_dir_all(&root);
         std::fs::create_dir_all(&root).unwrap();
         Self { root }
@@ -347,4 +354,58 @@ fn auto_start_is_opt_out_and_disclosed() {
         "the daemon stop",
     );
     assert!(stopped.status.success(), "{stopped:?}");
+}
+
+#[test]
+fn abandoned_supervisor_clients_do_not_stop_the_paired_runtime() {
+    use arkforge_platform::{LocalChannel, LocalEndpoint, LocalStream};
+    use arkforge_standalone::supervisor;
+
+    let sibling = Path::new(env!("CARGO_BIN_EXE_arkforge"))
+        .parent()
+        .unwrap()
+        .join(format!("arkforged{}", std::env::consts::EXE_SUFFIX));
+    if !sibling.exists() {
+        eprintln!(
+            "skipping the live contract: {} is not built",
+            sibling.display()
+        );
+        return;
+    }
+    let runtime = TempRuntime::new("abandoned-client");
+    let started = output_within(
+        Command::new(env!("CARGO_BIN_EXE_arkforge"))
+            .arg("--runtime-dir")
+            .arg(&runtime.root)
+            .args(["daemon", "start"]),
+        "start a host-only runtime for abandoned-client checks",
+    );
+    assert!(started.status.success(), "{started:?}");
+    struct StopOnDrop<'a>(&'a Path);
+    impl Drop for StopOnDrop<'_> {
+        fn drop(&mut self) {
+            let _ = supervisor::stop(self.0);
+        }
+    }
+    let _stop = StopOnDrop(&runtime.root);
+    let before = supervisor::status(&runtime.root).unwrap();
+    let endpoint = LocalEndpoint::for_runtime(&runtime.root, LocalChannel::Supervisor);
+    let mut status_request = Vec::new();
+    arkforge_ipc::wire::write_string(&mut status_request, 1, "status");
+    let mut complete_request = (status_request.len() as u32).to_be_bytes().to_vec();
+    complete_request.extend_from_slice(&status_request);
+    for frame in [vec![0, 0, 0, 1], vec![0, 0, 0, 1, 0xff], complete_request] {
+        let mut abandoned = LocalStream::connect(&endpoint).unwrap();
+        abandoned.write_all(&frame).unwrap();
+        abandoned.flush().unwrap();
+        drop(abandoned);
+        // The server handles connections in order: this handshake follows the
+        // truncated, malformed or abandoned-response request and must reach
+        // the same paired owner. None of these requests accesses a device.
+        let after = supervisor::status(&runtime.root).unwrap();
+        assert_eq!(after.supervisor_pid, before.supervisor_pid);
+        assert_eq!(after.daemon_pid, before.daemon_pid);
+        assert_eq!(after.epoch, before.epoch);
+        assert_eq!(after.active_jobs, 0);
+    }
 }
