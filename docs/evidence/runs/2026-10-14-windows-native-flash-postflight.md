@@ -1,5 +1,28 @@
 # Windows native flash and postflight follow-up
 
+## Final disposition
+
+Native Windows RockUSB performed all nine firmware writes using Microsoft's
+inbox WinUSB binding. It read back and matched the complete `uboot` and
+`resource` images, then reset the board. Independent exact-target HDC reads
+confirmed OpenHarmony 7.0.0.43. The complete automated workflow is **not passed**:
+the first job was safely cancelled at its post-reset rebind boundary, and a
+subsequent normal-start job has an immutable unknown mode-control outcome.
+The current Runtime refused a superseding plan; no new device dispatch followed.
+
+| Runtime result | Scope |
+| --- | --- |
+| Nine semantic-success writes | `uboot`, `resource`, `boot_linux`, `ramdisk`, `system`, `vendor`, `updater`, `chip_ckm`, `userdata` |
+| Full-hash readback | `uboot`: 4,194,304 bytes; `resource`: 5,652,480 bytes |
+| Explicit verification skip | The other seven images: `skipped-lba-read-window`; not verified |
+| Reset | `DEVICE_RESET` semantic-success receipt |
+| System version | Independent read-only HDC diagnosis; no Runtime postflight receipt |
+
+The final read-only snapshot observed `hdc-normal` with `serialAndTopology`
+identity and no active jobs. The task-owned Runtime was stopped through the
+typed CLI. No external HDC server was stopped. Raw local records remain
+unchanged. This is neither AF-W1 qualification nor production Windows support.
+
 ## Published run
 
 [PR #9](https://github.com/ArkDeck/ArkForge/pull/9) was published as
@@ -104,9 +127,9 @@ receipts remain intact. The replacement published Runtime observed the normal
 personality with `serialAndTopology` identity and sealed a new 23-step plan.
 Its first managed-control request expired after 120 seconds, before any
 partition writes. The job is `outcomeUnknown`; the original intent is not
-replayed. Typed read-only reconciliation retained `stillUnknown`. Runtime
-reports that independent complete-overwrite recovery can be assessed; no
-recovery has yet been dispatched.
+replayed. Typed read-only reconciliation retained `stillUnknown`. The public
+recovery guide is not a successful recovery-plan assessment; the actual
+materialization result after publishing the correction is recorded below.
 
 Read-only HDC diagnostics isolated the Windows environment prerequisite:
 `list targets -v` returned in 62 ms with the inherited environment, while an
@@ -146,4 +169,44 @@ permit, recovery-coverage declaration or conformance fixture was changed.
 
 ### CI
 
-Pending on the correction's exact PR head; results will be recorded in the PR.
+[PR #11](https://github.com/ArkDeck/ArkForge/pull/11) was published as
+`0b270deca3631c96caf4c5b1452ab6fcebc5f3d7`. All checks succeeded on exact head
+`9f5faaec7c937e309849e4e2714b0d8027d6894c`: Windows PR/push
+38538474805/38538416977; Rust/macOS/Swift PR/push 38538474499/38538416781.
+
+## Recovery assessment after the HDC correction
+
+The clean published build retained the same mechanics daemon SHA-256
+`44460dd3fd57c1f0535e524574e7f27c5e4e85bdbd18b862195fbefdc370ab8f`;
+the corrected CLI SHA-256 is
+`e54d9b39d24178a17c5df7b44fc1f16b87e337158b8dff949ff6e8cb5bbbd540`.
+Both are unsigned campaign binaries. The restarted Runtime observed the same
+normal device and original terminal jobs, then refused typed `job recover`
+with `nothingToRecover`, exit 3. There is no recovery plan, acknowledgement
+set, apply or additional flash dispatch.
+
+The mechanics `PlanStore` currently keeps private plans only for the daemon's
+lifetime (`crates/arkforge-engine/src/lib.rs`). Journals reload after restart,
+but the original private plan does not. The service consequently cannot load
+the job's recovery contract via `stored_plan_for_job`; its closed managed-control
+fallback refuses supersession. The public guide's `eligible` field is not
+proof of materialization eligibility: the final guide has no contract and
+`complete_overwrite_supported=false`. These are the observed implementation
+limits, not permission to reconstruct or edit authority facts manually.
+
+[AF-REC-001](../../../spec/requirements/recovery.md#af-rec-001--never-replay)
+prohibits re-sending the old intent or calling another full flash a retry.
+No safety predicate, recovery declaration or journal was changed to get past
+this refusal. Completing the automated acceptance requires a reviewed recovery
+path with the missing durable proof; chat confirmation cannot supply it.
+
+Local records under `windows-inbox-winusb-20261014/` include
+`flash-apply-request-lifetime.json`, `old-job-safe-stop.json`,
+`flash-apply-normal-start.json`, `normal-start-after-reconcile.json`,
+`recovery-plan-hdc-environment.json`, `final-unknown-job.json`,
+`final-runtime-status.json` and `final-runtime-stop.json`. They preserve both
+attempts and the refusal, rather than replacing them with a successful summary.
+
+Final record-only checks: exact receipts, CI run identities, local log names,
+relative links and `git diff --check`. No additional Rust tests or hardware
+execution were performed for this documentation-only follow-up.
