@@ -133,8 +133,8 @@ areas:
       - req: AF-REC-001
         symbol: arkforge_engine::JobState::may_transition_to (no edge out of outcomeUnknown to a dispatching state)
       - req: AF-REC-002..005
-        symbol: arkforge_engine::superseding; arkforge_authority_api::PossibleEffectSet; arkforged::service (reconcileJob, planSupersedingRecovery)
-        tests: [crates/arkforge-engine/src/superseding.rs tests]
+        symbol: arkforge_engine::superseding; arkforge_authority_api::PossibleEffectSet; arkforged::recovery_assessment; arkforged::service (reconcileJob, planSupersedingRecovery); arkforge_standalone::supervisor::recovery
+        tests: [crates/arkforge-engine/src/superseding.rs tests, crates/arkforged/tests/support/recovery_assessment.rs, crates/arkforge-standalone/src/supervisor/recovery_tests.rs]
       - req: AF-REC-007
         symbol: arkforged::jobs::JobRegistry::complete_dispatch
       - req: AF-REC-006

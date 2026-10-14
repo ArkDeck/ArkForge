@@ -57,6 +57,9 @@ const SECRET: &[u8] = b"an-admission-surface-test-pairing-secret";
 const EPOCH: PairingEpoch = PairingEpoch(4);
 const NOW: u64 = 1_754_380_800_000;
 
+#[path = "support/recovery_assessment.rs"]
+mod recovery_assessment;
+
 struct TempRoot(PathBuf);
 
 impl TempRoot {

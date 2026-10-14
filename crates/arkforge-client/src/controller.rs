@@ -299,6 +299,23 @@ impl ControllerClient {
         self.call(Api::PlanSupersedingRecovery, payload)
     }
 
+    /// Validate the full sealed replacement against the original durable job.
+    /// This remains read-only: it cannot start execution or supply device facts.
+    pub fn assess_recovery_candidate(
+        &mut self,
+        job_id: &str,
+        plan_id: &str,
+        plan_sha256: &str,
+    ) -> Result<arkforge_ipc::recovery::SupersedingRecoveryAssessment, ClientError> {
+        let mut payload = Vec::new();
+        wire::write_string(&mut payload, 1, job_id);
+        wire::write_string(&mut payload, 2, plan_id);
+        wire::write_string(&mut payload, 3, plan_sha256);
+        let response = self.call(Api::PlanSupersedingRecovery, payload)?;
+        arkforge_ipc::recovery::SupersedingRecoveryAssessment::decode(&response)
+            .map_err(|error| invalid_response("decode recovery candidate assessment", error))
+    }
+
     pub fn submit_permit(
         &mut self,
         submission: &SubmitStepPermitRequest,
