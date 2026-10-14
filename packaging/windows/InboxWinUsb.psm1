@@ -85,10 +85,24 @@ function Assert-BindingPlan($Plan, $Current, $Candidate, $Inbox, [string]$Machin
         $Plan.machineDigest -cne $MachineDigest) { throw 'Binding plan identity is invalid.' }
     $created = [DateTimeOffset]::Parse($Plan.createdAtUtc, [Globalization.CultureInfo]::InvariantCulture)
     if ($created -gt $Now -or ($Now - $created).TotalMinutes -gt 10) { throw 'Binding plan is expired or from the future.' }
-    foreach ($pair in @(@($Plan.sourceDigests, $SourceDigests), @($Plan.inboxFiles, $Inbox), @($Plan.candidate, $Candidate))) {
+    foreach ($pair in @(@($Plan.sourceDigests, $SourceDigests), @($Plan.inboxFiles, $Inbox))) {
         if (($pair[0] | ConvertTo-Json -Depth 6 -Compress) -cne ($pair[1] | ConvertTo-Json -Depth 6 -Compress)) {
             throw 'Binding tool or system driver changed since the plan.'
         }
+    }
+    # SetupAPI returns different path casing from an elevated process on the
+    # same machine. Compare the absolute Windows path by Windows semantics;
+    # retain exact model/provider/version and the independently pinned bytes.
+    $plannedDriver = $Plan.candidate
+    if (@($plannedDriver.PSObject.Properties).Count -ne 5 -or
+        $plannedDriver.Inf -isnot [string] -or -not [IO.Path]::IsPathFullyQualified($plannedDriver.Inf) -or
+        -not [string]::Equals([IO.Path]::GetFullPath($plannedDriver.Inf), [IO.Path]::GetFullPath($Candidate.Inf), [StringComparison]::OrdinalIgnoreCase) -or
+        $plannedDriver.Section -cne $Candidate.Section -or
+        $plannedDriver.HardwareId -cne $Candidate.HardwareId -or
+        $plannedDriver.Provider -cne $Candidate.Provider -or
+        ($plannedDriver.Version -isnot [int] -and $plannedDriver.Version -isnot [long]) -or
+        $plannedDriver.Version -lt 0 -or [uint64]$plannedDriver.Version -ne $Candidate.Version) {
+        throw 'The exact inbox driver model changed since the plan.'
     }
     $expected = [ArkForge.WindowsSetup.BindingSnapshot]::new()
     $fields = $expected.GetType().GetFields()
