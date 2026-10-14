@@ -8,7 +8,7 @@ fn facts() -> (ActiveTargetLineage, DeviceObservationView, DeviceProbeView) {
         topology_sha256: sha256(b"retired location encoding").to_hex(),
         descriptor_sha256: sha256(b"same descriptor").to_hex(),
         serial_sha256: sha256(b"same serial").to_hex(),
-        serial_evidence_kind: "usbDescriptor".into(),
+        serial_evidence_kind: "descriptor".into(),
         identity_strength: "serialAndTopology".into(),
         ..Default::default()
     };
@@ -100,6 +100,7 @@ fn projection_cannot_bridge_mode_serial_descriptor_protocol_or_strength_drift() 
         },
         |value: &mut DeviceObservationView| value.identity_strength = "topologyOnly".into(),
         |value: &mut DeviceObservationView| value.serial_evidence_kind = "protocol".into(),
+        |value: &mut DeviceObservationView| value.serial_evidence_kind = "usbDescriptor".into(),
         |value: &mut DeviceObservationView| value.malformed_descriptor = true,
         |value: &mut DeviceObservationView| {
             value.protocol_identity.push(KeyValue {

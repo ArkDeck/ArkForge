@@ -25,7 +25,7 @@ impl Fixture {
             topology_sha256: sha256(b"port").to_hex(),
             descriptor_sha256: sha256(b"descriptor").to_hex(),
             serial_sha256: sha256(b"serial").to_hex(),
-            serial_evidence_kind: "usbDescriptor".into(),
+            serial_evidence_kind: "descriptor".into(),
             identity_strength: "serialAndTopology".into(),
             malformed_descriptor: false,
             protocol_identity: Vec::new(),
