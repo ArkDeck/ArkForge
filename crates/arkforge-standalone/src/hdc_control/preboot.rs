@@ -9,8 +9,10 @@ set -o pipefail
 t=/system/bin/toybox
 holder=
 for p in /proc/[0-9]*; do
-    command=$($t tr '\000' ' ' 2>/dev/null < "$p/cmdline") || continue
-    if test "$command" = '/af-preboot/toybox sleep 600 '; then
+    bytes=$($t od -An -v -tx1 -N 30 "$p/cmdline" 2>/dev/null) || continue
+    command=
+    for byte in $bytes; do command=$command$byte; done
+    if test "$command" = 2f61662d707265626f6f742f746f79626f7800736c6565700036303000; then
         test -z "$holder"
         holder=$p
     fi
