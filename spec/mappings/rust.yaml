@@ -133,6 +133,9 @@ areas:
       - req: AF-REC-009
         symbol: arkforge_standalone::supervisor::recovery::budget
         tests: [crates/arkforge-standalone/src/supervisor/recovery_tests.rs]
+      - req: AF-REC-010
+        symbol: arkforged::recovery_assessment::read_only_postflight_tail; arkforged::service::plan_superseding_recovery
+        tests: [crates/arkforged/tests/support/recovery_assessment.rs]
       - req: AF-REC-001
         symbol: arkforge_engine::JobState::may_transition_to (no edge out of outcomeUnknown to a dispatching state)
       - req: AF-REC-002..005
@@ -170,6 +173,9 @@ areas:
         symbol: arkforge_ipc::messages::{ManagedControlAction, ManagedControlRequest, SubmitManagedControlReceiptRequest, FORBIDDEN_CONTROL_RECEIPT_FACTS}; arkforged::jobs::{submit_control_receipt, expire_stale_controls}
       - req: AF-CTL-008
         symbol: arkforge_standalone::hdc_control
+      - req: AF-CTL-009
+        symbol: arkforge_standalone::hdc_control::read_properties; arkforge_standalone::hdc_control::ProcessPort
+        tests: [crates/arkforge-standalone/src/hdc_control.rs tests]
   - area: IPC
     symbols:
       - req: AF-IPC-001..002

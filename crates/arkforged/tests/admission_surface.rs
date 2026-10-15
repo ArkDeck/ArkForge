@@ -2172,6 +2172,7 @@ fn walk_to_completion(
     dispatcher: &mut arkforged::dispatch::Dispatcher<'_>,
     fixture: &Fixture,
     job_id: &str,
+    accept_postflight: bool,
 ) -> Vec<arkforge_ipc::messages::ActionReceiptSummary> {
     let mut clock = NOW + 1;
     // One iteration per step transition; the bound is a runaway guard, not a
@@ -2212,6 +2213,8 @@ fn walk_to_completion(
                         .is_some_and(|receipt| receipt.step_id == control.step_id)
             });
             if !already_answered {
+                let accepted =
+                    accept_postflight || control.action != ManagedControlAction::ReadBuildFacts;
                 let facts = if control.expected_facts.is_empty() {
                     vec![KeyValue {
                         key: "mode".into(),
@@ -2226,10 +2229,18 @@ fn walk_to_completion(
                             job_id: job_id.to_string(),
                             request_id: control.request_id.clone(),
                             action: control.action,
-                            accepted: true,
-                            evidence_sha256: canonical_facts_digest(&facts).as_bytes().to_vec(),
-                            facts,
-                            failure_reason: String::new(),
+                            accepted,
+                            evidence_sha256: if accepted {
+                                canonical_facts_digest(&facts).as_bytes().to_vec()
+                            } else {
+                                Vec::new()
+                            },
+                            facts: if accepted { facts } else { Vec::new() },
+                            failure_reason: if accepted {
+                                String::new()
+                            } else {
+                                "HDC_PROPERTY_MISMATCH".into()
+                            },
                         },
                         &fixture.envelope,
                         &fixture.private_plan,
@@ -2290,7 +2301,7 @@ fn a_job_dispatches_every_step_and_reaches_a_verdict_on_each() {
             NOW,
         )
         .unwrap();
-    let receipts = walk_to_completion(&mut registry, &mut dispatcher, &fixture, &job_id);
+    let receipts = walk_to_completion(&mut registry, &mut dispatcher, &fixture, &job_id, true);
 
     let job = registry.job(&job_id).unwrap();
     assert_eq!(
@@ -2463,7 +2474,7 @@ fn a_conclusive_verification_failure_stops_before_reset_and_survives_restart() {
             NOW,
         )
         .unwrap();
-    let receipts = walk_to_completion(&mut registry, &mut dispatcher, &fixture, &job_id);
+    let receipts = walk_to_completion(&mut registry, &mut dispatcher, &fixture, &job_id, true);
     let job = registry.job(&job_id).unwrap();
     assert_eq!(job.state(), JobState::ConfirmedFailed);
     assert!(matches!(

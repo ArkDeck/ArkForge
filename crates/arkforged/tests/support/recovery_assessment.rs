@@ -105,6 +105,134 @@ fn persist(root: &TempRoot, candidate: &StoredPlan) {
     .unwrap();
 }
 
+fn failed_postflight(root: &TempRoot, fixture: &Fixture) -> String {
+    let mut registry = JobRegistry::new(root.0.join("jobs"));
+    let port = ScriptedPort::default();
+    let mut dispatcher =
+        arkforged::dispatch::Dispatcher::new(root.0.join("store"), root.0.join("work"), &port);
+    stage_archive_into(&root.0.join("store"));
+    let job = registry
+        .start(
+            &fixture.envelope,
+            &fixture.private_plan,
+            ControllerSessionId::new("SESSION-1").unwrap(),
+            &admission_facts(fixture, "hdc-normal", NOW),
+            NOW,
+        )
+        .unwrap();
+    let receipts = walk_to_completion(&mut registry, &mut dispatcher, fixture, &job, false);
+    assert_eq!(
+        registry.job(&job).unwrap().state(),
+        JobState::OutcomeUnknown
+    );
+    assert_eq!(receipts.len() + 1, fixture.envelope.public_steps.len());
+    assert_eq!(port.writes().len(), 9);
+    job
+}
+
+#[test]
+fn failed_read_only_postflight_can_be_covered_only_by_a_distinct_complete_plan() {
+    let root = TempRoot::new("read-only-postflight-recovery");
+    let fixture = plan_fixture();
+    let job = failed_postflight(&root, &fixture);
+    let original = StoredPlan {
+        envelope: fixture.envelope.clone(),
+        private_plan: fixture.private_plan.clone(),
+    };
+    let replacement = candidate(&fixture);
+    persist(&root, &replacement);
+    let journal = root.0.join("jobs").join(format!("{job}.journal"));
+    let original_bytes = std::fs::read(&journal).unwrap();
+    let later = AFTER_TIMEOUT + 10_000;
+
+    // A public label or managed-control name cannot replace the stored private
+    // action. Nor can an unexpired old read be overtaken by a new epoch.
+    assert!(!assess(&root, &fixture.profile, &job, Some(&replacement), later).eligible);
+    persist(&root, &original);
+    assert!(!assess(&root, &fixture.profile, &job, Some(&replacement), NOW + 500).eligible);
+    assert!(!assess(&root, &fixture.profile, &job, Some(&original), later).eligible);
+
+    for _ in 0..2 {
+        let initial = assess(&root, &fixture.profile, &job, None, later);
+        assert_eq!(initial.blocker_code, "managedControlRecoveryNeedsPlan");
+        assert!(initial.source.as_ref().unwrap().closed_control.is_none());
+        let result = assess(&root, &fixture.profile, &job, Some(&replacement), later);
+        assert!(
+            result.eligible,
+            "{}: {}",
+            result.blocker_code, result.blocker_reason
+        );
+        assert_eq!(result.source, initial.source);
+        assert_eq!(
+            result.covered_effects.len(),
+            fixture.profile.allowed_targets.len()
+        );
+        assert_eq!(std::fs::read(&journal).unwrap(), original_bytes);
+    }
+}
+
+#[test]
+fn read_only_tail_does_not_hide_another_unknown_or_a_cancellation() {
+    for cancellation in [false, true] {
+        let root = TempRoot::new(if cancellation {
+            "postflight-recovery-cancel"
+        } else {
+            "postflight-recovery-other-intent"
+        });
+        let fixture = plan_fixture();
+        let job = failed_postflight(&root, &fixture);
+        persist(
+            &root,
+            &StoredPlan {
+                envelope: fixture.envelope.clone(),
+                private_plan: fixture.private_plan.clone(),
+            },
+        );
+        let replacement = candidate(&fixture);
+        persist(&root, &replacement);
+        let path = root.0.join("jobs").join(format!("{job}.journal"));
+        let (mut journal, _) = DurableJournal::open(&path).unwrap();
+        let facts = if cancellation {
+            Vec::new()
+        } else {
+            [
+                ("jobId", job.as_str()),
+                ("planId", fixture.envelope.plan_id.as_str()),
+                ("stepId", "STEP-OTHER"),
+                ("permitId", "PERMIT-OTHER"),
+                ("attemptId", "ATTEMPT-OTHER"),
+            ]
+            .into_iter()
+            .map(|(key, value)| (OpaqueId::new(key).unwrap(), value.to_string()))
+            .collect()
+        };
+        journal
+            .append(
+                if cancellation {
+                    JournalRecordKind::CancellationRequested
+                } else {
+                    JournalRecordKind::StepIntentRecorded
+                },
+                AFTER_TIMEOUT + 1,
+                1,
+                OpaqueId::new(&job).unwrap(),
+                facts,
+            )
+            .unwrap();
+        drop(journal);
+        let bytes = std::fs::read(&path).unwrap();
+        let result = assess(
+            &root,
+            &fixture.profile,
+            &job,
+            Some(&replacement),
+            AFTER_TIMEOUT + 10_000,
+        );
+        assert!(!result.eligible);
+        assert_eq!(std::fs::read(&path).unwrap(), bytes);
+    }
+}
+
 #[test]
 fn expired_first_control_proof_survives_restart_without_recreating_the_original_plan() {
     let root = TempRoot::new("independent-closed-control");

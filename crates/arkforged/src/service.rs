@@ -1511,6 +1511,11 @@ impl Service {
         let closed = source
             .as_ref()
             .is_some_and(|source| source.closed_control.is_some());
+        let read_only_tail = self
+            .stored_plan_for_job(job.job_id())
+            .is_some_and(|stored| {
+                crate::recovery_assessment::read_only_postflight_tail(job, &stored, now).is_some()
+            });
         let original = if job.state() != arkforge_engine::JobState::OutcomeUnknown {
             SupersedingRecoveryAssessment::Ineligible(RecoveryBlocker::NothingToRecover)
         } else if let Some(context) = &context {
@@ -1539,10 +1544,14 @@ impl Service {
                 out.covered_effects = covers.iter().map(persistent_effect_name).collect();
             }
             SupersedingRecoveryAssessment::Ineligible(RecoveryBlocker::NothingToRecover)
-                if closed =>
+                if closed || read_only_tail =>
             {
                 out.blocker_code = "managedControlRecoveryNeedsPlan".into();
-                out.blocker_reason = "The original journal bounds one expired initial enter-updater request. A distinct complete recovery plan and fresh authority target proof are required; the old outcome remains unknown.".into();
+                out.blocker_reason = if read_only_tail {
+                    "The exact stored plan and journal bound one expired read-only postflight after all prior semantic receipts. A distinct complete recovery plan and fresh authority target proof are required; the old outcome remains unknown."
+                } else {
+                    "The original journal bounds one expired initial enter-updater request. A distinct complete recovery plan and fresh authority target proof are required; the old outcome remains unknown."
+                }.into();
             }
             SupersedingRecoveryAssessment::Ineligible(blocker) => {
                 out.blocker_code = recovery_blocker_code(&blocker).into();

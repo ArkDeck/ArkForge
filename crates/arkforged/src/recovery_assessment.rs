@@ -35,6 +35,139 @@ pub(crate) fn source(job: &Job, now: u64) -> Option<RecoverySourceEvidence> {
     })
 }
 
+/// A failed final property read has no persistent effect, but it still leaves
+/// a durable unknown intent. Only the exact stored public/private plan and a
+/// fully correlated, expired read-only tail can establish this case. This is
+/// permission to assess a distinct complete overwrite, never to repeat the read
+/// or turn the old job into a success.
+pub(crate) fn read_only_postflight_tail(job: &Job, stored: &StoredPlan, now: u64) -> Option<()> {
+    use JournalRecordKind::*;
+    use arkforge_provider::rockchip_execute::StoredAction;
+
+    let plan = &stored.envelope;
+    let step = plan.public_steps.last()?;
+    if job.state() != JobState::OutcomeUnknown
+        || job.plan_id() != plan.plan_id.as_str()
+        || job.plan_digest() != plan.plan_digest
+        || step.kind != FlashStepKind::PostflightProbe
+        || step.effect != WorkflowEffect::ReadOnly
+        || job.completed_steps().checked_add(1)? != plan.public_steps.len()
+    {
+        return None;
+    }
+    let actions = stored
+        .private_plan
+        .actions
+        .iter()
+        .filter(|action| action.step_id == step.step_id)
+        .collect::<Vec<_>>();
+    let [action] = actions.as_slice() else {
+        return None;
+    };
+    if action.effect_class != WorkflowEffect::ReadOnly {
+        return None;
+    }
+    let StoredAction::ManagedControl {
+        control_action,
+        expect,
+    } = StoredAction::decode(action).ok()?
+    else {
+        return None;
+    };
+    if control_action != ManagedControlAction::ReadBuildFacts.as_str() || expect.is_empty() {
+        return None;
+    }
+    let records = job.journal().records();
+    let ledger = PermitLedger::from_journal(job.journal());
+    let unresolved = ledger.unresolved();
+    let [permit] = unresolved.as_slice() else {
+        return None;
+    };
+    let one = |kind| {
+        let mut matching = records.iter().filter(|record| {
+            record.kind == kind && fact(record, "permitId") == Some(permit.as_str())
+        });
+        let record = matching.next()?;
+        matching.next().is_none().then_some(record)
+    };
+    let accepted = one(StepPermitAccepted)?;
+    let intent = one(StepIntentRecorded)?;
+    let consuming = one(PermitConsuming)?;
+    let dispatch = one(ExternalDispatchStarted)?;
+    if !(accepted.sequence < intent.sequence
+        && intent.sequence < consuming.sequence
+        && consuming.sequence < dispatch.sequence)
+    {
+        return None;
+    }
+    let attempt = fact(dispatch, "attemptId")?;
+    for record in [accepted, intent, consuming, dispatch] {
+        if fact(record, "jobId") != Some(job.job_id())
+            || fact(record, "planId") != Some(job.plan_id())
+            || fact(record, "stepId") != Some(step.step_id.as_str())
+            || fact(record, "attemptId") != Some(attempt)
+            || record.subject.as_str() != step.step_id.as_str()
+        {
+            return None;
+        }
+    }
+    for name in [
+        "controlAction",
+        "controlRequestId",
+        "controlDeadlineEpochMs",
+    ] {
+        if fact(consuming, name) != fact(dispatch, name) {
+            return None;
+        }
+    }
+    let request = fact(dispatch, "controlRequestId")?;
+    OpaqueId::new(request).ok()?;
+    OpaqueId::new(attempt).ok()?;
+    let deadline: u64 = fact(dispatch, "controlDeadlineEpochMs")?.parse().ok()?;
+    if fact(dispatch, "controlAction") != Some(control_action.as_str())
+        || deadline <= dispatch.at_epoch_ms
+        || now < deadline
+    {
+        return None;
+    }
+    let receipts = job
+        .events_from(0)
+        .into_iter()
+        .filter_map(|event| event.receipt)
+        .collect::<Vec<_>>();
+    for prior in &plan.public_steps[..plan.public_steps.len() - 1] {
+        let matching = receipts
+            .iter()
+            .filter(|receipt| receipt.step_id == prior.step_id.as_str())
+            .collect::<Vec<_>>();
+        let [receipt] = matching.as_slice() else {
+            return None;
+        };
+        if receipt.job_id != job.job_id()
+            || receipt.plan_id != job.plan_id()
+            || receipt.disposition != "semanticSuccess"
+            || !receipt.failure_classification.is_empty()
+        {
+            return None;
+        }
+        let mut checkpoints = records.iter().filter(|record| {
+            record.kind == StepCheckpointed
+                && fact(record, "stepId") == Some(prior.step_id.as_str())
+        });
+        let checkpoint = checkpoints.next()?;
+        if checkpoints.next().is_some()
+            || checkpoint.sequence >= accepted.sequence
+            || fact(checkpoint, "jobId") != Some(job.job_id())
+            || fact(checkpoint, "planId") != Some(job.plan_id())
+            || fact(checkpoint, "permitId") != Some(receipt.permit_id.as_str())
+            || fact(checkpoint, "attemptId") != Some(receipt.attempt_id.as_str())
+        {
+            return None;
+        }
+    }
+    Some(())
+}
+
 /// This narrow legacy proof requires exactly one fully correlated control
 /// dispatch, before any checkpoint or other effect. A missing private *write*
 /// plan never qualifies. The control request id is the existing external-action

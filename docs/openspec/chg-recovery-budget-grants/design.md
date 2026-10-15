@@ -53,3 +53,22 @@ Subsequent effects retain the ordinary new job's bound mode lineage.
 This permits an encoding migration, not a Normal/Loader identity substitution.
 An old Normal-only lineage cannot be recovered from a currently different
 Loader serial without a real rebind relation. No historical record is edited.
+
+## Read-only postflight tail
+
+If all writes, verification and reboot receipts are durable but the final
+property read is unknown, its bounded persistent effect set is empty. That
+does not erase the source from the complete outstanding set or permit the old
+read to be replayed. The daemon may assess a distinct full replacement when
+the stored source public/private plan identifies the final read-only
+`read-build-facts` action, all earlier steps have unique semantic-success
+receipts and checkpoints, and exactly one unresolved permit correlates through
+acceptance, intent, consumption and dispatch. Its original deadline must have
+expired. Missing source storage, cancellation or a second unknown fails closed.
+The existing complete candidate validation, new grant and source seals apply.
+
+For new executions, the current admitted property request may repeat only its
+fixed read-only query, on the exact target and within its original deadline,
+until every expected value matches. A mismatching value never becomes an
+accepted receipt. No mutating retry, deadline extension, old-job completion
+or hardware support promotion is introduced.

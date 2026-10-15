@@ -70,3 +70,17 @@ When the standalone supervisor implements this port with a local `hdc`
 executable, it MUST bind the executable by SHA-256 (`HDC_DIGEST_MISMATCH`
 otherwise), run it with a closed argv vocabulary and no shell, and expose only
 the four actions above.
+
+### AF-CTL-009 — bounded postflight property readiness
+status: draft
+source: crates/arkforge-standalone/src/hdc_control.rs read_properties
+tests: [crates/arkforge-standalone/src/hdc_control.rs tests]
+gap: No cross-language readiness fixture is published.
+
+Within one admitted read-only property request, standalone authority MAY read
+the same fixed property set again while boot properties are not ready or do not
+yet match the sealed expectations. Every read MUST retain the exact target and
+the original request deadline. An accepted receipt MUST contain exact expected
+values for every requested fact. A mismatch at the deadline MUST remain a
+refusal. This does not authorize replay after the request has concluded, a new
+permit, a longer deadline, or retrying any mutating control.
