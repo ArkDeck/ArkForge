@@ -26,8 +26,10 @@ test "$($t stat -L -c '%u:%a' "$report")" = 0:400
 size=$($t stat -L -c '%s' "$report")
 test "$size" -gt 0
 test "$size" -le 512
-filesystem=$($t stat -L -f -c '%T' "$report")
-case "$filesystem" in ramfs|tmpfs) ;; *) exit 1;; esac
+# Toybox's filesystem-name table omits RAMFS on the pinned system image.
+# Use Linux RAMFS_MAGIC / TMPFS_MAGIC, retaining the same RAM-only allowlist.
+filesystem=$($t stat -L -f -c '%t' "$report")
+case "$filesystem" in 858458f6|1021994) ;; *) exit 1;; esac
 printf 'ARKFORGE_PREBOOT_READ_V1\n'
 $t cat /proc/sys/kernel/random/boot_id
 $t sha256sum /sys/class/block/mmcblk0/device/cid
