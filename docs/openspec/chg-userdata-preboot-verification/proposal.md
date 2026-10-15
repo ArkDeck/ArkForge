@@ -44,6 +44,12 @@ ramfs/tmpfs backing. It then binds the same nonce, boot, storage and range
 fields. A failure marker or unavailable holder fails verification. Earlier
 failed reports remain unchanged; there is no fallback to a post-mount hash.
 
+RAM backing is identified by the kernel filesystem magic from `stat -f %t`:
+RAMFS `858458f6` or TMPFS `1021994`. The pinned system toybox's display-name
+table omits RAMFS and prints `unknown`, so `%T` cannot establish this property.
+No unknown magic or persistent filesystem is accepted, regardless of its
+display name; the existing RAM-only requirement and report bindings remain.
+
 The pinned toybox applet set has no `tr`. Holder matching therefore reads at
 most 30 command-line bytes with `od`, normalizes only its hexadecimal spacing
 with shell builtins, and compares all 29 bytes of the fixed NUL-delimited argv.
