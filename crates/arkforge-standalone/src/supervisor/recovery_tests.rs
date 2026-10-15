@@ -343,6 +343,7 @@ fn successful_status_without_all_steps_or_wrong_plan_never_completes_recovery() 
 
 #[test]
 fn completion_requires_each_write_verification_reset_and_postflight_receipt() {
+    use arkforge_core::CanonicalCbor;
     use arkforge_ipc::messages::{ActionReceiptSummary, KeyValue};
     let fixture = Fixture::new("receipts");
     let (mut record, proof) = fixture.replacement();
@@ -395,10 +396,16 @@ fn completion_requires_each_write_verification_reset_and_postflight_receipt() {
             }
             .into(),
             facts: if step.kind == "postflightProbe" {
-                vec![KeyValue {
-                    key: "build".into(),
-                    value: "fixture-build".into(),
-                }]
+                vec![
+                    KeyValue {
+                        key: "build".into(),
+                        value: "fixture-build".into(),
+                    },
+                    KeyValue {
+                        key: "mode".into(),
+                        value: "hdc-normal".into(),
+                    },
+                ]
             } else {
                 Vec::new()
             },
@@ -413,7 +420,32 @@ fn completion_requires_each_write_verification_reset_and_postflight_receipt() {
             &receipts.iter().collect::<Vec<_>>(),
         )
     };
-    assert!(complete(&receipts).is_ok());
+    let original = complete(&receipts).unwrap();
+    let persisted = path(&fixture.root, "JOB-OLD", "complete");
+    persist(&persisted, &original).unwrap();
+    let replayed = receipts
+        .iter()
+        .map(|receipt| {
+            ActionReceiptSummary::from_canonical_bytes(&receipt.to_canonical_bytes().unwrap())
+                .unwrap()
+        })
+        .collect::<Vec<_>>();
+    let after_restart = complete(&replayed).unwrap();
+    assert_ne!(
+        original, after_restart,
+        "canonical map replay changes order"
+    );
+    assert_eq!(
+        normalize_completion_receipts(&read(&persisted).unwrap()).unwrap(),
+        normalize_completion_receipts(&after_restart).unwrap()
+    );
+    assert_eq!(read(&persisted).unwrap(), original);
+    let mut changed = replayed.clone();
+    changed[4].facts[0].value = "different actual property".into();
+    assert_ne!(
+        normalize_completion_receipts(&original).unwrap(),
+        normalize_completion_receipts(&complete(&changed).unwrap()).unwrap()
+    );
     for index in 0..receipts.len() {
         let mut missing = receipts.clone();
         missing.remove(index);
@@ -434,6 +466,100 @@ fn completion_requires_each_write_verification_reset_and_postflight_receipt() {
     let mut changed = receipts.clone();
     changed.push(receipts[0].clone());
     assert!(complete(&changed).is_err());
+}
+
+#[test]
+fn completion_normalization_preserves_every_receipt_and_envelope_value() {
+    use arkforge_ipc::messages::{ActionReceiptSummary, KeyValue};
+    let receipt = ActionReceiptSummary {
+        job_id: "JOB-NEW".into(),
+        plan_id: "PLAN-NEW".into(),
+        step_id: "STEP-NEW".into(),
+        action_id: "ACTION-NEW".into(),
+        attempt_id: "ATTEMPT-NEW".into(),
+        permit_id: "PERMIT-NEW".into(),
+        disposition: "semanticSuccess".into(),
+        evidence_sha256: sha256(b"evidence").as_bytes().to_vec(),
+        verification_outcome: "verified".into(),
+        verification_strength: "fullHash".into(),
+        verified_range_start: 4096,
+        verified_range_length: 8192,
+        facts: vec![KeyValue {
+            key: "mode".into(),
+            value: "normal".into(),
+        }],
+        ..Default::default()
+    };
+    let envelope = |body: &[u8]| {
+        let mut out = Vec::new();
+        for field in 1..=5 {
+            wire::write_message(&mut out, field, &[field as u8]);
+        }
+        wire::write_message(&mut out, 6, body);
+        out
+    };
+    let original = envelope(&receipt.encode());
+    let normalized = normalize_completion_receipts(&original).unwrap();
+    for change in [
+        |r: &mut ActionReceiptSummary| r.job_id.push_str("-OTHER"),
+        |r: &mut ActionReceiptSummary| r.plan_id.push_str("-OTHER"),
+        |r: &mut ActionReceiptSummary| r.step_id.push_str("-OTHER"),
+        |r: &mut ActionReceiptSummary| r.action_id.push_str("-OTHER"),
+        |r: &mut ActionReceiptSummary| r.attempt_id.push_str("-OTHER"),
+        |r: &mut ActionReceiptSummary| r.permit_id.push_str("-OTHER"),
+        |r: &mut ActionReceiptSummary| r.disposition = "outcomeUnknown".into(),
+        |r: &mut ActionReceiptSummary| r.evidence_sha256[0] ^= 1,
+        |r: &mut ActionReceiptSummary| {
+            r.verification_outcome = "typedSkip".into();
+            r.verification_strength.clear();
+        },
+        |r: &mut ActionReceiptSummary| r.verification_strength = "sampledRanges".into(),
+        |r: &mut ActionReceiptSummary| r.verified_range_start += 1,
+        |r: &mut ActionReceiptSummary| r.verified_range_length += 1,
+        |r: &mut ActionReceiptSummary| r.typed_skip_reason = "reason".into(),
+        |r: &mut ActionReceiptSummary| r.failure_classification = "failure".into(),
+        |r: &mut ActionReceiptSummary| r.facts[0].key = "other".into(),
+        |r: &mut ActionReceiptSummary| r.facts[0].value = "loader".into(),
+    ] {
+        let mut changed = receipt.clone();
+        change(&mut changed);
+        assert_ne!(
+            normalized,
+            normalize_completion_receipts(&envelope(&changed.encode())).unwrap()
+        );
+    }
+    for selected in 1..=6 {
+        let mut reader = wire::Reader::new(&original);
+        let mut changed = Vec::new();
+        while let Some((field, value)) = reader.next_field().unwrap() {
+            let bytes = value.as_bytes().unwrap();
+            wire::write_message(
+                &mut changed,
+                field,
+                if field == selected && field != 6 {
+                    b"changed"
+                } else {
+                    bytes
+                },
+            );
+            if field == selected {
+                wire::write_message(&mut changed, field, bytes);
+            }
+        }
+        assert_ne!(normalized, normalize_completion_receipts(&changed).unwrap());
+    }
+    let mut duplicate_facts = receipt.clone();
+    duplicate_facts.facts.push(receipt.facts[0].clone());
+    assert!(normalize_completion_receipts(&envelope(&duplicate_facts.encode())).is_err());
+    for field in [1, 99] {
+        let mut changed = receipt.encode();
+        wire::write_string(&mut changed, field, "unexpected-or-duplicate");
+        assert!(normalize_completion_receipts(&envelope(&changed)).is_err());
+    }
+    let mut unknown = original.clone();
+    wire::write_string(&mut unknown, 99, "unknown completion field");
+    assert!(normalize_completion_receipts(&unknown).is_err());
+    assert!(normalize_completion_receipts(&original[..original.len() - 1]).is_err());
 }
 
 fn with_additional_source(fixture: &Fixture, proof: &Proof) -> Proof {
