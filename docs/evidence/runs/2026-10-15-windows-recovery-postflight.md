@@ -56,6 +56,11 @@ this Windows host.
 
 ## CI
 
-The new follow-up's exact-head CI is pending. Windows automatic full-flash
-acceptance remains incomplete until a published build returns a successful
-Runtime postflight and durable independent recovery completion.
+[PR #23](https://github.com/ArkDeck/ArkForge/pull/23) merged after all
+four workflows succeeded on head `333ed835acec7c01b8951bb460490c6f4a9c467e`.
+
+- Rust/Swift: [38664674820](https://github.com/ArkDeck/ArkForge/actions/runs/38664674820), [38664652710](https://github.com/ArkDeck/ArkForge/actions/runs/38664652710).
+- Windows: [38664674694](https://github.com/ArkDeck/ArkForge/actions/runs/38664674694), [38664652703](https://github.com/ArkDeck/ArkForge/actions/runs/38664652703).
+
+This CI follow-up preserves the findings and validation scope recorded above.
+CI success does not rewrite Runtime outcomes or promote hardware support.

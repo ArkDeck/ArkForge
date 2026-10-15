@@ -30,5 +30,11 @@ Swift was not run locally on Windows; no public daemon wire message changed.
 
 ## CI
 
-Pending this PR head's Rust/Swift and Windows workflows. Exact run IDs and final
-results are recorded in the PR body without amending a green commit.
+[PR #33](https://github.com/ArkDeck/ArkForge/pull/33) merged after all
+four workflows succeeded on head `d22c0dfa9e24e6f6fc760e992bf8bc941ebcd9fd`.
+
+- Rust/Swift: [38696140600](https://github.com/ArkDeck/ArkForge/actions/runs/38696140600), [38696134437](https://github.com/ArkDeck/ArkForge/actions/runs/38696134437).
+- Windows: [38696140602](https://github.com/ArkDeck/ArkForge/actions/runs/38696140602), [38696134477](https://github.com/ArkDeck/ArkForge/actions/runs/38696134477).
+
+This CI follow-up preserves the findings and validation scope recorded above.
+CI success does not rewrite Runtime outcomes or promote hardware support.

@@ -31,8 +31,11 @@ without changing production validation or weakening assertions.
 
 ## CI
 
-The preceding PR #26 passed Rust/Swift and Windows PR workflows 38674711609
-and 38674711620, push workflows 38674692408 and 38674692444, and merged-main
-workflows 38675030645 and 38675030667. This increment awaits its own exact-head
-CI; no preceding green result substitutes for it. Swift was not run locally
-on Windows. This record does not claim a hardware pass or support promotion.
+[PR #27](https://github.com/ArkDeck/ArkForge/pull/27) merged after all
+four workflows succeeded on head `0a4ad61da0e12299eb3c406cdb3ae3398e1916c3`.
+
+- Rust/Swift: [38677397344](https://github.com/ArkDeck/ArkForge/actions/runs/38677397344), [38677370940](https://github.com/ArkDeck/ArkForge/actions/runs/38677370940).
+- Windows: [38677397393](https://github.com/ArkDeck/ArkForge/actions/runs/38677397393), [38677370932](https://github.com/ArkDeck/ArkForge/actions/runs/38677370932).
+
+This CI follow-up preserves the findings and validation scope recorded above.
+CI success does not rewrite Runtime outcomes or promote hardware support.

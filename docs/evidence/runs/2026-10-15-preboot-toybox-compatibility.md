@@ -34,6 +34,11 @@ Report metadata, nonce, boot, storage and range checks remain unchanged.
 
 ## CI
 
-Pending this PR head's Rust/Swift and Windows workflows. Device execution
-uses a build from merged main after all checks pass. Prior Runtime failures
-remain separate and local; this change does not promote hardware support.
+[PR #30](https://github.com/ArkDeck/ArkForge/pull/30) merged after all
+four workflows succeeded on head `4297b515e73bc60a1848e9b9215531bc19a0b5ee`.
+
+- Rust/Swift: [38685663577](https://github.com/ArkDeck/ArkForge/actions/runs/38685663577), [38685633154](https://github.com/ArkDeck/ArkForge/actions/runs/38685633154).
+- Windows: [38685663902](https://github.com/ArkDeck/ArkForge/actions/runs/38685663902), [38685633069](https://github.com/ArkDeck/ArkForge/actions/runs/38685633069).
+
+This CI follow-up preserves the findings and validation scope recorded above.
+CI success does not rewrite Runtime outcomes or promote hardware support.

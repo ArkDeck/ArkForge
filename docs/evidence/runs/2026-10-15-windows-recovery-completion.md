@@ -59,6 +59,11 @@ and require covered sources to be refused before any new plan is returned.
 
 ## CI
 
-PR #23 passed all four workflows before merge: Windows PR `38664674694`, Rust
-PR `38664674820`, Windows push `38664652703`, Rust push `38664652710`.
-CI and published restart validation for the comparison repair are pending.
+[PR #24](https://github.com/ArkDeck/ArkForge/pull/24) merged after all
+four workflows succeeded on head `f9568f6e975457c1f12484cf1ee66e8fa1bd7c3c`.
+
+- Rust/Swift: [38666422961](https://github.com/ArkDeck/ArkForge/actions/runs/38666422961), [38666417521](https://github.com/ArkDeck/ArkForge/actions/runs/38666417521).
+- Windows: [38666422918](https://github.com/ArkDeck/ArkForge/actions/runs/38666422918), [38666417549](https://github.com/ArkDeck/ArkForge/actions/runs/38666417549).
+
+This CI follow-up preserves the findings and validation scope recorded above.
+CI success does not rewrite Runtime outcomes or promote hardware support.
