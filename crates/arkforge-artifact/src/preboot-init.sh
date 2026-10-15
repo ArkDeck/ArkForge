@@ -23,7 +23,10 @@ i=0
 while test "$i" -lt 5; do
     # The pinned toybox has od but no tr. Read one byte beyond the complete
     # NUL-delimited argv so a matching prefix with extra arguments is refused.
-    bytes=$($t od -An -v -tx1 -N 30 /proc/$holder/cmdline 2>/dev/null)
+    # Stock init treats an existing /dev/null as proof that /dev is mounted.
+    # It does not exist yet; redirecting there would create a regular file and
+    # make stock init skip the tmpfs that must survive its root switch.
+    bytes=$($t od -An -v -tx1 -N 30 /proc/$holder/cmdline 2>>/af-preboot/measure.log)
     command=
     for byte in $bytes; do command=$command$byte; done
     if test "$command" = 2f61662d707265626f6f742f746f79626f7800736c6565700036303000; then break; fi

@@ -51,6 +51,14 @@ The extra byte rejects a valid prefix with a suffix or extra argument. The
 wrapper and reader use the same comparison; duplicate-holder and report
 identity/metadata checks remain unchanged.
 
+Preboot diagnostics append only to the existing RAM log. The pinned original
+ramdisk has no `/dev/null`; redirecting to that path would create a regular
+file. Stock init checks only its existence before mounting `/dev`, so that
+file would suppress the required tmpfs and lose device nodes at root switch.
+The wrapper must leave the stock `/dev` initialization path untouched. Host
+regressions exercise successful measurement, failed measurement, timeout and
+missing holder readiness without creating `/dev/null` before handoff.
+
 `artifact preboot-ramdisk --support-archive <pinned.cpio.gz>` creates the host
 derivative with a random nonce and records the support archive/library digests.
 Ordinary typed full restore writes the derived bundle. `flash verify
