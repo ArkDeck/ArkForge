@@ -1005,6 +1005,40 @@ fn validate_terminal(
     Ok(())
 }
 
+// Existing completion records store protobuf receipts and must remain immutable.
+// Only the order of the receipt's facts map can differ after restart. Preserve
+// every other encoded field, including the exact job summary and receipt order.
+fn normalize_completion_receipts(input: &[u8]) -> Result<Vec<u8>, StandaloneError> {
+    let mut reader = wire::Reader::new(input);
+    let mut original = Vec::new();
+    let mut normalized = Vec::new();
+    while let Some((field, value)) = reader.next_field().map_err(blocked)? {
+        let bytes = value.as_bytes().map_err(blocked)?;
+        wire::write_message(&mut original, field, bytes);
+        match field {
+            1..=5 => wire::write_message(&mut normalized, field, bytes),
+            6 => {
+                let mut receipt =
+                    arkforge_ipc::messages::ActionReceiptSummary::decode(bytes).map_err(blocked)?;
+                // A local durable record has a closed encoding. Do not silently
+                // discard unknown or duplicate protobuf fields while comparing.
+                if receipt.encode() != bytes {
+                    return Err(blocked("Recovery completion receipt encoding differs."));
+                }
+                // Validates the semantic body, including unique fact keys.
+                receipt.receipt_digest().map_err(blocked)?;
+                receipt.facts.sort_by(|a, b| a.key.cmp(&b.key));
+                wire::write_message(&mut normalized, 6, &receipt.encode());
+            }
+            _ => return Err(blocked("Unknown recovery completion field.")),
+        }
+    }
+    if original != input {
+        return Err(blocked("Recovery completion encoding differs."));
+    }
+    Ok(normalized)
+}
+
 fn completed_relation(
     runtime: &Path,
     public: &mut PublicClient,
@@ -1013,7 +1047,10 @@ fn completed_relation(
 ) -> Result<bool, StandaloneError> {
     let target = path(runtime, source, "complete");
     if target.try_exists().map_err(blocked)?
-        && read(&target)? == completion_bytes(runtime, public, controller, source)?
+        && normalize_completion_receipts(&read(&target)?)?
+            == normalize_completion_receipts(&completion_bytes(
+                runtime, public, controller, source,
+            )?)?
     {
         return Ok(true);
     }
@@ -1034,14 +1071,14 @@ fn completed_relation(
             continue;
         }
         let job = read(&budget::path(runtime, ordinal, "job"))?;
-        if read(&complete)?
-            == completion_for_proof(
+        if normalize_completion_receipts(&read(&complete)?)?
+            == normalize_completion_receipts(&completion_for_proof(
                 runtime,
                 public,
                 controller,
                 &proof,
                 std::str::from_utf8(&job).map_err(blocked)?,
-            )?
+            )?)?
         {
             return Ok(true);
         }
