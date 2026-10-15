@@ -13,7 +13,11 @@ pub struct PreparedPreboot {
     pub digest: String,
 }
 
-pub fn prepare(runtime: &Path, original: &[u8]) -> Result<PreparedPreboot, StandaloneError> {
+pub fn prepare(
+    runtime: &Path,
+    original: &[u8],
+    support: &[u8],
+) -> Result<PreparedPreboot, StandaloneError> {
     let fail = |e: &dyn std::fmt::Display| {
         StandaloneError::new("PREBOOT_ARTIFACT_FAILED", e.to_string(), 3, false)
     };
@@ -24,7 +28,7 @@ pub fn prepare(runtime: &Path, original: &[u8]) -> Result<PreparedPreboot, Stand
         .iter()
         .map(|b| format!("{b:02x}"))
         .collect::<String>();
-    let image = preboot::derive(original, &nonce).map_err(|e| fail(&e))?;
+    let image = preboot::derive(original, support, &nonce).map_err(|e| fail(&e))?;
     let digest = sha256(&image).to_hex();
     let root = runtime.join("derived-artifacts").join("preboot");
     std::fs::create_dir_all(&root).map_err(|e| fail(&e))?;

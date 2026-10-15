@@ -69,7 +69,10 @@ unrestricted-loader fallback is part of this operation.
 
 With an explicit preboot reference, the authority reads only its own bounded
 host derivative, hashes it against the successful source plan's ramdisk effect
-and recognizes the pinned base plus complete overlay byte-for-byte. The source
+and recognizes the pinned base, compressed dependency archive and complete
+script overlay byte-for-byte. The dependency archive contains only the
+original firmware's pinned crypto library at its fixed RAM path; a different
+library, archive, order or padding is refused. The source
 must also contain the exact userdata image range. Only userdata uses the
 pre-mount report; the eight other reads retain all Normal-mode checks above.
 The fixed HDC query reads the current boot ID, hashed storage CID and one

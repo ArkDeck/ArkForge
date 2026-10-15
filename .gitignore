@@ -1,6 +1,7 @@
 /target
 /.build
 /swift/ArkForgeSDK/.build
+/scripts/__pycache__/
 
 # hdc writes a client log wherever it is invoked
 /log/

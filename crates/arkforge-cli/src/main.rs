@@ -1693,7 +1693,14 @@ fn prepare_preboot_ramdisk(options: &Options, globals: &Globals) -> Result<i32, 
         .map_err(|e| fail(&e))?;
     let out = options.one("out")?;
     let restore_out = options.one("restore-out")?;
-    let prepared = arkforge_standalone::preboot::prepare(&command_runtime_dir(globals)?, &base)?;
+    let mut support = Vec::new();
+    std::fs::File::open(options.one("support-archive")?)
+        .map_err(|e| fail(&e))?
+        .take(preboot::SUPPORT_SIZE as u64 + 1)
+        .read_to_end(&mut support)
+        .map_err(|e| fail(&e))?;
+    let prepared =
+        arkforge_standalone::preboot::prepare(&command_runtime_dir(globals)?, &base, &support)?;
     for (path, bytes) in [(out, &prepared.image), (restore_out, &prepared.restoration)] {
         let mut output = std::fs::OpenOptions::new()
             .write(true)
@@ -1706,10 +1713,12 @@ fn prepare_preboot_ramdisk(options: &Options, globals: &Globals) -> Result<i32, 
             .map_err(|e| fail(&e))?;
     }
     emit_json!(
-        "{{\"schema\":\"arkforge.preboot-ramdisk/v1\",\"ramdisk_sha256\":{},\"original_ramdisk_sha256\":{},\"restoration_ramdisk_sha256\":{},\"nonce\":{},\"size_bytes\":{},\"device_accessed\":false}}",
+        "{{\"schema\":\"arkforge.preboot-ramdisk/v1\",\"ramdisk_sha256\":{},\"original_ramdisk_sha256\":{},\"restoration_ramdisk_sha256\":{},\"support_archive_sha256\":{},\"support_library_sha256\":{},\"nonce\":{},\"size_bytes\":{},\"device_accessed\":false}}",
         json(&prepared.digest),
         json(preboot::ORIGINAL_SHA256),
         json(preboot::RESTORATION_SHA256),
+        json(preboot::SUPPORT_SHA256),
+        json(preboot::SUPPORT_LIBRARY_SHA256),
         json(&prepared.nonce),
         prepared.image.len()
     );
@@ -6328,14 +6337,20 @@ static HELP: &[HelpSpec] = &[
     HelpSpec {
         command: "artifact preboot-ramdisk",
         summary: "Derive the pinned temporary DAYU200 acceptance ramdisk on the host.",
-        usage: "arkforge artifact preboot-ramdisk --file <original-ramdisk.img> --out <new-image> --restore-out <new-image>",
+        usage: "arkforge artifact preboot-ramdisk --file <original-ramdisk.img> --support-archive <pinned.cpio.gz> --out <new-image> --restore-out <new-image>",
         effect: "Host-write only. Preserves the pinned base, adds the closed pre-mount verifier and a random nonce, and saves a content-addressed derivative. Does not access the device.",
-        requires: &["The exact pinned original DAYU200 ramdisk and a new output path."],
+        requires: &[
+            "The exact pinned original DAYU200 ramdisk, its closed compressed crypto dependency archive, and new output paths.",
+        ],
         produces: &[
             "arkforge.preboot-ramdisk/v1 with derivative digest, original digest, nonce and size.",
         ],
         options: &[
             ("--file <file>", "Required. Pinned original ramdisk."),
+            (
+                "--support-archive <file>",
+                "Required. Exact pinned gzip/newc dependency archive; arbitrary libraries and scripts are refused.",
+            ),
             (
                 "--restore-out <new-file>",
                 "Required. Original ramdisk padded with zeros to its full partition extent, clearing every temporary overlay byte.",
@@ -6346,7 +6361,7 @@ static HELP: &[HelpSpec] = &[
             ),
         ],
         examples: &[
-            "arkforge artifact preboot-ramdisk --file ramdisk.img --out acceptance-ramdisk.img --restore-out restore-ramdisk.img",
+            "arkforge artifact preboot-ramdisk --file ramdisk.img --support-archive preboot-support.cpio.gz --out acceptance-ramdisk.img --restore-out restore-ramdisk.img",
         ],
         next: &[
             "Build a derived firmware bundle preserving all other members, then seal an ordinary full-restore plan.",

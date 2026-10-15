@@ -11,6 +11,14 @@ newc initramfs format permits an additive overlay: replace the `/init` symlink
 with a regular wrapper and add a bounded shell measurement using the ramdisk's
 existing tools. Preserve the gzip base and all other firmware members exactly.
 
+The pinned ramdisk's toybox requires `libcrypto_openssl.z.so`, which is absent
+from that ramdisk. Before any applet runs, the dynamic loader refuses unresolved
+digest symbols. Add the original system image's exact library as a closed,
+compressed newc archive between the original gzip and script overlay. This
+fits the same 4 MiB extent and requires no system mount. Both the raw library
+and complete compressed archive are pinned; arbitrary replacement libraries,
+archive metadata, paths, scripts and compression output are refused.
+
 The wrapper mounts only procfs and sysfs, discovers the pinned MMC partition,
 checks its range, label, holders and absence of all MMC mounts, reads the full
 1,468,006,400 image bytes and emits one initramfs RAM report. It then removes its
@@ -30,7 +38,8 @@ ramfs/tmpfs backing. It then binds the same nonce, boot, storage and range
 fields. A failure marker or unavailable holder fails verification. Earlier
 failed reports remain unchanged; there is no fallback to a post-mount hash.
 
-`artifact preboot-ramdisk` creates the host derivative with a random nonce.
+`artifact preboot-ramdisk --support-archive <pinned.cpio.gz>` creates the host
+derivative with a random nonce and records the support archive/library digests.
 Ordinary typed full restore writes the derived bundle. `flash verify
 --preboot-ramdisk <digest>` measures the eight static ranges normally and
 validates the pre-mount userdata report against the sealed write, nonce,
@@ -66,7 +75,11 @@ and resulting plan/fixture digests; existing full-restore steps and effects
 retain their semantics. No authority support record is added.
 
 Host preparation uses `scripts/prepare-preboot-firmware.py` with a published
-CLI, the original archive and its independent SHA-256. It emits two derived
+CLI, the original archive and its independent SHA-256, plus `--support-library`
+pointing to `system/lib/chipset-sdk-sp/libcrypto_openssl.z.so` extracted from
+that original `system.img`. `scripts/preboot_support.py` checks the library
+and generates the exact gzip/newc support archive; differing compressor output
+fails closed instead of changing the accepted pin. It emits two derived
 bundles and a provenance record without modifying the source. Import the
 acceptance bundle for the ordinary full restore; after independent preboot
 verification, import the restoration bundle for `flash restore-ramdisk`, apply

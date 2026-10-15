@@ -12,6 +12,7 @@ import json
 from pathlib import Path
 import subprocess
 import tarfile
+from preboot_support import support_archive
 
 
 def digest(path):
@@ -36,12 +37,19 @@ def main():
     parser.add_argument("--runtime-dir", type=Path, required=True)
     parser.add_argument("--file", type=Path, required=True)
     parser.add_argument("--expect-sha256", required=True)
+    parser.add_argument("--support-library", type=Path, required=True,
+                        help="Pinned libcrypto_openssl.z.so extracted from the original system.img")
     parser.add_argument("--out-dir", type=Path, required=True)
     args = parser.parse_args()
     original = digest(args.file)
     if original != args.expect_sha256:
         raise ValueError("original archive SHA-256 differs from the supplied immutable reference")
     args.out_dir.mkdir()
+    support = args.out_dir / "preboot-support.cpio.gz"
+    with args.support_library.open("rb") as stream:
+        library = stream.read(2745488 + 1)
+    with support.open("xb") as output:
+        output.write(support_archive(library))
     base = args.out_dir / "original-ramdisk.img"
     with tarfile.open(args.file, "r:gz") as source:
         members = source.getmembers()
@@ -60,6 +68,7 @@ def main():
     process = subprocess.run(
         [str(args.arkforge.resolve()), "--runtime-dir", str(args.runtime_dir.resolve()),
          "--output", "json", "artifact", "preboot-ramdisk", "--file", str(base.resolve()),
+         "--support-archive", str(support.resolve()),
          "--out", str(derived.resolve()), "--restore-out", str(restoration.resolve())], check=True, text=True, capture_output=True,
     )
     prepared = json.loads(process.stdout)
