@@ -70,6 +70,17 @@ leave temporary CPIO entries behind; its prefix hash alone is insufficient.
 The restoration pin is the hash of the complete original-plus-zero image.
 Neither phase upgrades production support. Unknown effects are never replayed.
 
+For a boot loop after the full flash's confirmed final reboot,
+`scripts/restore-boot-loop.py` listens through the published Runtime device
+interface, binds the current mode's identity to the original admissions and
+submits one separately sealed pinned restoration. An explicit ramdisk-only
+acknowledgement is required. Only the final-reboot rebind boundary may be
+cancelled, with its exact current sequence. A newer job, unknown source outcome,
+identity conflict or uncertain apply stops the workflow; no write retry or
+rescue fallback is introduced. If USB never enumerates, physical Loader entry
+remains necessary. Full ramdisk verification, zero skips and retained original
+records remain the completion conditions.
+
 Native host staging retains full profile-member equality for ordinary restore.
 Its only partial input set is exactly one destructive `ramdisk.img` write for
 the DAYU200 profile, with the pinned restoration digest, complete 4 MiB size,

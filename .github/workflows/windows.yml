@@ -23,6 +23,8 @@ jobs:
       - name: Preboot shell compatibility
         shell: bash
         run: sh scripts/test-preboot-holder.sh
+      - name: Boot-loop restoration orchestration
+        run: python -m unittest discover -s scripts -p test_restore_boot_loop.py
       - name: Clippy
         run: cargo clippy --workspace --all-targets --all-features -- -D warnings
       - name: Test native Windows workspace
