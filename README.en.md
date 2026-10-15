@@ -102,6 +102,21 @@ target/debug/arkforge apply \
 Until production support is published, any real write also requires an explicitly authorized
 hardware campaign and the matching device, artifact, toolchain, platform, and authority maturity.
 
+After a DAYU200 flash completes and the board returns to Normal mode, independently
+verify the original job's complete image ranges:
+
+```bash
+target/debug/arkforge --output json flash verify \
+  --job <job-id> --hardware-campaign <campaign-id>
+```
+
+The runtime derives bounds and SHA-256 values from the sealed source plan, checks
+current block mappings and mounts, and saves a separate verification record. This
+covers static partitions beyond the Loader read window; writable `userdata` after
+boot remains an explicit `typedSkip`. Exit 0 means every image range matched, 9
+means partial verification with skips, and 7 means a verification failure. Original
+job receipts remain unchanged.
+
 Do not guess options or reuse historical command names. The current binary provides complete human
 help, a stable JSON contract, and shell completion:
 

@@ -65,3 +65,20 @@ Postflight MUST confirm exact target lineage, normal/HDC mode, product model,
 and runtime build against the artifact manifest's build facts, through the
 managed device control port (`ports/device-control.md`), never through a path
 the daemon opens itself.
+
+### AF-VER-008 — independent Normal-mode image verification
+status: draft
+source: crates/arkforge-standalone/src/supervisor/verification.rs
+tests: []
+gap: Cross-language hardware-independent conformance vectors are not yet published; Rust source admission, bounded HDC and immutable record tests cover the reference port.
+
+The standalone authority MAY independently verify a completed DAYU200 job's
+image ranges in Normal mode, as defined by `ports/standalone-verification.md`.
+It MUST derive every target, range and expected digest from that job's sealed
+plan, require fresh exact target lineage, and retain the original job outcome
+and receipts unchanged. A complete matching image SHA-256 is `verified` with
+`fullHash`; an observed writable mount is `typedSkip` with
+`mounted-writable-after-boot`. Failed reads, changed mappings, lost identity
+and content mismatches MUST NOT become skips or success. Any skip makes the
+aggregate partial, never fully verified. This read domain does not expand the
+measured Loader read domain or turn an old skip into an old verification.

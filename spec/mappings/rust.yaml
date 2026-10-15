@@ -156,6 +156,9 @@ areas:
       - req: AF-VER-007
         symbol: arkforge_provider::rockchip postflight actions; arkforge_standalone::hdc_control::read_properties
         tests: [crates/arkforged/tests/admission_surface.rs, crates/arkforge-standalone/src/hdc_control.rs tests]
+      - req: AF-VER-008
+        symbol: arkforge_standalone::supervisor::verification; arkforge_standalone::hdc_control::partition
+        tests: [crates/arkforge-standalone/src/supervisor/verification/tests.rs, crates/arkforge-standalone/src/hdc_control/partition.rs tests]
   - area: TRN
     symbols:
       - req: AF-TRN-001..005
@@ -223,6 +226,9 @@ areas:
       - req: AF-CLI-001..009
         symbol: arkforge_cli (crates/arkforge-cli/src/main.rs); arkforge_standalone::application
         tests: [crates/arkforge-cli/tests/cli_artifact.rs, cli_signing.rs, conformance_blackbox.rs, arkforge-conformance cli suite]
+      - req: AF-CLI-010
+        symbol: arkforge_cli::run_flash_verify; arkforge_standalone::supervisor::verify_flash
+        tests: [crates/arkforge-cli/src/main.rs tests, crates/arkforge-standalone/src/supervisor/verification/tests.rs]
   - area: PORT
     symbols:
       - req: ports/durability.md

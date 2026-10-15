@@ -64,7 +64,7 @@ status: normative
 tests: []
 
 `doctor`, `device list/show/probe/wait`, `artifact inspect/list/show`, `flash
-assess/plan`, `job list/show/watch`, `rescue list/inspect/read` MUST NOT send
+assess/plan/verify`, `job list/show/watch`, `rescue list/inspect/read` MUST NOT send
 any mutating or destructive action; `artifact import` mutates only the host
 store (`host_store_mutated`, `device_accessed: false`).
 
@@ -99,3 +99,17 @@ tests: []
 `job watch --format jsonl` emits events in `sequence` order and accepts a
 `--from-sequence`; the final record is `{"record": "terminal", ...}` with the
 job summary.
+
+### AF-CLI-010 — bounded verification of a completed job
+status: draft
+tests: []
+gap: The additive command is covered by reference CLI parsing/help tests; no existing byte fixture is redefined.
+
+`flash verify --job <job-id> [--budget-ms <u64>]
+[--hardware-campaign <campaign-id>]` performs AF-VER-008. The default read
+budget is 300000 ms, with inclusive bounds 1000..600000. The caller supplies
+no path, partition name, expected digest or raw command. Machine output is
+`arkforge.flash-verification/v1`; exit 0 means all image ranges verified,
+exit 9 means partial verification with typed skips and no failed ranges,
+and exit 7 means at least one failed range. Source/admission refusals use the
+ordinary error envelope and never dispatch a partition read.

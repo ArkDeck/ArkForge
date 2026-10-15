@@ -407,7 +407,9 @@ impl HelpSpec {
             "apply" | "flash run" | "rescue apply" => "destructive",
             "cancel" => "mutating-control",
             "artifact import" | "rescue read" => "host-write",
-            "flash plan" | "job recover" | "rescue plan" => "read-device-and-host-write",
+            "flash plan" | "flash verify" | "job recover" | "rescue plan" => {
+                "read-device-and-host-write"
+            }
             command if command.starts_with("config ") && command != "config show" => "host-write",
             command if command.starts_with("daemon") => "service-lifecycle",
             _ => "read-only",
@@ -440,6 +442,7 @@ impl HelpSpec {
             self.command,
             "flash plan"
                 | "flash run"
+                | "flash verify"
                 | "apply"
                 | "cancel"
                 | "job reconcile"
@@ -1864,10 +1867,46 @@ fn run_flash(arguments: &[String], globals: Globals) -> Result<i32, CliError> {
     let options = Options::parse(&arguments[1..])?;
     match subcommand.as_str() {
         "plan" => run_flash_plan(&options, globals),
+        "verify" => run_flash_verify(&options, globals),
         other => Err(CliError::invalid(format!(
             "Unknown flash command {other:?}. Run 'arkforge help flash'."
         ))),
     }
+}
+
+fn run_flash_verify(options: &Options, globals: Globals) -> Result<i32, CliError> {
+    let job = options.one("job")?;
+    let campaign = options.optional_one("hardware-campaign")?;
+    let budget = options
+        .optional_one("budget-ms")?
+        .unwrap_or("300000")
+        .parse::<u64>()
+        .map_err(|_| CliError::invalid("--budget-ms must be an integer."))?;
+    if !(1000..=600000).contains(&budget) {
+        return Err(CliError::invalid("--budget-ms must be 1000..600000."));
+    }
+    let runtime_dir = command_runtime_dir(&globals)?;
+    ensure_runtime(&globals, campaign)?;
+    let result = supervisor::verify_flash(&runtime_dir, job, budget, campaign)?;
+    match globals.output {
+        Output::Json => emit(result.document.clone()),
+        Output::Human => {
+            println!(
+                "Verification of {job}: {} full hashes, {} typed skips, {} failures.",
+                result.verified, result.skipped, result.failed
+            );
+            println!(
+                "Record: {}",
+                runtime_dir
+                    .join("authority")
+                    .join("flash-verifications")
+                    .join(&result.record_id)
+                    .join("result.json")
+                    .display()
+            );
+        }
+    }
+    Ok(result.exit_code())
 }
 
 /// Reusable local bindings: what this host may drive, not what it may do.
@@ -6316,8 +6355,8 @@ static HELP: &[HelpSpec] = &[
     HelpSpec {
         command: "flash",
         summary: "Stage and seal normal firmware work against exact resources.",
-        usage: "arkforge flash <run|plan> [options]",
-        effect: "Run performs the whole flash behind one consent gate; plan stops after sealing, and the top-level apply executes what it sealed.",
+        usage: "arkforge flash <run|plan|verify> [options]",
+        effect: "Run performs the whole flash behind one consent gate; plan stops after sealing, and the top-level apply executes what it sealed. Verify independently reads completed image ranges in Normal mode.",
         requires: &[
             "Firmware content, and enough evidence to name exactly one device and profile.",
         ],
@@ -6417,6 +6456,55 @@ static HELP: &[HelpSpec] = &[
             (8, "Outcome is unknown; never retry automatically."),
             (9, "Tracking ended without a terminal result."),
             (10, "Controller, store, approval, or supervisor failed."),
+        ],
+    },
+    HelpSpec {
+        command: "flash verify",
+        summary: "Verify a completed DAYU200 job's full image ranges in Normal mode.",
+        usage: "arkforge flash verify --job <job-id> [--budget-ms <u64>] [--hardware-campaign <campaign-id>]",
+        effect: "Read-only device access; persists a separate verification record. Exact ranges and expected digests come only from the completed job's sealed plan. Never rewrites historical job receipts or promotes hardware support.",
+        requires: &[
+            "A successful complete DAYU200 job owned by this standalone runtime; no active jobs.",
+            "The same strongly identified board in Normal mode and a hash-bound HDC executable.",
+        ],
+        produces: &[
+            "arkforge.flash-verification/v1 with fullHash, typedSkip, or failed per image range and an independent durable record id.",
+        ],
+        options: &[
+            (
+                "--job <job-id>",
+                "Required. Exact completed job reference; no caller paths, ranges, or expected hashes are accepted.",
+            ),
+            (
+                "--budget-ms <u64>",
+                "Total device read budget in milliseconds, 1000..600000; defaults to 300000.",
+            ),
+            (
+                "--hardware-campaign <campaign-id>",
+                "Exact named campaign of the original job and current runtime; never inherited.",
+            ),
+        ],
+        examples: &[
+            "arkforge --output json flash verify --job <job-id> --hardware-campaign <campaign-id>",
+        ],
+        next: &["arkforge job show --job <job-id>"],
+        exits: &[
+            (0, "Every image range matched its complete SHA-256 digest."),
+            (2, "The job reference or budget is invalid."),
+            (
+                3,
+                "Source, identity, campaign, or execution state refused verification.",
+            ),
+            (5, "A required job or runtime resource was not found."),
+            (
+                7,
+                "At least one range failed verification; inspect its explicit reason.",
+            ),
+            (
+                9,
+                "Partial verification: no failures, but at least one typed skip, such as writable userdata.",
+            ),
+            (10, "IPC or durable recording failed."),
         ],
     },
     HelpSpec {
@@ -7448,6 +7536,7 @@ mod tests {
             "artifact show",
             "flash run",
             "flash plan",
+            "flash verify",
             "apply",
             "watch",
             "cancel",

@@ -97,6 +97,8 @@ files:
     status: draft
   - path: ports/device-control.md
     status: draft
+  - path: ports/standalone-verification.md
+    status: draft
   - path: ports/ipc-framing.md
     status: draft
   - path: errors/registry.yaml
