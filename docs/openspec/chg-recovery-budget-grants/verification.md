@@ -21,3 +21,12 @@ Local targeted checks and CI results are recorded in the PR and execution
 record. Unit tests are fixtures, not hardware evidence. Real acceptance must
 run published main against the same board and retain all original journals;
 it requires fresh identity proof independently of this budget change.
+
+Read-only postflight regression cases additionally drive the full daemon job
+through all nine fixture writes before refusing its last property request.
+After restart, a distinct full replacement is eligible only with the original
+private plan and expired request. Missing storage, reuse of the old plan, an
+unexpired request, another unknown and cancellation are refused; journal bytes
+remain identical and assessment schedules no device work. HDC tests retain
+exact values and target selection through not-ready replies, and refuse wrong
+version/model values at the original deadline.

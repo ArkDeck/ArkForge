@@ -68,6 +68,9 @@ pub(super) struct ProcessPort {
 
 impl CommandPort for ProcessPort {
     fn run(&mut self, arguments: &[&str], deadline: Instant) -> Result<Vec<u8>, ControlFailure> {
+        if Instant::now() >= deadline {
+            return Err(ControlFailure::DeadlineExceeded);
+        }
         let current_digest = arkforged::dispatch::executable_digest(&self.executable)
             .map_err(|_| ControlFailure::CommandUnavailable)?;
         if current_digest != self.expected_digest {
@@ -85,6 +88,9 @@ impl CommandPort for ProcessPort {
                 .filter(|value| !value.is_empty())
                 .ok_or(ControlFailure::CommandUnavailable)?;
             command.env("SystemRoot", system_root);
+        }
+        if Instant::now() >= deadline {
+            return Err(ControlFailure::DeadlineExceeded);
         }
         let mut child = command
             .args(arguments)
@@ -436,62 +442,74 @@ impl<R: CommandPort> HdcControlPort<R> {
             })?;
         self.sessions
             .insert(request.job_id.clone(), connect_key.clone());
-        let values = if properties == BUILD_PROPERTIES.as_slice() {
-            loop {
-                let stdout = self.run_read_command(
-                    &["-t", connect_key.as_str(), "shell", BUILD_PROPERTIES_QUERY],
-                    deadline,
-                )?;
-                match parse_property_lines(&stdout, properties) {
-                    Err(ControlFailure::PropertyEmpty) if Instant::now() < deadline => {
-                        std::thread::sleep(POLL_INTERVAL);
-                    }
-                    result => break result?,
-                }
-            }
-        } else {
-            let mut values = Vec::with_capacity(properties.len());
-            for property in properties {
-                let value = loop {
+        'readiness: loop {
+            let values = if properties == BUILD_PROPERTIES.as_slice() {
+                loop {
                     let stdout = self.run_read_command(
-                        &[
-                            "-t",
-                            connect_key.as_str(),
-                            "shell",
-                            "param",
-                            "get",
-                            property,
-                        ],
+                        &["-t", connect_key.as_str(), "shell", BUILD_PROPERTIES_QUERY],
                         deadline,
                     )?;
-                    match parse_property(&stdout, property) {
+                    match parse_property_lines(&stdout, properties) {
                         Err(ControlFailure::PropertyEmpty) if Instant::now() < deadline => {
                             std::thread::sleep(POLL_INTERVAL);
                         }
                         result => break result?,
                     }
-                };
-                values.push(value);
+                }
+            } else {
+                let mut values = Vec::with_capacity(properties.len());
+                for property in properties {
+                    let value = loop {
+                        let stdout = self.run_read_command(
+                            &[
+                                "-t",
+                                connect_key.as_str(),
+                                "shell",
+                                "param",
+                                "get",
+                                property,
+                            ],
+                            deadline,
+                        )?;
+                        match parse_property(&stdout, property) {
+                            Err(ControlFailure::PropertyEmpty) if Instant::now() < deadline => {
+                                std::thread::sleep(POLL_INTERVAL);
+                            }
+                            result => break result?,
+                        }
+                    };
+                    values.push(value);
+                }
+                values
+            };
+            let mut facts = Vec::with_capacity(properties.len());
+            for (property, value) in properties.iter().zip(values) {
+                if let Some(expected) = request
+                    .expected_facts
+                    .iter()
+                    .find(|fact| fact.key == *property)
+                    .map(|fact| fact.value.as_str())
+                    && value != expected
+                {
+                    // A freshly reconnected HDC channel can answer before the
+                    // boot property service is ready. Keep this same admitted,
+                    // read-only request inside its original deadline; equality
+                    // with every sealed expected fact is still required.
+                    if Instant::now() < deadline {
+                        std::thread::sleep(POLL_INTERVAL);
+                        if Instant::now() < deadline {
+                            continue 'readiness;
+                        }
+                    }
+                    return Err(ControlFailure::PropertyMismatch);
+                }
+                facts.push(KeyValue {
+                    key: (*property).to_string(),
+                    value,
+                });
             }
-            values
-        };
-        let mut facts = Vec::with_capacity(properties.len());
-        for (property, value) in properties.iter().zip(values) {
-            if let Some(expected) = request
-                .expected_facts
-                .iter()
-                .find(|fact| fact.key == *property)
-                .map(|fact| fact.value.as_str())
-                && value != expected
-            {
-                return Err(ControlFailure::PropertyMismatch);
-            }
-            facts.push(KeyValue {
-                key: (*property).to_string(),
-                value,
-            });
+            return Ok((facts, None));
         }
-        Ok((facts, None))
     }
 
     /// HDC can publish a target as `Connected` shortly before its command
@@ -937,6 +955,19 @@ mod tests {
     }
 
     #[test]
+    fn an_expired_process_request_does_not_open_or_start_the_executable() {
+        let mut port = ProcessPort {
+            executable: PathBuf::from("missing-expired-hdc"),
+            working_directory: PathBuf::from("missing-expired-directory"),
+            expected_digest: Sha256Digest::from_bytes([0; 32]),
+        };
+        assert_eq!(
+            port.run(&["list", "targets"], Instant::now()),
+            Err(ControlFailure::DeadlineExceeded)
+        );
+    }
+
+    #[test]
     fn single_hdc_target_uses_unscoped_reboot_after_exact_read_only_identity_check() {
         let normal = observation("NORMAL-1", "hdc-normal", "topology", "serial");
         let loader = observation(
@@ -1127,6 +1158,7 @@ mod tests {
                      Please wait for several seconds and try again.\n"
                         .to_vec(),
                 ),
+                Ok(b"Get parameter failed\nGet parameter failed\n".to_vec()),
                 Ok(b"OpenHarmony-7.0.0.37\nohos\n".to_vec()),
             ]),
         };
@@ -1153,13 +1185,51 @@ mod tests {
         let result = port.perform_with(&mut observations, &request, &context());
 
         assert!(result.receipt.accepted);
-        assert_eq!(port.runner.calls.len(), 3);
+        assert_eq!(port.runner.calls.len(), 4);
         assert!(
             port.runner
                 .calls
                 .iter()
                 .all(|call| call == &["-t", "serial", "shell", BUILD_PROPERTIES_QUERY])
         );
+    }
+
+    #[test]
+    fn property_mismatch_at_the_admitted_deadline_never_becomes_a_receipt() {
+        for reply in [
+            b"different-build\nohos\n".as_slice(),
+            b"OpenHarmony-7.0.0.43\nwrong-model\n",
+        ] {
+            let normal = observation("NORMAL-1", "hdc-normal", "topology", "serial");
+            let mut port = HdcControlPort {
+                runner: ScriptedRunner {
+                    calls: Vec::new(),
+                    replies: VecDeque::from([Ok(reply.to_vec())]),
+                },
+                sessions: BTreeMap::from([("JOB-1".into(), "serial".into())]),
+                resolve_native_usb_target: false,
+            };
+            let mut observations = ScriptedObservations {
+                lists: VecDeque::from([vec![normal]]),
+            };
+            let mut request = request(ManagedControlAction::ReadBuildFacts);
+            request.deadline_epoch_ms = 0;
+            request.expected_facts = vec![
+                KeyValue {
+                    key: "const.ohos.fullname".into(),
+                    value: "OpenHarmony-7.0.0.43".into(),
+                },
+                KeyValue {
+                    key: "const.product.model".into(),
+                    value: "ohos".into(),
+                },
+            ];
+            let result = port.perform_with(&mut observations, &request, &context());
+            assert!(!result.receipt.accepted);
+            assert_eq!(result.receipt.failure_reason, "HDC_PROPERTY_MISMATCH");
+            assert!(result.receipt.facts.is_empty());
+            assert_eq!(port.runner.calls.len(), 1);
+        }
     }
 
     #[test]

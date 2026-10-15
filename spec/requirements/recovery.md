@@ -124,3 +124,20 @@ increase the limit, provide trusted facts, or reset historical records.
 This authority policy does not relax AF-REC-001..005. A consumed source is not
 itself a proof failure; missing identity, coverage, journal, correlation or
 current complete-set proof still requires zero new dispatches.
+
+### AF-REC-010 — unknown read-only postflight can be a recovery source
+status: draft
+source: crates/arkforged/src/recovery_assessment.rs read_only_postflight_tail
+tests: [crates/arkforged/tests/support/recovery_assessment.rs]
+gap: Recovery assessment is tested through the daemon API; no new wire field is introduced.
+
+An expired final read-only postflight intent MAY be included in a distinct
+complete-overwrite recovery assessment only when the exact stored public and
+private source plan identifies that fixed read, every preceding step has a
+unique successful semantic receipt and checkpoint, and the journal correlates
+exactly one unresolved permit through acceptance, intent and dispatch. The
+source remains unknown and its records MUST remain immutable. Missing private
+actions, another unresolved intent, cancellation or an unexpired request MUST
+NOT qualify through this case. All complete-source, identity, immutable
+artifact, published coverage, new budget and replacement verification gates
+still apply; no standalone read result can complete the old job.
