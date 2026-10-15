@@ -124,3 +124,14 @@ new files. `flash restore-ramdisk --artifact <restoration-bundle-id>
 pinned restoration plan and returns its exact apply command. It does not
 apply automatically. Verification of that completed restoration has one
 full-partition ramdisk result, never an inferred userdata result.
+
+`flash restore-ramdisk` accepts optional `--source-job <job-id>`. The standalone
+authority checks the source's sealed full-flash plan and durable success
+receipts through its final reboot, then matches a fresh strong Normal or Loader
+probe against the original or current durable source binding. Only `succeeded`,
+`cancelledSafe`, or the final `rebindWait` boundary is eligible. This check runs
+for both assessment and materialization, including after Runtime restart; it
+does not depend on transient admission events or modify historical records.
+The boot-loop listener always supplies this option and cancels a waiting source
+only after successful source-bound planning. This additive option does not
+change existing wire fixtures or the ordinary plan/permit digest domains.

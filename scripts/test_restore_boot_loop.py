@@ -88,6 +88,7 @@ class FakeRuntime:
             self.source = source("cancelledSafe")
             return {"disposition": "cancelled-safe"}
         if name == "plan":
+            assert argv[argv.index("--source-job") + 1] == "source"
             if self.plan_errors:
                 raise self.plan_errors.pop(0)
             return copy.deepcopy(self.current_plan)
@@ -187,6 +188,37 @@ class BootLoopTests(unittest.TestCase):
         runtime.plan_errors = [boot.CommandFailed("lineage differs", "TARGET_LINEAGE_CONFLICT")]
         with self.assertRaisesRegex(boot.Refused, "lineage differs"):
             run(runtime)
+        self.assertNotIn("apply", [name for name, _ in runtime.calls])
+        self.assertNotIn("cancel", [name for name, _ in runtime.calls])
+
+    def test_restart_keeps_sparse_receipts_without_live_admissions(self):
+        runtime = FakeRuntime()
+        runtime.source = source("cancelledSafe")
+        runtime.source["events"] = [e for e in runtime.source["events"] if "receipt" in e]
+        for number, event in enumerate(runtime.source["events"], 1):
+            event["sequence"] = number * 5
+        runtime.source["job"]["last_sequence"] = runtime.source["events"][-1]["sequence"]
+        run(runtime)
+        self.assertEqual([name for name, _ in runtime.calls].count("apply"), 1)
+        self.assertNotIn("cancel", [name for name, _ in runtime.calls])
+
+    def test_sparse_snapshot_does_not_hide_missing_or_duplicate_receipts(self):
+        for mutation in (lambda events: events.pop(4),
+                         lambda events: events[-1]["receipt"].update(step_id="STEP-001"),
+                         lambda events: events[-1].update(sequence=events[0]["sequence"])):
+            runtime = FakeRuntime()
+            mutation(runtime.source["events"])
+            with self.assertRaises(boot.Refused):
+                run(runtime)
+            self.assertEqual([name for name, _ in runtime.calls], ["watch"])
+
+    def test_durable_identity_refusal_after_restart_never_cancels_or_applies(self):
+        runtime = FakeRuntime()
+        runtime.source["events"] = [e for e in runtime.source["events"] if "receipt" in e]
+        runtime.plan_errors = [boot.CommandFailed("durable source differs", "TARGET_LINEAGE_CONFLICT")]
+        with self.assertRaisesRegex(boot.Refused, "durable source differs"):
+            run(runtime)
+        self.assertNotIn("cancel", [name for name, _ in runtime.calls])
         self.assertNotIn("apply", [name for name, _ in runtime.calls])
 
     def test_plan_scope_digest_campaign_and_step_tampering_refuse_before_apply(self):

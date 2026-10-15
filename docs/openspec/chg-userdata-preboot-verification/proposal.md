@@ -72,7 +72,7 @@ Neither phase upgrades production support. Unknown effects are never replayed.
 
 For a boot loop after the full flash's confirmed final reboot,
 `scripts/restore-boot-loop.py` listens through the published Runtime device
-interface, binds the current mode's identity to the original admissions and
+interface, binds the current mode's fresh identity to durable Runtime records and
 submits one separately sealed pinned restoration. An explicit ramdisk-only
 acknowledgement is required. Only the final-reboot rebind boundary may be
 cancelled, with its exact current sequence. A newer job, unknown source outcome,
@@ -80,6 +80,14 @@ identity conflict or uncertain apply stops the workflow; no write retry or
 rescue fallback is introduced. If USB never enumerates, physical Loader entry
 remains necessary. Full ramdisk verification, zero skips and retained original
 records remain the completion conditions.
+
+After a Runtime restart, durable success receipts retain their original sparse
+event cursors while transient admission events are absent. The listener checks
+the complete unique receipt set, then always passes `--source-job` to restoration
+planning. The authority independently checks the source plan and receipts and
+matches the fresh probe to the original or current durable binding before
+creating the new plan. Cancellation follows this identity check. No supplied
+snapshot replaces authority facts, and no journal or target binding is rewritten.
 
 Native host staging retains full profile-member equality for ordinary restore.
 Its only partial input set is exactly one destructive `ramdisk.img` write for
