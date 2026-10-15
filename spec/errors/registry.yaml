@@ -510,6 +510,11 @@ codes:
     condition: "The flash review is missing or was already applied. Prepare the operation again."
     retry: operator
     source: [crates/arkforge-standalone/src/application/service.rs]
+  - code: FLASH_VERIFICATION_REFUSED
+    surfaces: [supervisor, cli]
+    condition: "source job, campaign, target lineage or read-only verification admission is invalid"
+    retry: operator
+    source: [crates/arkforge-standalone/src/supervisor/verification.rs]
   - code: HDC_BINDING_REFUSED
     surfaces: [cli, supervisor]
     condition: "the supervisor refused to bind this hdc executable"
@@ -1197,7 +1202,7 @@ codes:
     source: [crates/arkforged/src/jobs.rs]
 
 coverage:
-  total_codes: 221
+  total_codes: 222
   by_primary_surface:
     application: 22
     artifact: 9
@@ -1209,6 +1214,6 @@ coverage:
     job: 21
     packaging: 4
     rescue: 22
-    supervisor: 27
+    supervisor: 28
   scanned: [crates/**/src/*.rs, adapters/**/src/*.rs]
   excluded: [tests, crates/arkforge-conformance, environment variable names, Mach-O and Win32 constants, journal fact keys, RockUSB opcodes]

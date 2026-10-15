@@ -36,6 +36,8 @@ use std::process::{Child, Command, Stdio};
 use std::time::{Duration, Instant};
 
 mod recovery;
+mod verification;
+pub use verification::FlashVerificationResult;
 
 const READY_TIMEOUT: Duration = Duration::from_secs(10);
 /// How long a supervisor request waits for its answer.
@@ -50,6 +52,7 @@ const REQUEST_TIMEOUT: Duration = Duration::from_secs(10);
 
 fn request_read_timeout(verb: &str) -> Duration {
     match verb {
+        "verify-flash" => Duration::from_secs(620),
         // Parsing and hashing a firmware archive is not a lifecycle handshake.
         // Use the controller client's existing materialization idle-read
         // budget for the CLI-to-supervisor hop too.
@@ -560,6 +563,26 @@ pub fn reconcile_job(runtime_dir: &Path, job_id: &str) -> Result<ReconcileStatus
     decode_reconcile(&payload)
 }
 
+/// Independently verify the image ranges of a completed job in Normal mode.
+/// The authority resolves all device paths, bounds and hashes from its records.
+pub fn verify_flash(
+    runtime_dir: &Path,
+    job_id: &str,
+    budget_ms: u64,
+    hardware_campaign: Option<&str>,
+) -> Result<FlashVerificationResult, StandaloneError> {
+    let payload = request(
+        runtime_dir,
+        "verify-flash",
+        &[
+            job_id,
+            &budget_ms.to_string(),
+            hardware_campaign.unwrap_or_default(),
+        ],
+    )?;
+    FlashVerificationResult::decode(&payload)
+}
+
 pub fn apply_plan(
     runtime_dir: &Path,
     plan_id: &str,
@@ -722,6 +745,17 @@ fn serve(
                         blockers,
                     };
                     match command.as_str() {
+                        "verify-flash" => {
+                            let result = verification::handle(
+                                runtime_dir,
+                                &mut public,
+                                &mut session,
+                                active_jobs,
+                                &arguments,
+                            )
+                            .map(|result| result.encode());
+                            write_reply(&mut stream, result)?;
+                        }
                         "status" => write_reply(&mut stream, Ok(encode_status(&status)))?,
                         "stop" if active_jobs == 0 => {
                             write_reply(&mut stream, Ok(encode_status(&status)))?;

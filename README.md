@@ -96,6 +96,18 @@ target/debug/arkforge apply \
 在生产支持发布前，任何真实写入都还必须进入明确授权的 hardware campaign，并满足对应
 设备、固件、toolchain、平台和 authority 的成熟度要求。
 
+DAYU200 完成刷写并回到 Normal 模式后，可补验原 Job 的完整镜像范围：
+
+```bash
+target/debug/arkforge --output json flash verify \
+  --job <job-id> --hardware-campaign <campaign-id>
+```
+
+Runtime 从原封存计划读取范围和 SHA-256，检查当前分区映射与挂载状态，并另存验证记录。
+它能补验 Loader 读取窗口之外的静态分区；启动后可写挂载的 `userdata` 返回明确的
+`typedSkip`。退出码 0 表示全部镜像范围匹配，9 表示存在跳过，7 表示验证失败。
+原 Job 的历史收据不会改变。
+
 不要猜参数或复用历史命令。当前二进制可以输出完整的人类帮助、稳定 JSON 契约和 shell
 completion：
 

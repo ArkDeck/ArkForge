@@ -14,9 +14,12 @@ use arkforge_ipc::messages::{
 };
 use arkforged::jobs::canonical_facts_digest;
 use std::collections::BTreeMap;
+use std::io::Read;
 use std::path::PathBuf;
 use std::process::{Command, Stdio};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
+
+pub(super) mod partition;
 
 const POLL_INTERVAL: Duration = Duration::from_millis(100);
 const OUTPUT_LIMIT: usize = 64 * 1024;
@@ -100,30 +103,82 @@ impl CommandPort for ProcessPort {
             .stderr(Stdio::null())
             .spawn()
             .map_err(|_| ControlFailure::CommandUnavailable)?;
+        let Some(stdout) = child.stdout.take() else {
+            let _ = child.kill();
+            let _ = child.wait();
+            return Err(ControlFailure::CommandFailed);
+        };
+        // Drain while the client runs: mount metadata can exceed a Windows
+        // anonymous pipe's buffer. Waiting for exit before reading deadlocks.
+        // Read at most LIMIT+1 and make overflow a bounded, explicit failure.
+        let (sender, receiver) = std::sync::mpsc::sync_channel(1);
+        if std::thread::Builder::new()
+            .name("hdc-output".into())
+            .spawn(move || {
+                let mut bytes = Vec::new();
+                let result = stdout
+                    .take((OUTPUT_LIMIT + 1) as u64)
+                    .read_to_end(&mut bytes)
+                    .map_err(|_| ControlFailure::CommandFailed)
+                    .and({
+                        if bytes.len() > OUTPUT_LIMIT {
+                            Err(ControlFailure::OutputTooLarge)
+                        } else {
+                            Ok(bytes)
+                        }
+                    });
+                let _ = sender.send(result);
+            })
+            .is_err()
+        {
+            let _ = child.kill();
+            let _ = child.wait();
+            return Err(ControlFailure::CommandUnavailable);
+        }
+        let mut output = None;
+        let mut exit = None;
         loop {
-            match child.try_wait() {
-                Ok(Some(_)) => {
-                    let output = child
-                        .wait_with_output()
-                        .map_err(|_| ControlFailure::CommandFailed)?;
-                    if !output.status.success() {
+            if output.is_none() {
+                match receiver.try_recv() {
+                    Ok(Ok(bytes)) => output = Some(bytes),
+                    Ok(Err(failure)) => {
+                        let _ = child.kill();
+                        let _ = child.wait();
+                        return Err(failure);
+                    }
+                    Err(std::sync::mpsc::TryRecvError::Disconnected) => {
+                        let _ = child.kill();
+                        let _ = child.wait();
                         return Err(ControlFailure::CommandFailed);
                     }
-                    if output.stdout.len() > OUTPUT_LIMIT {
-                        return Err(ControlFailure::OutputTooLarge);
-                    }
-                    return Ok(output.stdout);
+                    Err(std::sync::mpsc::TryRecvError::Empty) => {}
                 }
-                Ok(None) if Instant::now() < deadline => {
-                    std::thread::sleep(Duration::from_millis(10));
-                }
-                Ok(None) => {
-                    let _ = child.kill();
-                    let _ = child.wait();
-                    return Err(ControlFailure::DeadlineExceeded);
-                }
-                Err(_) => return Err(ControlFailure::CommandFailed),
             }
+            if exit.is_none() {
+                match child.try_wait() {
+                    Ok(status) => exit = status,
+                    Err(_) => {
+                        let _ = child.kill();
+                        let _ = child.wait();
+                        return Err(ControlFailure::CommandFailed);
+                    }
+                }
+            }
+            if let Some(status) = exit
+                && let Some(bytes) = output
+            {
+                return if status.success() {
+                    Ok(bytes)
+                } else {
+                    Err(ControlFailure::CommandFailed)
+                };
+            }
+            if Instant::now() >= deadline {
+                let _ = child.kill();
+                let _ = child.wait();
+                return Err(ControlFailure::DeadlineExceeded);
+            }
+            std::thread::sleep(Duration::from_millis(10));
         }
     }
 }
@@ -951,6 +1006,44 @@ mod tests {
         assert_eq!(
             changed.run(&["--list"], Instant::now() + Duration::from_secs(5)),
             Err(ControlFailure::CommandChanged)
+        );
+    }
+
+    #[test]
+    #[ignore = "child output probe launched by process_port_drains_and_bounds_pipe_output"]
+    fn pipe_output_child() {
+        use std::io::Write;
+        let bytes = if std::env::args().any(|arg| arg == "--show-output") {
+            OUTPUT_LIMIT * 2
+        } else {
+            32 * 1024
+        };
+        std::io::stdout().write_all(&vec![b'x'; bytes]).unwrap();
+    }
+
+    #[test]
+    fn process_port_drains_and_bounds_pipe_output() {
+        let executable = std::env::current_exe().unwrap();
+        let mut port = ProcessPort {
+            expected_digest: arkforged::dispatch::executable_digest(&executable).unwrap(),
+            executable,
+            working_directory: std::env::temp_dir(),
+        };
+        let arguments = [
+            "--exact",
+            "hdc_control::tests::pipe_output_child",
+            "--ignored",
+            "--nocapture",
+        ];
+        let output = port
+            .run(&arguments, Instant::now() + Duration::from_secs(10))
+            .unwrap();
+        assert!(output.len() > 32 * 1024);
+        let mut arguments = arguments.to_vec();
+        arguments.push("--show-output");
+        assert_eq!(
+            port.run(&arguments, Instant::now() + Duration::from_secs(10)),
+            Err(ControlFailure::OutputTooLarge)
         );
     }
 
