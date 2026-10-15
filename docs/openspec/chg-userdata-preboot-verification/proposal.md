@@ -38,6 +38,13 @@ ramfs/tmpfs backing. It then binds the same nonce, boot, storage and range
 fields. A failure marker or unavailable holder fails verification. Earlier
 failed reports remain unchanged; there is no fallback to a post-mount hash.
 
+The pinned toybox applet set has no `tr`. Holder matching therefore reads at
+most 30 command-line bytes with `od`, normalizes only its hexadecimal spacing
+with shell builtins, and compares all 29 bytes of the fixed NUL-delimited argv.
+The extra byte rejects a valid prefix with a suffix or extra argument. The
+wrapper and reader use the same comparison; duplicate-holder and report
+identity/metadata checks remain unchanged.
+
 `artifact preboot-ramdisk --support-archive <pinned.cpio.gz>` creates the host
 derivative with a random nonce and records the support archive/library digests.
 Ordinary typed full restore writes the derived bundle. `flash verify

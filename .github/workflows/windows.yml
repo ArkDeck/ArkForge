@@ -20,6 +20,9 @@ jobs:
         run: rustc --version --verbose
       - name: Format
         run: cargo fmt --all -- --check
+      - name: Preboot shell compatibility
+        shell: bash
+        run: sh scripts/test-preboot-holder.sh
       - name: Clippy
         run: cargo clippy --workspace --all-targets --all-features -- -D warnings
       - name: Test native Windows workspace
