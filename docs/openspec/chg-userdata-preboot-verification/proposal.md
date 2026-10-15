@@ -48,6 +48,13 @@ leave temporary CPIO entries behind; its prefix hash alone is insufficient.
 The restoration pin is the hash of the complete original-plus-zero image.
 Neither phase upgrades production support. Unknown effects are never replayed.
 
+Native host staging retains full profile-member equality for ordinary restore.
+Its only partial input set is exactly one destructive `ramdisk.img` write for
+the DAYU200 profile, with the pinned restoration digest, complete 4 MiB size,
+matching semantic partition and profile sector/range. Duplicate writes,
+arbitrary subsets, shifted ranges and other image digests remain refused.
+Extraction and complete staged-image hashing still precede native write I/O.
+
 The Core overlap prohibition requires two plans; it is not relaxed. A failed
 measurement still requires restoration through a new admitted plan if identity
 and outcome gates permit. If they do not, report the temporary image as still

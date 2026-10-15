@@ -474,10 +474,17 @@ fn expected_images(
     profile: &arkforge_core::profile::DeviceProfile,
 ) -> Result<BTreeMap<String, ExpectedImage>, DispatchFailure> {
     let mut expected = BTreeMap::new();
+    let mut write_count = 0;
+    let mut pinned_ramdisk_only = profile.id.as_str() == "org.openharmony.dayu200";
     for record in plan_actions {
         let action = StoredAction::decode(record)
             .map_err(|error| DispatchFailure::BeforeAnyEffect(error.to_string()))?;
-        let StoredAction::WritePartition { member, .. } = action else {
+        let StoredAction::WritePartition {
+            partition,
+            member,
+            begin_sector,
+        } = action
+        else {
             continue;
         };
         let range = record.declared_range.ok_or_else(|| {
@@ -490,6 +497,20 @@ fn expected_images(
                 "write input {member} has no declared content digest"
             ))
         })?;
+        write_count += 1;
+        pinned_ramdisk_only &= partition == "ramdisk"
+            && member == "ramdisk.img"
+            && range.length == arkforge_artifact::preboot::MAX_IMAGE_BYTES as u64
+            && digest == arkforge_artifact::preboot::restoration_digest()
+            && begin_sector.checked_mul(512) == Some(range.start)
+            && matches!(&record.declared_target,
+                Some(arkforge_core::SemanticTarget::Partition(target)) if target.as_str() == "ramdisk")
+            && record.effect_class == WorkflowEffect::Destructive
+            && profile.allowed_targets.iter().any(|target| {
+                target.partition.as_str() == "ramdisk"
+                    && target.source_member.as_deref() == Some("ramdisk.img")
+                    && target.offset_sectors == begin_sector
+            });
         let image = ExpectedImage {
             size_bytes: range.length,
             sha256: digest,
@@ -508,7 +529,12 @@ fn expected_images(
         .filter_map(|target| target.source_member.clone())
         .collect();
     let plan_members: BTreeSet<String> = expected.keys().cloned().collect();
-    if expected.is_empty() || plan_members != profile_members {
+    // Full restore retains exact profile-set parity. The only admitted partial
+    // input set is the already sealed, pinned ramdisk restoration; an arbitrary
+    // subset, another image, duplicate write or changed range still fails here.
+    if expected.is_empty()
+        || (plan_members != profile_members && !(pinned_ramdisk_only && write_count == 1))
+    {
         return Err(DispatchFailure::BeforeAnyEffect(format!(
             "validated plan write inputs {plan_members:?} disagree with profile inputs \
              {profile_members:?}"
@@ -1328,6 +1354,99 @@ mod tests {
                 .iter()
                 .any(|(key, value)| key == "reconcileError" && value.contains("non-read-only"))
         );
+        assert_eq!(port.reset_calls.get(), 0);
+    }
+
+    #[test]
+    fn staging_accepts_only_the_pinned_ramdisk_partial_plan() {
+        use arkforge_core::projection::PrivateActionRole;
+        use arkforge_core::{ActionId, ByteRange, CborValue, SemanticTarget, StepId};
+        let profile =
+            arkforge_core::profile::load(include_str!("../../../profiles/dayu200.yaml")).unwrap();
+        let target = profile
+            .allowed_targets
+            .iter()
+            .find(|t| t.partition.as_str() == "ramdisk")
+            .unwrap();
+        let write = PrivateActionRecord {
+            action_id: ActionId::new("ACT-004").unwrap(),
+            step_id: StepId::new("STEP-004").unwrap(),
+            role: PrivateActionRole::PrimaryEffect,
+            effect_class: WorkflowEffect::Destructive,
+            declared_target: Some(SemanticTarget::Partition(target.partition.clone())),
+            declared_range: Some(ByteRange {
+                start: target.offset_sectors * 512,
+                length: arkforge_artifact::preboot::MAX_IMAGE_BYTES as u64,
+            }),
+            content_digest: Some(arkforge_artifact::preboot::restoration_digest()),
+            body: CborValue::map(vec![
+                ("action", CborValue::text("write-partition")),
+                ("partition", CborValue::text("ramdisk")),
+                ("member", CborValue::text("ramdisk.img")),
+                ("beginSector", CborValue::Unsigned(target.offset_sectors)),
+            ]),
+        };
+        let expected = expected_images(std::slice::from_ref(&write), &profile).unwrap();
+        assert_eq!(expected.len(), 1);
+        assert_eq!(
+            expected["ramdisk.img"].sha256,
+            arkforge_artifact::preboot::restoration_digest()
+        );
+        assert_eq!(expected["ramdisk.img"].size_bytes, 4 * 1024 * 1024);
+        for mutate in 0..6 {
+            let mut bad = write.clone();
+            match mutate {
+                0 => bad.content_digest = Some(arkforge_core::digest::sha256(b"unpinned")),
+                1 => bad.declared_range.as_mut().unwrap().length -= 512,
+                2 => bad.declared_range.as_mut().unwrap().start += 512,
+                3 => bad.declared_target = Some(SemanticTarget::Device),
+                4 => bad.effect_class = WorkflowEffect::ReadOnly,
+                _ => {
+                    bad.body = CborValue::map(vec![
+                        ("action", CborValue::text("write-partition")),
+                        ("partition", CborValue::text("system")),
+                        ("member", CborValue::text("system.img")),
+                        ("beginSector", CborValue::Unsigned(target.offset_sectors)),
+                    ])
+                }
+            }
+            assert!(
+                expected_images(&[bad], &profile).is_err(),
+                "mutation {mutate}"
+            );
+        }
+        assert!(expected_images(&[write.clone(), write.clone()], &profile).is_err());
+        assert!(expected_images(&[], &profile).is_err());
+        let mut wrong_profile = profile.clone();
+        wrong_profile.id = arkforge_core::OpaqueId::new("other-device").unwrap();
+        assert!(expected_images(std::slice::from_ref(&write), &wrong_profile).is_err());
+
+        // Exercise the actual host-preparation entry, not only its set check.
+        // The tiny fixture cannot impersonate the pinned original image: it
+        // passes the new input-set branch, then fails the unchanged byte/hash
+        // validation before any native device I/O.
+        let root = TempRoot::new("ramdisk-staging");
+        let store =
+            ContentAddressedStore::open(root.0.join("store"), CasQuota::dayu200_default()).unwrap();
+        let archive = fixture::dayu200_archive();
+        let artifact = store
+            .import(archive.as_slice(), archive.len() as u64, None)
+            .unwrap();
+        let port = NoMutationPort::default();
+        let mut dispatcher = Dispatcher::new(root.0.join("store"), root.0.join("work"), &port);
+        dispatcher.prepare(&PendingPreparation {
+            job_id: "JOB-RAMDISK".into(),
+            plan_actions: vec![write],
+            profile,
+            artifact_digest: artifact.digest,
+        });
+        let failure = dispatcher
+            .preparation_failures
+            .get("JOB-RAMDISK")
+            .unwrap()
+            .to_string();
+        assert!(failure.contains("staged input ramdisk.img"), "{failure}");
+        assert!(!dispatcher.staged.contains("JOB-RAMDISK"));
         assert_eq!(port.reset_calls.get(), 0);
     }
 
