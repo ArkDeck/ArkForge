@@ -36,6 +36,7 @@ use std::process::{Child, Command, Stdio};
 use std::time::{Duration, Instant};
 
 mod recovery;
+mod restoration;
 mod verification;
 pub use verification::FlashVerificationResult;
 
@@ -518,11 +519,21 @@ pub fn materialize_plan_intent(
     device: &str,
     intent: &str,
 ) -> Result<MaterializePlanResponse, StandaloneError> {
-    let payload = request(
-        runtime_dir,
-        "materialize-plan",
-        &[artifact, profile, device, intent],
-    )?;
+    materialize_plan_from_source(runtime_dir, artifact, profile, device, intent, None)
+}
+
+/// Optionally constrain ramdisk restoration to a durable source job's board.
+pub fn materialize_plan_from_source(
+    runtime_dir: &Path,
+    artifact: &str,
+    profile: &str,
+    device: &str,
+    intent: &str,
+    source_job: Option<&str>,
+) -> Result<MaterializePlanResponse, StandaloneError> {
+    let mut arguments = vec![artifact, profile, device, intent];
+    arguments.extend(source_job);
+    let payload = request(runtime_dir, "materialize-plan", &arguments)?;
     MaterializePlanResponse::decode(&payload).map_err(|error| {
         StandaloneError::new(
             "SUPERVISOR_RESPONSE_INVALID",
@@ -549,11 +560,20 @@ pub fn assess_plan_intent(
     device: &str,
     intent: &str,
 ) -> Result<arkforge_ipc::messages::Assessment, StandaloneError> {
-    let payload = request(
-        runtime_dir,
-        "assess-plan",
-        &[artifact, profile, device, intent],
-    )?;
+    assess_plan_from_source(runtime_dir, artifact, profile, device, intent, None)
+}
+
+pub fn assess_plan_from_source(
+    runtime_dir: &Path,
+    artifact: &str,
+    profile: &str,
+    device: &str,
+    intent: &str,
+    source_job: Option<&str>,
+) -> Result<arkforge_ipc::messages::Assessment, StandaloneError> {
+    let mut arguments = vec![artifact, profile, device, intent];
+    arguments.extend(source_job);
+    let payload = request(runtime_dir, "assess-plan", &arguments)?;
     match MaterializePlanResponse::decode(&payload).map_err(|error| {
         StandaloneError::new(
             "SUPERVISOR_RESPONSE_INVALID",
@@ -1112,9 +1132,16 @@ fn handle_materialize_for(
     hdc_digest: Option<Sha256Digest>,
     hardware_campaign: Option<&str>,
 ) -> Result<MaterializePlanResponse, StandaloneError> {
-    let (artifact, profile, device, intent) = match arguments {
-        [artifact, profile, device] => (artifact, profile, device, "fullRestore"),
-        [artifact, profile, device, intent] => (artifact, profile, device, intent.as_str()),
+    let (artifact, profile, device, intent, source_job) = match arguments {
+        [artifact, profile, device] => (artifact, profile, device, "fullRestore", None),
+        [artifact, profile, device, intent] => (artifact, profile, device, intent.as_str(), None),
+        [artifact, profile, device, intent, source] if intent == "restoreRamdisk" => (
+            artifact,
+            profile,
+            device,
+            intent.as_str(),
+            Some(source.as_str()),
+        ),
         _ => {
             return Err(StandaloneError::new(
                 "SUPERVISOR_REQUEST_INVALID",
@@ -1147,6 +1174,16 @@ fn handle_materialize_for(
             )
         })?;
     let probe = public.device_probe(device, profile)?;
+    if let Some(source_job) = source_job {
+        restoration::require_source(
+            runtime_dir,
+            public,
+            source_job,
+            observation,
+            &probe,
+            hardware_campaign.unwrap_or_default(),
+        )?;
+    }
     let stable_identity = stable_identity_digest(observation, &probe);
     let binding_id = format!("CLI-BIND-{}", &stable_identity.to_hex()[..24]);
     if !kind.assessment_only {

@@ -36,13 +36,19 @@ must be new. The explicit acknowledgement authorizes this single restoration;
 the script still reviews the returned plan's exact digest, campaign, inputs,
 steps, pinned extent and acknowledgement set before applying it.
 
-The listener polls Runtime's read-only device list. A supported device must
-uniquely match the source admissions' serial, topology and descriptor digests
-in its current mode. On a match, the script stops a still-waiting source only
-at its confirmed final-reboot boundary using its exact current sequence, then
-creates a fresh restoration plan. If a device disappears during read-only
-planning, the listener may resume within its wait budget. Runtime checks the
-live transport session again before dispatch.
+The listener polls Runtime's read-only device list and requires one supported
+device with strong identity. Its `flash restore-ramdisk --source-job` call
+requires Runtime to match a fresh probe against the source's durable original
+or current target binding, including serial, topology, descriptor and protocol
+facts. Runtime independently checks every source action's success receipt
+through the final reboot. Live admission events are extra corroboration when
+available; they are not required after restart, when durable event cursors can
+be sparse. No caller identity file is trusted or authority record modified.
+
+Only after that check and plan review does the script stop a still-waiting
+source at its confirmed final-reboot boundary using its exact current sequence.
+If a device disappears during read-only planning, the listener may resume within
+its wait budget. Runtime checks the live session again before dispatch.
 
 The script records an apply intent locally before submitting once. An apply
 error, lost reply, timeout or non-success outcome stops the script without

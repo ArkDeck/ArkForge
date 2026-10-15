@@ -58,8 +58,12 @@ def source_identities(document, source_job):
     total, completed = job["total_steps"], job["completed_steps"]
     require(total in (22, 23) and completed == total - (job["state"] != "succeeded"),
             "Source is not a completed full-flash reboot with only postflight remaining")
-    require([e["sequence"] for e in events] == list(range(1, job["last_sequence"] + 1)),
-            "Source journal snapshot is incomplete")
+    # Restart reconstructs durable receipt events with their original cursors;
+    # transient progress/admission events are intentionally not reconstructed.
+    sequences = [e["sequence"] for e in events]
+    require(sequences and all(type(n) is int and n > 0 for n in sequences)
+            and sequences == sorted(set(sequences)) and sequences[-1] == job["last_sequence"],
+            "Source journal cursors are invalid or the snapshot is incomplete")
     receipts, modes = {}, {}
     for event in events:
         require(event["job_id"] == source_job, "Mixed source journal")
@@ -81,7 +85,6 @@ def source_identities(document, source_job):
             modes[mode] = key
     require(set(receipts) == {f"STEP-{n:03}" for n in range(1, completed + 1)},
             "Every source action through reboot must have one confirmed success receipt")
-    require("rockusb-loader" in modes, "Source has no confirmed Loader identity")
     return modes
 
 
@@ -92,7 +95,8 @@ def select_device(document, modes):
         return None
     require(len(candidates) == 1, "Multiple supported devices are present; no automatic selection")
     device = candidates[0]
-    require(device["mode"] in modes and identity(device) == modes[device["mode"]],
+    key = identity(device)
+    require(device["mode"] not in modes or key == modes[device["mode"]],
             "Current device differs from the source job's recorded identity")
     return device
 
@@ -183,26 +187,29 @@ def restore(runtime, args, now=time.monotonic, sleep=time.sleep):
             # postflight while we are observing it. Allow that transition to settle.
             current = watch(runtime, timeout_ms=1000)
             require(source_identities(current, args.source_job) == modes, "Source identity changed")
-            if current["job"]["state"] == "rebindWait":
-                cancellation = runtime.call("cancel", ["cancel", "--job", args.source_job,
-                    "--expect-sequence", str(current["job"]["last_sequence"])])
-                require(cancellation["disposition"] in ("cancelled-safe", "already-terminal"),
-                        "Source could not be stopped at its confirmed reboot boundary")
-                require(source_identities(watch(runtime), args.source_job) == modes, "Source changed during cancel")
             try:
                 result = runtime.call("plan", ["flash", "restore-ramdisk", "--artifact", args.artifact,
-                                      "--profile", PROFILE, "--device", device["observation_id"]])
+                                      "--profile", PROFILE, "--device", device["observation_id"],
+                                      "--source-job", args.source_job])
             except CommandFailed as error:
                 # These are read-only planning failures. Never catch an apply failure here.
                 if error.code not in ("OBSERVATION_NOT_FOUND", "DEVICE_NOT_FOUND"):
                     raise
                 result = None
             plan = review_plan(result, device, args.artifact, args.hardware_campaign) if result else None
+            # The Runtime has now matched this board against durable source
+            # bindings. Never cancel the old job before that identity check.
+            if plan and current["job"]["state"] == "rebindWait":
+                cancellation = runtime.call("cancel", ["cancel", "--job", args.source_job,
+                    "--expect-sequence", str(current["job"]["last_sequence"])])
+                require(cancellation["disposition"] in ("cancelled-safe", "already-terminal"),
+                        "Source could not be stopped at its confirmed reboot boundary")
+                require(source_identities(watch(runtime), args.source_job) == modes, "Source changed during cancel")
             # Planning may be slow. Recheck visibility and exact identity; Runtime
             # owns fresh transport-session binding and the final dispatch gate.
             fresh = select_device(runtime.call("devices-before-apply", ["device", "list"]), modes) if plan else None
             if fresh is not None and all(fresh.get(k) == device.get(k) for k in
-                    ("observation_id", "mode")):
+                    ("observation_id", "mode", *IDENTITY)):
                 require(source_identities(watch(runtime), args.source_job) == modes, "A newer job appeared")
                 runtime.save("apply-intent", {"planId": plan["plan_id"], "planSha256": plan["plan_sha256"],
                     "sourceJob": args.source_job, "automaticReplay": False})

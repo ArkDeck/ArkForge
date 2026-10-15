@@ -2698,12 +2698,14 @@ fn run_flash_plan_intent(
     }
     let mut partial = PartialResolution::from_resolved(&resolved);
 
-    let assessment = supervisor::assess_plan_intent(
+    let source_job = options.optional_one("source-job")?;
+    let assessment = supervisor::assess_plan_from_source(
         &runtime_dir,
         &resolved.artifact.artifact_id,
         &resolved.profile.reference,
         &resolved.device.observation.observation_id,
         intent,
+        source_job,
     )
     .map_err(|error| {
         partial.refuse(&error.code, error.message, error.exit_code, error.retryable)
@@ -2720,12 +2722,13 @@ fn run_flash_plan_intent(
     if !executable {
         return Err(plan_unavailable(&partial, &assessment));
     }
-    let materialized = supervisor::materialize_plan_intent(
+    let materialized = supervisor::materialize_plan_from_source(
         &runtime_dir,
         &resolved.artifact.artifact_id,
         &resolved.profile.reference,
         &resolved.device.observation.observation_id,
         intent,
+        source_job,
     )
     .map_err(|error| {
         partial.refuse(&error.code, error.message, error.exit_code, error.retryable)
@@ -6569,7 +6572,7 @@ static HELP: &[HelpSpec] = &[
     HelpSpec {
         command: "flash restore-ramdisk",
         summary: "Seal a separate pinned-original-ramdisk-only DAYU200 restoration plan.",
-        usage: "arkforge flash restore-ramdisk --artifact <original-artifact-id> --profile <id@version> --device <observation-id> --hardware-campaign <campaign-id> [--assess-only]",
+        usage: "arkforge flash restore-ramdisk --artifact <original-artifact-id> --profile <id@version> --device <observation-id> --hardware-campaign <campaign-id> [--source-job <job-id>] [--assess-only]",
         effect: "Planning only. The sealed plan is destructive for ramdisk, includes mode transitions, verification and postflight, and never writes userdata. Apply still requires exact digest and acknowledgement tokens.",
         requires: &[
             "A named DAYU200 campaign and artifact containing the pinned original ramdisk.",
@@ -6582,6 +6585,10 @@ static HELP: &[HelpSpec] = &[
             (
                 "--artifact <artifact-id>",
                 "Required. Original firmware artifact.",
+            ),
+            (
+                "--source-job <job-id>",
+                "Require the fresh board to match the source job's durable identity and confirmed full-flash reboot receipts, including after Runtime restart.",
             ),
             (
                 "--profile <id@version>",
@@ -7694,6 +7701,8 @@ mod tests {
             "OBS-PREFLIGHT",
             "--hardware-campaign",
             "preboot-acceptance",
+            "--source-job",
+            "JOB-SOURCE",
         ]);
         assert!(validate_against_command_tree_for_test(&arguments).is_ok());
         let mut invalid = arguments;
