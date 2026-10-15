@@ -137,7 +137,12 @@ fn validate_target(
             ));
         }
     }
-    if probe.profile_id != record.profile_id
+    // ProbeDevice returns the profile ID; the sealed authority record stores
+    // its versioned reference. The probe's full facts remain in the digest.
+    if record
+        .profile_id
+        .split_once('@')
+        .is_none_or(|(id, _)| probe.profile_id != id)
         || lineage.plan_id != record.plan.plan_id
         || lineage.topology_sha256 != record.topology_sha256
     {

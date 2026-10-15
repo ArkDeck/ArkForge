@@ -20,7 +20,7 @@ fn probe(observation: &DeviceObservationView) -> DeviceProbeView {
     DeviceProbeView {
         observation: observation.clone(),
         protocol_facts: vec![],
-        profile_id: "org.openharmony.dayu200@1.0.0".into(),
+        profile_id: "org.openharmony.dayu200".into(),
         facts_sha256: "c".repeat(64),
     }
 }
