@@ -13,10 +13,22 @@ existing tools. Preserve the gzip base and all other firmware members exactly.
 
 The wrapper mounts only procfs and sysfs, discovers the pinned MMC partition,
 checks its range, label, holders and absence of all MMC mounts, reads the full
-1,468,006,400 image bytes and emits one kernel-RAM report. It then removes its
+1,468,006,400 image bytes and emits one initramfs RAM report. It then removes its
 virtual mounts and executes the original init. It never repairs or mounts
 userdata. Missing reports fail verification while the bounded wrapper still
 permits normal boot and a separately admitted restoration.
+
+Kernel log turnover can remove an early report before Normal is ready. A
+closed `toybox sleep 600` holder retains the RAM report on read-only FD 9 and
+bounded measurement diagnostics on FD 8. It inherits no standard descriptors,
+performs no further measurement or disk write, and exits after ten minutes.
+The parent waits for its exact command before stock init. Open descriptors
+retain the RAM inode even when switch_root removes the old paths. The verifier
+requires exactly one fixed holder command, the fixed report path (possibly
+deleted), root ownership, mode 0400, a regular file of at most 512 bytes, and
+ramfs/tmpfs backing. It then binds the same nonce, boot, storage and range
+fields. A failure marker or unavailable holder fails verification. Earlier
+failed reports remain unchanged; there is no fallback to a post-mount hash.
 
 `artifact preboot-ramdisk` creates the host derivative with a random nonce.
 Ordinary typed full restore writes the derived bundle. `flash verify

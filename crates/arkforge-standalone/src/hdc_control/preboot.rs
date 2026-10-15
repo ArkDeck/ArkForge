@@ -1,10 +1,37 @@
-//! Read the kernel-RAM report of the closed acceptance initramfs. No expected
+//! Read the retained RAM report of the closed acceptance initramfs. No expected
 //! digest or caller-controlled text is sent to the device.
 use super::*;
 use crate::hdc_control::partition::PartitionRead;
 use arkforge_artifact::preboot::{USERDATA_BYTES, USERDATA_START};
 
-const QUERY: &str = r#"set -eu; set -o pipefail; printf 'ARKFORGE_PREBOOT_READ_V1\n'; /system/bin/toybox cat /proc/sys/kernel/random/boot_id; /system/bin/toybox sha256sum /sys/class/block/mmcblk0/device/cid; /system/bin/toybox dmesg | /system/bin/toybox grep -F ARKFORGE_PREBOOT_V1; printf '\nARKFORGE_PREBOOT_READ_OK\n'"#;
+const QUERY: &str = r#"set -eu
+set -o pipefail
+t=/system/bin/toybox
+holder=
+for p in /proc/[0-9]*; do
+    command=$($t tr '\000' ' ' 2>/dev/null < "$p/cmdline") || continue
+    if test "$command" = '/af-preboot/toybox sleep 600 '; then
+        test -z "$holder"
+        holder=$p
+    fi
+done
+test -n "$holder"
+report=$holder/fd/9
+test -f "$report"
+path=$($t readlink "$report")
+case "$path" in '/af-preboot/report'|'/af-preboot/report (deleted)') ;; *) exit 1;; esac
+test "$($t stat -L -c '%u:%a' "$report")" = 0:400
+size=$($t stat -L -c '%s' "$report")
+test "$size" -gt 0
+test "$size" -le 512
+filesystem=$($t stat -L -f -c '%T' "$report")
+case "$filesystem" in ramfs|tmpfs) ;; *) exit 1;; esac
+printf 'ARKFORGE_PREBOOT_READ_V1\n'
+$t cat /proc/sys/kernel/random/boot_id
+$t sha256sum /sys/class/block/mmcblk0/device/cid
+printf 'ARKFORGE_PREBOOT_RAM_V1\n'
+$t cat "$report"
+printf '\nARKFORGE_PREBOOT_READ_OK\n'"#;
 
 impl<R: CommandPort> HdcControlPort<R> {
     pub(crate) fn read_preboot(
@@ -48,11 +75,12 @@ fn parse(bytes: &[u8], nonce: &str) -> Result<PartitionRead, &'static str> {
         .map(str::trim)
         .filter(|s| !s.is_empty())
         .collect::<Vec<_>>();
-    let [begin, boot, cid_line, report, end] = lines.as_slice() else {
+    let [begin, boot, cid_line, storage, report, end] = lines.as_slice() else {
         return Err(invalid);
     };
     if *begin != "ARKFORGE_PREBOOT_READ_V1"
         || *end != "ARKFORGE_PREBOOT_READ_OK"
+        || *storage != "ARKFORGE_PREBOOT_RAM_V1"
         || boot.len() != 36
         || !lower_hex(&boot.replace('-', ""), 32)
     {
@@ -62,9 +90,8 @@ fn parse(bytes: &[u8], nonce: &str) -> Result<PartitionRead, &'static str> {
     if cid.len() != 2 || !lower_hex(cid[0], 64) || cid[1] != "/sys/class/block/mmcblk0/device/cid" {
         return Err(invalid);
     }
-    // dmesg owns the timestamp prefix. Require exactly one record and every
-    // field; the record has no caller-controlled strings beyond a hex nonce.
-    let (_, body) = report.split_once("ARKFORGE_PREBOOT_V1 ").ok_or(invalid)?;
+    // Require one exact complete record, with no timestamp or other prefix.
+    let body = report.strip_prefix("ARKFORGE_PREBOOT_V1 ").ok_or(invalid)?;
     let words = body.split_whitespace().collect::<Vec<_>>();
     if words.len() != 7
         || words[0] != nonce
@@ -89,7 +116,7 @@ mod tests {
     use super::*;
     fn output(nonce: &str, report_boot: &str) -> String {
         format!(
-            "ARKFORGE_PREBOOT_READ_V1\n01234567-89ab-cdef-0123-456789abcdef\n{}  /sys/class/block/mmcblk0/device/cid\n[  12.34] ARKFORGE_PREBOOT_V1 {nonce} {report_boot} {} {USERDATA_START} {USERDATA_BYTES} {} unmounted\nARKFORGE_PREBOOT_READ_OK\n",
+            "ARKFORGE_PREBOOT_READ_V1\n01234567-89ab-cdef-0123-456789abcdef\n{}  /sys/class/block/mmcblk0/device/cid\nARKFORGE_PREBOOT_RAM_V1\nARKFORGE_PREBOOT_V1 {nonce} {report_boot} {} {USERDATA_START} {USERDATA_BYTES} {} unmounted\nARKFORGE_PREBOOT_READ_OK\n",
             "aa".repeat(32),
             "aa".repeat(32),
             "bb".repeat(32)
@@ -107,6 +134,9 @@ mod tests {
             good.replace("unmounted", "mounted"),
             good.replace(&USERDATA_BYTES.to_string(), "512"),
             good.replace("ARKFORGE_PREBOOT_READ_OK", ""),
+            good.replace("ARKFORGE_PREBOOT_RAM_V1", "persistent-disk"),
+            good.replace("ARKFORGE_PREBOOT_V1 ", "[ 1.23] ARKFORGE_PREBOOT_V1 "),
+            good.replace("ARKFORGE_PREBOOT_V1 ", "ARKFORGE_PREBOOT_FAILED_V1 "),
             format!("{good}{good}"),
             output(nonce, "00000000-0000-0000-0000-000000000000"),
             good.replacen(&"aa".repeat(32), &"cc".repeat(32), 1),

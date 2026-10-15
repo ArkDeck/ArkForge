@@ -35,6 +35,6 @@ $t mknod /af-preboot/userdata b 179 15
 hash=$($t dd if=/af-preboot/userdata bs=1048576 count=1468006400 iflag=count_bytes status=none | $t sha256sum)
 hash=${hash%% *}
 check
-# A single small kernel-RAM record survives switch_root. No report is saved to
-# userdata. The expected image digest is deliberately absent from this program.
-printf '<6>ARKFORGE_PREBOOT_V1 %s %s %s 10217324544 1468006400 %s unmounted\n' "$nonce" "$boot" "$cid" "$hash" > /af-preboot/kmsg
+# The wrapper retains this initramfs file through an inherited read-only FD.
+# No report is saved to userdata. The expected digest is absent from this code.
+printf 'ARKFORGE_PREBOOT_V1 %s %s %s 10217324544 1468006400 %s unmounted\n' "$nonce" "$boot" "$cid" "$hash" > /af-preboot/report
