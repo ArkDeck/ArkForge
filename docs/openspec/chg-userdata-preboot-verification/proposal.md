@@ -26,6 +26,12 @@ virtual mounts and executes the original init. It never repairs or mounts
 userdata. Missing reports fail verification while the bounded wrapper still
 permits normal boot and a separately admitted restoration.
 
+The 300-second measurement timeout uses KILL. The pinned shell can keep TERM
+ignored while waiting for a pipeline, so TERM alone does not enforce the
+measurement deadline. On termination the wrapper overwrites any partial report
+with its failure marker, removes its virtual mounts and hands off to stock
+init. The measurement performs no persistent write that needs a graceful exit.
+
 Kernel log turnover can remove an early report before Normal is ready. A
 closed `toybox sleep 600` holder retains the RAM report on read-only FD 9 and
 bounded measurement diagnostics on FD 8. It inherits no standard descriptors,

@@ -5,7 +5,9 @@ t=/bin/toybox
 $t mkdir -p /af-preboot
 original_umask=$(umask)
 umask 077
-$t timeout 300 /bin/sh /arkforge-preboot > /af-preboot/measure.log 2>&1
+# TERM can remain ignored while the inherited shell waits for a pipeline.
+# The read-only measurement has no persistent cleanup to defer before KILL.
+$t timeout -s KILL 300 /bin/sh /arkforge-preboot > /af-preboot/measure.log 2>&1
 result=$?
 if test "$result" != 0 || ! test -s /af-preboot/report; then
     printf 'ARKFORGE_PREBOOT_FAILED_V1 %s\n' "$result" > /af-preboot/report
