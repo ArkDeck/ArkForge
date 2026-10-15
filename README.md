@@ -108,6 +108,10 @@ Runtime 从原封存计划读取范围和 SHA-256，检查当前分区映射与�
 `typedSkip`。退出码 0 表示全部镜像范围匹配，9 表示存在跳过，7 表示验证失败。
 原 Job 的历史收据不会改变。
 
+临时验收 ramdisk 导致重启循环、且原任务已确认完成最后一次重启时，可使用
+[端口监听与原始 ramdisk 恢复脚本](docs/boot-loop-restoration.md)。它核对同一设备的
+Normal/Loader 身份，通过 Runtime 单次提交恢复并做完整哈希验证；无 USB 枚举时仍需物理进入 Loader。
+
 不要猜参数或复用历史命令。当前二进制可以输出完整的人类帮助、稳定 JSON 契约和 shell
 completion：
 
