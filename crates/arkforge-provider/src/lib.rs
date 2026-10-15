@@ -96,12 +96,15 @@ impl ValidationReport {
 pub enum FlashIntent {
     /// Write every target the profile allows, from the leased artifact.
     FullRestore,
+    /// Restore the pinned original DAYU200 acceptance ramdisk only.
+    RestoreRamdisk,
 }
 
 impl FlashIntent {
     pub fn as_str(self) -> &'static str {
         match self {
             FlashIntent::FullRestore => "fullRestore",
+            FlashIntent::RestoreRamdisk => "restoreRamdisk",
         }
     }
 }

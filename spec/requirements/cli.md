@@ -113,3 +113,14 @@ no path, partition name, expected digest or raw command. Machine output is
 exit 9 means partial verification with typed skips and no failed ranges,
 and exit 7 means at least one failed range. Source/admission refusals use the
 ordinary error envelope and never dispatch a partition read.
+
+An optional `--preboot-ramdisk <sha256>` names a host-generated derivative
+reference for AF-VER-009. It MUST equal the source plan's ramdisk content
+address and pass exact derivative recognition. It is not a caller-supplied
+expected userdata hash. `artifact preboot-ramdisk --file <original>
+--out <temporary> --restore-out <restoration>` is host-only; both outputs are
+new files. `flash restore-ramdisk --artifact <restoration-bundle-id>
+--device <observation-id> --hardware-campaign <campaign-id>` seals the separate
+pinned restoration plan and returns its exact apply command. It does not
+apply automatically. Verification of that completed restoration has one
+full-partition ramdisk result, never an inferred userdata result.

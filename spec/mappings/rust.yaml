@@ -159,6 +159,9 @@ areas:
       - req: AF-VER-008
         symbol: arkforge_standalone::supervisor::verification; arkforge_standalone::hdc_control::partition
         tests: [crates/arkforge-standalone/src/supervisor/verification/tests.rs, crates/arkforge-standalone/src/hdc_control/partition.rs tests]
+      - req: AF-VER-009
+        symbol: arkforge_artifact::preboot; arkforge_standalone::hdc_control::preboot; arkforge_provider::rockchip
+        tests: [crates/arkforge-artifact/src/preboot.rs tests, crates/arkforge-standalone/src/hdc_control/preboot.rs tests, crates/arkforge-provider/tests/dayu200_vertical.rs original_ramdisk_restoration_is_one_write_and_cannot_claim_complete_recovery]
   - area: TRN
     symbols:
       - req: AF-TRN-001..005

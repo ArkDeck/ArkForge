@@ -694,7 +694,7 @@
         "plan/AF-CONF-PLAN-003/case.json": "33c56b4c905ca451792414cf854d0c907ac648f861daa69d1338184e6248bfde",
         "plan/AF-CONF-PLAN-003/observation.cbor": "ab23830ecd90ffe5f7917593266396d33cc809637a7f3efbb4b450dc39ac6a79",
         "plan/AF-CONF-PLAN-003/observation.cbor.hex": "c33fcaeeb351c9749b3bb31d7601910d5f1352754edd9e7caa8b20745fdb0c4f",
-        "plan/AF-CONF-PLAN-004/case.json": "4c2434488235477f02faff0edefe4ffd05bffc2139a55cf641823fa424c16fd4",
+        "plan/AF-CONF-PLAN-004/case.json": "8e6a7fe08dc29c879042986fe401f1e278feb4430945d9df0ac729df3144ecc3",
         "plan/AF-CONF-PLAN-005/action-01.cbor": "643d50cac0f6c46f7b1e8bbb75a768872bad6f2d603ca81a7257c3d53a34ef4a",
         "plan/AF-CONF-PLAN-005/action-01.cbor.hex": "9e43b6e99812ff0b9308634813d907266bf708f239947ace2643bc4269948858",
         "plan/AF-CONF-PLAN-005/action-02.cbor": "ef5e0548ec666c1895553d6cd4d5dfe01256518a164663a0012d88fc0e079077",
@@ -815,9 +815,9 @@
         "plan/AF-CONF-PLAN-008/case.json": "2adecc7c18703c35cf16171b07208aba8d163a5471a226f013d3668effc4f325",
         "plan/AF-CONF-PLAN-008/effect-set.cbor": "b59db4123b62352aac2b6994a753e561254ca3f8dd4ebf1bfcd03e583cf1a8c7",
         "plan/AF-CONF-PLAN-008/effect-set.cbor.hex": "5939789a40b51630545453ca8d8bfc9be6c1d2d8200226816dc37ac7f51e1b22",
-        "plan/AF-CONF-PLAN-009/case.json": "da78d601253cb7bf6974467f8243b06458e0410d858e55ca7b678ca3b460c575",
-        "plan/AF-CONF-PLAN-009/plan-body.cbor": "6d4cecaa3380338e3becd5a41787d500c459e9a9968a05358cb34e15e4140888",
-        "plan/AF-CONF-PLAN-009/plan-body.cbor.hex": "69abec4f89fd31d2a08ad3d31bb5ee4d59d6da1f0f9da4b229859ce5737e9141"
+        "plan/AF-CONF-PLAN-009/case.json": "4fd089547e92aa33ed122935650d8e2674b7285e93892ee4610fe58da5ca04f1",
+        "plan/AF-CONF-PLAN-009/plan-body.cbor": "3c31399d061203dc3fd6c6d5836e735da398b478cb2152476009a605446e5fcd",
+        "plan/AF-CONF-PLAN-009/plan-body.cbor.hex": "6092f3999c43652dc442bc2ea913ddc6517456847754cdcd5ea7884a6605c6dd"
       }
     },
     "protobuf": {

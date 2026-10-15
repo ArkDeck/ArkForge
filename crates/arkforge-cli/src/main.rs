@@ -406,10 +406,12 @@ impl HelpSpec {
         match self.command {
             "apply" | "flash run" | "rescue apply" => "destructive",
             "cancel" => "mutating-control",
-            "artifact import" | "rescue read" => "host-write",
-            "flash plan" | "flash verify" | "job recover" | "rescue plan" => {
-                "read-device-and-host-write"
-            }
+            "artifact import" | "artifact preboot-ramdisk" | "rescue read" => "host-write",
+            "flash plan"
+            | "flash restore-ramdisk"
+            | "flash verify"
+            | "job recover"
+            | "rescue plan" => "read-device-and-host-write",
             command if command.starts_with("config ") && command != "config show" => "host-write",
             command if command.starts_with("daemon") => "service-lifecycle",
             _ => "read-only",
@@ -441,6 +443,7 @@ impl HelpSpec {
         matches!(
             self.command,
             "flash plan"
+                | "flash restore-ramdisk"
                 | "flash run"
                 | "flash verify"
                 | "apply"
@@ -1676,6 +1679,43 @@ fn wait_for_device(
     }
 }
 
+fn prepare_preboot_ramdisk(options: &Options, globals: &Globals) -> Result<i32, CliError> {
+    use arkforge_artifact::preboot;
+    use std::io::{Read, Write};
+    let fail = |e: &dyn std::fmt::Display| {
+        CliError::new("PREBOOT_ARTIFACT_FAILED", e.to_string(), 3, false)
+    };
+    let input = std::fs::File::open(options.one("file")?).map_err(|e| fail(&e))?;
+    let mut base = Vec::new();
+    input
+        .take(preboot::ORIGINAL_SIZE as u64 + 1)
+        .read_to_end(&mut base)
+        .map_err(|e| fail(&e))?;
+    let out = options.one("out")?;
+    let restore_out = options.one("restore-out")?;
+    let prepared = arkforge_standalone::preboot::prepare(&command_runtime_dir(globals)?, &base)?;
+    for (path, bytes) in [(out, &prepared.image), (restore_out, &prepared.restoration)] {
+        let mut output = std::fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(path)
+            .map_err(|e| fail(&e))?;
+        output
+            .write_all(bytes)
+            .and_then(|_| output.sync_all())
+            .map_err(|e| fail(&e))?;
+    }
+    emit_json!(
+        "{{\"schema\":\"arkforge.preboot-ramdisk/v1\",\"ramdisk_sha256\":{},\"original_ramdisk_sha256\":{},\"restoration_ramdisk_sha256\":{},\"nonce\":{},\"size_bytes\":{},\"device_accessed\":false}}",
+        json(&prepared.digest),
+        json(preboot::ORIGINAL_SHA256),
+        json(preboot::RESTORATION_SHA256),
+        json(&prepared.nonce),
+        prepared.image.len()
+    );
+    Ok(0)
+}
+
 fn run_artifact(arguments: &[String], globals: Globals) -> Result<i32, CliError> {
     let Some(subcommand) = arguments.first() else {
         print_help(help_spec(&["artifact".into()])?, globals.output);
@@ -1683,6 +1723,7 @@ fn run_artifact(arguments: &[String], globals: Globals) -> Result<i32, CliError>
     };
     let options = Options::parse(&arguments[1..])?;
     match subcommand.as_str() {
+        "preboot-ramdisk" => prepare_preboot_ramdisk(&options, &globals),
         "import" => {
             let file = Path::new(options.one("file")?);
             let expected = options
@@ -1867,6 +1908,7 @@ fn run_flash(arguments: &[String], globals: Globals) -> Result<i32, CliError> {
     let options = Options::parse(&arguments[1..])?;
     match subcommand.as_str() {
         "plan" => run_flash_plan(&options, globals),
+        "restore-ramdisk" => run_flash_plan_intent(&options, globals, "restoreRamdisk"),
         "verify" => run_flash_verify(&options, globals),
         other => Err(CliError::invalid(format!(
             "Unknown flash command {other:?}. Run 'arkforge help flash'."
@@ -1887,7 +1929,13 @@ fn run_flash_verify(options: &Options, globals: Globals) -> Result<i32, CliError
     }
     let runtime_dir = command_runtime_dir(&globals)?;
     ensure_runtime(&globals, campaign)?;
-    let result = supervisor::verify_flash(&runtime_dir, job, budget, campaign)?;
+    let result = supervisor::verify_flash_preboot(
+        &runtime_dir,
+        job,
+        budget,
+        campaign,
+        options.optional_one("preboot-ramdisk")?.unwrap_or_default(),
+    )?;
     match globals.output {
         Output::Json => emit(result.document.clone()),
         Output::Human => {
@@ -2623,18 +2671,30 @@ fn accept_from_arguments(
 /// of them only reads, or only writes host storage. The single step that cannot
 /// be inferred — consent to a named destructive effect — stays where it was.
 fn run_flash_plan(options: &Options, globals: Globals) -> Result<i32, CliError> {
+    run_flash_plan_intent(options, globals, "fullRestore")
+}
+
+fn run_flash_plan_intent(
+    options: &Options,
+    globals: Globals,
+    intent: &str,
+) -> Result<i32, CliError> {
     let assess_only = options.flag("assess-only");
     let registry = profile_registry()?;
     let runtime_dir = command_runtime_dir(&globals)?;
     ensure_runtime(&globals, options.optional_one("hardware-campaign")?)?;
-    let resolved = resolve_plan_inputs(&globals, &registry, options, !assess_only, None)?;
+    let mut resolved = resolve_plan_inputs(&globals, &registry, options, !assess_only, None)?;
+    if intent == "restoreRamdisk" {
+        resolved.intent.value = "restore-ramdisk".into();
+    }
     let mut partial = PartialResolution::from_resolved(&resolved);
 
-    let assessment = supervisor::assess_plan(
+    let assessment = supervisor::assess_plan_intent(
         &runtime_dir,
         &resolved.artifact.artifact_id,
         &resolved.profile.reference,
         &resolved.device.observation.observation_id,
+        intent,
     )
     .map_err(|error| {
         partial.refuse(&error.code, error.message, error.exit_code, error.retryable)
@@ -2651,11 +2711,12 @@ fn run_flash_plan(options: &Options, globals: Globals) -> Result<i32, CliError> 
     if !executable {
         return Err(plan_unavailable(&partial, &assessment));
     }
-    let materialized = supervisor::materialize_plan(
+    let materialized = supervisor::materialize_plan_intent(
         &runtime_dir,
         &resolved.artifact.artifact_id,
         &resolved.profile.reference,
         &resolved.device.observation.observation_id,
+        intent,
     )
     .map_err(|error| {
         partial.refuse(&error.code, error.message, error.exit_code, error.retryable)
@@ -6265,6 +6326,38 @@ static HELP: &[HelpSpec] = &[
         ],
     },
     HelpSpec {
+        command: "artifact preboot-ramdisk",
+        summary: "Derive the pinned temporary DAYU200 acceptance ramdisk on the host.",
+        usage: "arkforge artifact preboot-ramdisk --file <original-ramdisk.img> --out <new-image> --restore-out <new-image>",
+        effect: "Host-write only. Preserves the pinned base, adds the closed pre-mount verifier and a random nonce, and saves a content-addressed derivative. Does not access the device.",
+        requires: &["The exact pinned original DAYU200 ramdisk and a new output path."],
+        produces: &[
+            "arkforge.preboot-ramdisk/v1 with derivative digest, original digest, nonce and size.",
+        ],
+        options: &[
+            ("--file <file>", "Required. Pinned original ramdisk."),
+            (
+                "--restore-out <new-file>",
+                "Required. Original ramdisk padded with zeros to its full partition extent, clearing every temporary overlay byte.",
+            ),
+            (
+                "--out <new-file>",
+                "Required. New host output; never overwritten.",
+            ),
+        ],
+        examples: &[
+            "arkforge artifact preboot-ramdisk --file ramdisk.img --out acceptance-ramdisk.img --restore-out restore-ramdisk.img",
+        ],
+        next: &[
+            "Build a derived firmware bundle preserving all other members, then seal an ordinary full-restore plan.",
+        ],
+        exits: &[
+            (0, "Derivative saved; no device accessed."),
+            (2, "Invalid arguments."),
+            (3, "Pinned input or output refused."),
+        ],
+    },
+    HelpSpec {
         command: "artifact import",
         summary: "Import one firmware file and report what it is and what it fits.",
         usage: "arkforge artifact import --file <firmware-file> [--expect-sha256 <sha256>]",
@@ -6459,9 +6552,48 @@ static HELP: &[HelpSpec] = &[
         ],
     },
     HelpSpec {
+        command: "flash restore-ramdisk",
+        summary: "Seal a separate pinned-original-ramdisk-only DAYU200 restoration plan.",
+        usage: "arkforge flash restore-ramdisk --artifact <original-artifact-id> --device <observation-id> --hardware-campaign <campaign-id> [--assess-only]",
+        effect: "Planning only. The sealed plan is destructive for ramdisk, includes mode transitions, verification and postflight, and never writes userdata. Apply still requires exact digest and acknowledgement tokens.",
+        requires: &[
+            "A named DAYU200 campaign and artifact containing the pinned original ramdisk.",
+        ],
+        produces: &[
+            "arkforge.flash-plan/v2 with one persistent ramdisk effect and an exact apply command.",
+        ],
+        options: &[
+            (
+                "--artifact <artifact-id>",
+                "Required. Original firmware artifact.",
+            ),
+            (
+                "--device <observation-id>",
+                "Required. Exact current observation.",
+            ),
+            (
+                "--hardware-campaign <campaign-id>",
+                "Required. Named acceptance campaign.",
+            ),
+            ("--assess-only", "Return only the assessment."),
+        ],
+        examples: &[
+            "arkforge flash restore-ramdisk --artifact <artifact-id> --device <observation-id> --hardware-campaign <campaign-id>",
+        ],
+        next: &[
+            "Review and execute the returned apply command, then flash verify the restoration job.",
+        ],
+        exits: &[
+            (0, "Plan or assessment returned."),
+            (2, "Invalid inputs."),
+            (3, "Safety or campaign preconditions refused."),
+            (5, "Runtime or target unavailable."),
+        ],
+    },
+    HelpSpec {
         command: "flash verify",
         summary: "Verify a completed DAYU200 job's full image ranges in Normal mode.",
-        usage: "arkforge flash verify --job <job-id> [--budget-ms <u64>] [--hardware-campaign <campaign-id>]",
+        usage: "arkforge flash verify --job <job-id> [--budget-ms <u64>] [--hardware-campaign <campaign-id>] [--preboot-ramdisk <sha256>]",
         effect: "Read-only device access; persists a separate verification record. Exact ranges and expected digests come only from the completed job's sealed plan. Never rewrites historical job receipts or promotes hardware support.",
         requires: &[
             "A successful complete DAYU200 job owned by this standalone runtime; no active jobs.",
@@ -6471,6 +6603,10 @@ static HELP: &[HelpSpec] = &[
             "arkforge.flash-verification/v1 with fullHash, typedSkip, or failed per image range and an independent durable record id.",
         ],
         options: &[
+            (
+                "--preboot-ramdisk <sha256>",
+                "Use the exact host derivative matching the source job's ramdisk write to validate its current-boot pre-mount userdata report; failures are never skips.",
+            ),
             (
                 "--job <job-id>",
                 "Required. Exact completed job reference; no caller paths, ranges, or expected hashes are accepted.",

@@ -209,3 +209,50 @@ fn a_verification_record_cannot_replace_existing_history() {
     std::fs::remove_file(root.join(name)).unwrap();
     std::fs::remove_dir(root).unwrap();
 }
+
+#[test]
+fn restoration_verification_requires_one_pinned_original_ramdisk_and_full_receipts() {
+    let (mut record, mut job, lineage, mut receipts) = source();
+    record
+        .plan
+        .persistent_effects
+        .retain(|effect| effect.target == "ramdisk");
+    let effect = &mut record.plan.persistent_effects[0];
+    effect.content_sha256 = arkforge_artifact::preboot::RESTORATION_SHA256.into();
+    effect.range_length = arkforge_artifact::preboot::MAX_IMAGE_BYTES as u64;
+    record
+        .plan
+        .public_steps
+        .retain(|step| step.semantic_target == "partition:ramdisk");
+    record.plan.public_steps[0].content_sha256 = effect.content_sha256.clone();
+    receipts.retain(|receipt| receipt.step_id == record.plan.public_steps[0].step_id);
+    job.total_steps = 1;
+    job.completed_steps = 1;
+    validate_source(
+        &record,
+        &job,
+        &lineage,
+        &receipts.iter().collect::<Vec<_>>(),
+        "campaign",
+    )
+    .unwrap();
+    record.plan.persistent_effects[0].content_sha256 = "cc".repeat(32);
+    record.plan.public_steps[0].content_sha256 = "cc".repeat(32);
+    assert!(
+        validate_source(
+            &record,
+            &job,
+            &lineage,
+            &receipts.iter().collect::<Vec<_>>(),
+            "campaign"
+        )
+        .is_err()
+    );
+    let one = FlashVerificationResult {
+        document: "{}".into(),
+        record_id: "VERIFY-RESTORE".into(),
+        verified: 1,
+        ..Default::default()
+    };
+    assert_eq!(FlashVerificationResult::decode(&one.encode()).unwrap(), one);
+}

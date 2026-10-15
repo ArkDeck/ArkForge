@@ -1974,14 +1974,18 @@ impl Service {
         let authority_support_state = first_string_field(&request.payload, 12).unwrap_or_default();
         let authority_support_detail = first_string_field(&request.payload, 13).unwrap_or_default();
 
-        if intent != FlashIntent::FullRestore.as_str() {
-            return self.refuse(
-                request,
-                Status::InvalidArgument,
-                "UNSUPPORTED_FLASH_INTENT",
-                "materializePlan currently requires intent=fullRestore",
-            );
-        }
+        let intent = match intent.as_str() {
+            "fullRestore" => FlashIntent::FullRestore,
+            "restoreRamdisk" => FlashIntent::RestoreRamdisk,
+            _ => {
+                return self.refuse(
+                    request,
+                    Status::InvalidArgument,
+                    "UNSUPPORTED_FLASH_INTENT",
+                    "materializePlan requires intent=fullRestore or restoreRamdisk",
+                );
+            }
+        };
         let execution_purpose = if session == SessionKind::Public {
             // The public face is semantic and assessment-only. Authority
             // binding and execution purpose are controller concerns and must
@@ -2205,7 +2209,7 @@ impl Service {
             plan_id: PlanId::new(format!("PLAN-{}", &plan_suffix[..24]))
                 .unwrap_or_else(|_| PlanId::new("PLAN-UNNAMED").expect("literal")),
             execution_purpose,
-            intent: FlashIntent::FullRestore,
+            intent,
             artifact: &manifest,
             artifact_id: OpaqueId::new(&artifact_id[..32])
                 .unwrap_or_else(|_| OpaqueId::new("ART-UNNAMED").expect("literal identifier")),

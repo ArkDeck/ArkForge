@@ -19,6 +19,11 @@ const MAX_BYTES: u64 = 16 * 1024 * 1024 * 1024;
 #[derive(Debug, PartialEq, Eq)]
 pub(crate) enum PartitionRead {
     Hash(String),
+    PrebootHash {
+        digest: String,
+        boot_id_sha256: String,
+        storage_cid_sha256: String,
+    },
     Skip(&'static str),
 }
 

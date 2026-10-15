@@ -75,7 +75,7 @@ impl RockchipProvider {
                         "steps=ensure-mode,probe,validate-layout,write*,verify*,reboot,postflight;",
                         "actions=enter-loader,probe-loader,validate-partition-table,",
                         "write-partition,characterize-read-domain,readback-partition,",
-                        "reset-device,verify-hdc-postflight"
+                        "reset-device,verify-hdc-postflight;intent=fullRestore,restoreRamdisk-v1"
                     )
                     .as_bytes(),
                 ),
@@ -211,9 +211,8 @@ impl RockchipProvider {
                 .map_err(|error| ProviderError::Core(error.to_string()))?,
         };
 
-        let recovery_contract = profile
-            .recovery
-            .supports_complete_overwrite
+        let recovery_contract = (request.intent == FlashIntent::FullRestore
+            && profile.recovery.supports_complete_overwrite)
             .then(|| {
                 Ok(RecoveryContractRef {
                     id: OpaqueId::new("arkforge.rockchip.complete-overwrite")
@@ -260,11 +259,18 @@ impl RockchipProvider {
     fn build_steps(&self, request: &MaterializeRequest<'_>) -> Result<BuiltPlan, ProviderError> {
         let profile = request.profile;
         let artifact = request.artifact;
-        if request.intent != FlashIntent::FullRestore {
-            return Err(ProviderError::Unsupported(format!(
-                "intent {} is not implemented",
-                request.intent.as_str()
-            )));
+        if request.intent == FlashIntent::RestoreRamdisk
+            && (request.execution_purpose != arkforge_core::plan::ExecutionPurpose::PrimaryFlash
+                || (request.authority_support.state.permits_execution()
+                    && request.authority_support.state.campaign().is_none())
+                || artifact.member("ramdisk.img").is_none_or(|m| {
+                    m.sha256 != arkforge_artifact::preboot::restoration_digest()
+                        || m.size_bytes != arkforge_artifact::preboot::MAX_IMAGE_BYTES as u64
+                }))
+        {
+            return Err(ProviderError::Unsupported(
+                "restoreRamdisk requires a primary hardware campaign and the pinned original ramdisk".into(),
+            ));
         }
 
         let normal = mode(NORMAL_MODE)?;
@@ -393,7 +399,13 @@ impl RockchipProvider {
         }
 
         // 4. The writes, in the profile's declared order.
-        let mut ordered: Vec<&AllowedTarget> = profile.allowed_targets.iter().collect();
+        let mut ordered: Vec<&AllowedTarget> = profile
+            .allowed_targets
+            .iter()
+            .filter(|target| {
+                request.intent == FlashIntent::FullRestore || target.partition.as_str() == "ramdisk"
+            })
+            .collect();
         ordered.sort_by_key(|target| target.write_order);
         for target in &ordered {
             let member_name = target.source_member.as_deref().ok_or_else(|| {
@@ -619,7 +631,14 @@ impl RockchipProvider {
             effect_set: EffectSet {
                 persistent,
                 transient,
-                data_impact: profile.data_impact,
+                data_impact: if request.intent == FlashIntent::RestoreRamdisk {
+                    arkforge_core::effect::DataImpact {
+                        userdata: arkforge_core::effect::DataImpactState::Preserved,
+                        ..profile.data_impact
+                    }
+                } else {
+                    profile.data_impact
+                },
             },
             postflight: PostflightPolicy {
                 require_exact_target_lineage: true,

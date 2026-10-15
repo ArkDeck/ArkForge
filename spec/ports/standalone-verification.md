@@ -1,10 +1,11 @@
 # Port: independent Normal-mode verification
 status: draft
-requirements: AF-VER-008, AF-CLI-010
+requirements: AF-VER-008, AF-VER-009, AF-CLI-010
 source: crates/arkforge-standalone/src/supervisor/verification.rs; crates/arkforge-standalone/src/hdc_control/partition.rs
 
 The owner-only standalone supervisor accepts `verify-flash` with exactly a
-source job reference, decimal read budget and explicit campaign name. It
+source job reference, decimal read budget, explicit campaign name and an
+optional content-addressed preboot ramdisk reference (empty by default). It
 derives device identity, profile, targets, bounds and image digests from its
 immutable source plan and current durable target lineage. This is a read-only
 authority operation, separate from mechanics `ManagedControlAction` and its
@@ -16,6 +17,8 @@ matching plan id/digest and a unique correlated semantic-success receipt per
 step. The supported profile is `org.openharmony.dayu200@1.0.0`; the plan must
 contain exactly the nine unique image write targets `uboot`, `resource`,
 `boot_linux`, `ramdisk`, `system`, `vendor`, `updater`, `chip_ckm`, `userdata`.
+The other admitted set is exactly one original pinned `ramdisk` write from
+the separate acceptance restoration plan; its verification count is one.
 Each range must have a canonical SHA-256, positive length no greater than
 16 GiB, nonoverflowing end and sector-aligned start. The original plan and
 current runtime must have the same explicitly named campaign. No active job
@@ -63,3 +66,29 @@ partition space. Normal-mode verification does not prove what the Loader
 could read earlier, and cannot reconstruct a writable filesystem's bytes
 before its first boot. No remount, freeze, reboot, firmware patch, rescue or
 unrestricted-loader fallback is part of this operation.
+
+With an explicit preboot reference, the authority reads only its own bounded
+host derivative, hashes it against the successful source plan's ramdisk effect
+and recognizes the pinned base plus complete overlay byte-for-byte. The source
+must also contain the exact userdata image range. Only userdata uses the
+pre-mount report; the eight other reads retain all Normal-mode checks above.
+The fixed HDC query reads the current boot ID, hashed storage CID and one
+kernel-RAM report. It sends no nonce, expected hash or supplied text to the
+device. The report must match the derived nonce, current boot, storage CID,
+exact range and unmounted marker. Missing, truncated, duplicate, stale or
+malformed reports fail. The output records the measurement stage and hashed
+boot/storage identity. All target continuity and immutable recording rules
+still apply. This is evidence about the pre-mount point, not the subsequent
+state of the writable filesystem.
+
+Producing and installing the temporary ramdisk and restoring the original are
+separate explicitly authorized actions. `flash restore-ramdisk` admits only
+the pinned original image under a DAYU200 hardware campaign and primary intent.
+It seals the existing enter-Loader, probe, layout, single write/readback,
+reset and build-postflight sequence. Its persistent effect contains only
+ramdisk, its userdata impact is preserved, and it has no complete-overwrite
+recovery coverage. Ordinary exact plan/acknowledgement, per-step permits,
+journal durability and unknown-outcome gates apply unchanged.
+The restoration image is the pinned original gzip member padded with zeros to
+the full 4 MiB partition; its sealed write and final hash cover every byte,
+including the former temporary overlay. A prefix-only restoration is refused.

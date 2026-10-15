@@ -508,10 +508,20 @@ pub fn materialize_plan(
     profile: &str,
     device: &str,
 ) -> Result<MaterializePlanResponse, StandaloneError> {
+    materialize_plan_intent(runtime_dir, artifact, profile, device, "fullRestore")
+}
+
+pub fn materialize_plan_intent(
+    runtime_dir: &Path,
+    artifact: &str,
+    profile: &str,
+    device: &str,
+    intent: &str,
+) -> Result<MaterializePlanResponse, StandaloneError> {
     let payload = request(
         runtime_dir,
         "materialize-plan",
-        &[artifact, profile, device],
+        &[artifact, profile, device, intent],
     )?;
     MaterializePlanResponse::decode(&payload).map_err(|error| {
         StandaloneError::new(
@@ -529,7 +539,21 @@ pub fn assess_plan(
     profile: &str,
     device: &str,
 ) -> Result<arkforge_ipc::messages::Assessment, StandaloneError> {
-    let payload = request(runtime_dir, "assess-plan", &[artifact, profile, device])?;
+    assess_plan_intent(runtime_dir, artifact, profile, device, "fullRestore")
+}
+
+pub fn assess_plan_intent(
+    runtime_dir: &Path,
+    artifact: &str,
+    profile: &str,
+    device: &str,
+    intent: &str,
+) -> Result<arkforge_ipc::messages::Assessment, StandaloneError> {
+    let payload = request(
+        runtime_dir,
+        "assess-plan",
+        &[artifact, profile, device, intent],
+    )?;
     match MaterializePlanResponse::decode(&payload).map_err(|error| {
         StandaloneError::new(
             "SUPERVISOR_RESPONSE_INVALID",
@@ -571,6 +595,16 @@ pub fn verify_flash(
     budget_ms: u64,
     hardware_campaign: Option<&str>,
 ) -> Result<FlashVerificationResult, StandaloneError> {
+    verify_flash_preboot(runtime_dir, job_id, budget_ms, hardware_campaign, "")
+}
+
+pub fn verify_flash_preboot(
+    runtime_dir: &Path,
+    job_id: &str,
+    budget_ms: u64,
+    hardware_campaign: Option<&str>,
+    preboot_ramdisk: &str,
+) -> Result<FlashVerificationResult, StandaloneError> {
     let payload = request(
         runtime_dir,
         "verify-flash",
@@ -578,6 +612,7 @@ pub fn verify_flash(
             job_id,
             &budget_ms.to_string(),
             hardware_campaign.unwrap_or_default(),
+            preboot_ramdisk,
         ],
     )?;
     FlashVerificationResult::decode(&payload)
@@ -1077,14 +1112,28 @@ fn handle_materialize_for(
     hdc_digest: Option<Sha256Digest>,
     hardware_campaign: Option<&str>,
 ) -> Result<MaterializePlanResponse, StandaloneError> {
-    let [artifact, profile, device] = arguments else {
-        return Err(StandaloneError::new(
-            "SUPERVISOR_REQUEST_INVALID",
-            "materialize-plan requires artifact, profile, and exact device observation.",
-            2,
-            false,
-        ));
+    let (artifact, profile, device, intent) = match arguments {
+        [artifact, profile, device] => (artifact, profile, device, "fullRestore"),
+        [artifact, profile, device, intent] => (artifact, profile, device, intent.as_str()),
+        _ => {
+            return Err(StandaloneError::new(
+                "SUPERVISOR_REQUEST_INVALID",
+                "materialize-plan requires artifact, profile, and exact device observation.",
+                2,
+                false,
+            ));
+        }
     };
+    if !matches!(intent, "fullRestore" | "restoreRamdisk")
+        || (intent == "restoreRamdisk"
+            && (hardware_campaign.is_none()
+                || profile != "org.openharmony.dayu200@1.0.0"
+                || kind.execution_purpose != "primaryFlash"))
+    {
+        return Err(StandaloneError::invalid(
+            "Ramdisk restoration requires a primary DAYU200 hardware campaign.",
+        ));
+    }
     let observations = public.device_list()?;
     let observation = observations
         .iter()
@@ -1113,6 +1162,7 @@ fn handle_materialize_for(
     let mut controller = ControllerClient::connect(runtime_dir)?;
     let pending_support_key = sha256(b"arkforge.cli-authority-support-pending");
     let first = controller.materialize_plan(&MaterializeInput {
+        intent,
         artifact_id: artifact,
         profile_id: profile,
         device_id: device,
@@ -1167,6 +1217,7 @@ fn handle_materialize_for(
         .or_else(|| support_state.blocker())
         .unwrap_or_default();
     let response = controller.materialize_plan(&MaterializeInput {
+        intent,
         artifact_id: artifact,
         profile_id: profile,
         device_id: device,
