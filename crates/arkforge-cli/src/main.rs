@@ -6554,10 +6554,11 @@ static HELP: &[HelpSpec] = &[
     HelpSpec {
         command: "flash restore-ramdisk",
         summary: "Seal a separate pinned-original-ramdisk-only DAYU200 restoration plan.",
-        usage: "arkforge flash restore-ramdisk --artifact <original-artifact-id> --device <observation-id> --hardware-campaign <campaign-id> [--assess-only]",
+        usage: "arkforge flash restore-ramdisk --artifact <original-artifact-id> --profile <id@version> --device <observation-id> --hardware-campaign <campaign-id> [--assess-only]",
         effect: "Planning only. The sealed plan is destructive for ramdisk, includes mode transitions, verification and postflight, and never writes userdata. Apply still requires exact digest and acknowledgement tokens.",
         requires: &[
             "A named DAYU200 campaign and artifact containing the pinned original ramdisk.",
+            "An explicit --profile and exact --device when board identity is unproven.",
         ],
         produces: &[
             "arkforge.flash-plan/v2 with one persistent ramdisk effect and an exact apply command.",
@@ -6566,6 +6567,10 @@ static HELP: &[HelpSpec] = &[
             (
                 "--artifact <artifact-id>",
                 "Required. Original firmware artifact.",
+            ),
+            (
+                "--profile <id@version>",
+                "Exact loaded DAYU200 profile identity; required when board identity is unproven.",
             ),
             (
                 "--device <observation-id>",
@@ -6578,7 +6583,7 @@ static HELP: &[HelpSpec] = &[
             ("--assess-only", "Return only the assessment."),
         ],
         examples: &[
-            "arkforge flash restore-ramdisk --artifact <artifact-id> --device <observation-id> --hardware-campaign <campaign-id>",
+            "arkforge flash restore-ramdisk --artifact <artifact-id> --profile org.openharmony.dayu200@1.0.0 --device <observation-id> --hardware-campaign <campaign-id>",
         ],
         next: &[
             "Review and execute the returned apply command, then flash verify the restoration job.",
@@ -7659,6 +7664,26 @@ mod tests {
             ]))
             .is_err()
         );
+    }
+
+    #[test]
+    fn restoration_accepts_the_explicit_profile_required_by_identity_admission() {
+        let arguments = strings(&[
+            "flash",
+            "restore-ramdisk",
+            "--artifact",
+            "1111111111111111111111111111111111111111111111111111111111111111",
+            "--profile",
+            "org.openharmony.dayu200@1.0.0",
+            "--device",
+            "OBS-PREFLIGHT",
+            "--hardware-campaign",
+            "preboot-acceptance",
+        ]);
+        assert!(validate_against_command_tree_for_test(&arguments).is_ok());
+        let mut invalid = arguments;
+        invalid[5] = "not-a-versioned-profile".into();
+        assert!(validate_against_command_tree_for_test(&invalid).is_err());
     }
 
     #[test]

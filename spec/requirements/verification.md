@@ -93,10 +93,17 @@ A separately authorized acceptance ramdisk MAY measure the complete sealed
 userdata image range before stock init or any MMC filesystem mount. Its base
 and overlay MUST match the published pinned derivation byte-for-byte. The
 read-only verifier MUST bind the derivative to the successful job's ramdisk
-write, and bind its kernel-RAM report to the nonce, current boot, storage CID,
+write, and bind its RAM report to the nonce, current boot, storage CID,
 exact range and fresh target lineage. Missing, duplicate, stale or malformed
 reports MUST fail. Expected hashes MUST remain on the host. The resulting
 fullHash proves bytes at the pre-mount point, not their state after Normal boot.
+
+Report retention MUST survive normal boot's kernel log turnover without any
+persistent filesystem write. A bounded holder MAY retain a read-only FD to
+the original initramfs file after switch_root unlinks it. The verifier MUST
+find exactly one closed holder command, a small root-owned read-only regular
+file at its designated FD, and a RAM filesystem. Holder expiry, ambiguity or
+a failed measurement marker MUST fail; they MUST NOT become a typed skip.
 
 Restoring the original ramdisk MUST use a separate sealed destructive plan
 with exactly that pinned partition image, original identity/permit/journal

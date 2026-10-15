@@ -120,7 +120,7 @@ address and pass exact derivative recognition. It is not a caller-supplied
 expected userdata hash. `artifact preboot-ramdisk --file <original>
 --out <temporary> --restore-out <restoration>` is host-only; both outputs are
 new files. `flash restore-ramdisk --artifact <restoration-bundle-id>
---device <observation-id> --hardware-campaign <campaign-id>` seals the separate
+--profile <id@version> --device <observation-id> --hardware-campaign <campaign-id>` seals the separate
 pinned restoration plan and returns its exact apply command. It does not
 apply automatically. Verification of that completed restoration has one
 full-partition ramdisk result, never an inferred userdata result.
