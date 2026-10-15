@@ -91,7 +91,10 @@ gap: Hardware acceptance is recorded separately; fixture output is not hardware 
 
 A separately authorized acceptance ramdisk MAY measure the complete sealed
 userdata image range before stock init or any MMC filesystem mount. Its base
-and overlay MUST match the published pinned derivation byte-for-byte. The
+and overlays MUST match the published pinned derivation byte-for-byte,
+including the compressed crypto dependency required to start the original
+toybox before system is mounted. Missing or changed dependencies MUST be
+refused on the host; dependency completion MUST NOT mount persistent storage. The
 read-only verifier MUST bind the derivative to the successful job's ramdisk
 write, and bind its RAM report to the nonce, current boot, storage CID,
 exact range and fresh target lineage. Missing, duplicate, stale or malformed
