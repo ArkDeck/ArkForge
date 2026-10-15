@@ -49,6 +49,11 @@ explain the branch confirmed using the shipped binary.
 
 ## CI
 
-Pending this PR head's Rust/Swift and Windows workflows. Hardware validation
-uses a new build from merged main after all checks pass. This change carries
-host findings only and makes no hardware-support promotion.
+[PR #34](https://github.com/ArkDeck/ArkForge/pull/34) merged after all
+four workflows succeeded on head `93d6f6512b7f56ac16dbba821575f63060cb89d4`.
+
+- Rust/Swift: [38702184624](https://github.com/ArkDeck/ArkForge/actions/runs/38702184624), [38702137203](https://github.com/ArkDeck/ArkForge/actions/runs/38702137203).
+- Windows: [38702184588](https://github.com/ArkDeck/ArkForge/actions/runs/38702184588), [38702137247](https://github.com/ArkDeck/ArkForge/actions/runs/38702137247).
+
+This CI follow-up preserves the findings and validation scope recorded above.
+CI success does not rewrite Runtime outcomes or promote hardware support.

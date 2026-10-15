@@ -40,6 +40,11 @@ only 64-hex identity/plan/manifest hashes and their CBOR bytes differ.
 
 ## CI
 
-PR and run IDs will be recorded after submission. macOS Rust/Swift and native
-Windows CI must both pass before merge. Board execution uses a subsequent
-build from merged main; this document does not claim that happened.
+[PR #26](https://github.com/ArkDeck/ArkForge/pull/26) merged after all
+four workflows succeeded on head `01a5dfb66c25fc4e9fa4aa9688e57b993bb1586e`.
+
+- Rust/Swift: [38674711609](https://github.com/ArkDeck/ArkForge/actions/runs/38674711609), [38674692408](https://github.com/ArkDeck/ArkForge/actions/runs/38674692408).
+- Windows: [38674711620](https://github.com/ArkDeck/ArkForge/actions/runs/38674711620), [38674692444](https://github.com/ArkDeck/ArkForge/actions/runs/38674692444).
+
+This CI follow-up preserves the findings and validation scope recorded above.
+CI success does not rewrite Runtime outcomes or promote hardware support.

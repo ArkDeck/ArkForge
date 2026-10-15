@@ -26,7 +26,11 @@ are rejected. No test changes an accepted safety assertion.
 
 ## CI
 
-PR #27 passed exact-head Rust PR/push runs 38677397344/38677370940 and Windows
-PR/push runs 38677397393/38677370932 before merge. This increment requires its
-own exact-head CI. Swift is covered by CI, not this Windows host. No hardware
-pass or production-support promotion is claimed by these host checks.
+[PR #28](https://github.com/ArkDeck/ArkForge/pull/28) merged after all
+four workflows succeeded on head `a9726f74acc7981cd6f8776b4b6c6a7a92f47fc6`.
+
+- Rust/Swift: [38678459207](https://github.com/ArkDeck/ArkForge/actions/runs/38678459207), [38678446942](https://github.com/ArkDeck/ArkForge/actions/runs/38678446942).
+- Windows: [38678459520](https://github.com/ArkDeck/ArkForge/actions/runs/38678459520), [38678446983](https://github.com/ArkDeck/ArkForge/actions/runs/38678446983).
+
+This CI follow-up preserves the findings and validation scope recorded above.
+CI success does not rewrite Runtime outcomes or promote hardware support.

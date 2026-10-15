@@ -25,5 +25,11 @@ visibility, write success, device recovery or hardware support.
 
 ## CI
 
-Pending this PR head's Rust/Swift and Windows workflows. The PR body records
-their exact run IDs and final result without amending a green commit.
+[PR #32](https://github.com/ArkDeck/ArkForge/pull/32) merged after all
+four workflows succeeded on head `29df4d1cf7986b61eaec20b157c7ea27889aca99`.
+
+- Rust/Swift: [38693601880](https://github.com/ArkDeck/ArkForge/actions/runs/38693601880), [38693576098](https://github.com/ArkDeck/ArkForge/actions/runs/38693576098).
+- Windows: [38693601972](https://github.com/ArkDeck/ArkForge/actions/runs/38693601972), [38693575867](https://github.com/ArkDeck/ArkForge/actions/runs/38693575867).
+
+This CI follow-up preserves the findings and validation scope recorded above.
+CI success does not rewrite Runtime outcomes or promote hardware support.

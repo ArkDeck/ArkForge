@@ -37,6 +37,11 @@ verification records remain failures and are not rewritten by this fix.
 
 ## CI
 
-Pending this PR head's Rust/Swift and Windows workflows. The complete report
-query regression is included in both workflows. Physical validation uses a
-separate build from merged main; no hardware-support promotion is included.
+[PR #35](https://github.com/ArkDeck/ArkForge/pull/35) merged after all
+four workflows succeeded on head `c4ba167e6cec1225d16f6a4b1dbab21ce3d203bc`.
+
+- Rust/Swift: [38705225056](https://github.com/ArkDeck/ArkForge/actions/runs/38705225056), [38705174872](https://github.com/ArkDeck/ArkForge/actions/runs/38705174872).
+- Windows: [38705224812](https://github.com/ArkDeck/ArkForge/actions/runs/38705224812), [38705174853](https://github.com/ArkDeck/ArkForge/actions/runs/38705174853).
+
+This CI follow-up preserves the findings and validation scope recorded above.
+CI success does not rewrite Runtime outcomes or promote hardware support.

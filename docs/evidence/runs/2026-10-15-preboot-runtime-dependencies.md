@@ -38,6 +38,11 @@ pinned raw library, generates the closed archive and checks its compression pin.
 
 ## CI
 
-Pending the exact PR head's Rust/Swift and Windows workflows. Device execution
-uses a new build from merged main after all checks pass. Hardware records stay
-separate and local; host emulation does not promote production support.
+[PR #29](https://github.com/ArkDeck/ArkForge/pull/29) merged after all
+four workflows succeeded on head `58fda9b3dfa09d36821c10095a8218039d238f4b`.
+
+- Rust/Swift: [38681833251](https://github.com/ArkDeck/ArkForge/actions/runs/38681833251), [38681797208](https://github.com/ArkDeck/ArkForge/actions/runs/38681797208).
+- Windows: [38681833243](https://github.com/ArkDeck/ArkForge/actions/runs/38681833243), [38681797337](https://github.com/ArkDeck/ArkForge/actions/runs/38681797337).
+
+This CI follow-up preserves the findings and validation scope recorded above.
+CI success does not rewrite Runtime outcomes or promote hardware support.
