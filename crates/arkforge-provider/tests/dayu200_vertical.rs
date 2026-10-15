@@ -816,3 +816,68 @@ fn a_write_step_targets_only_partitions_the_profile_allows() {
         }
     }
 }
+
+#[test]
+fn original_ramdisk_restoration_is_one_write_and_cannot_claim_complete_recovery() {
+    let root = TempRoot::new("restore-ramdisk");
+    let mut vertical = run_vertical(&root);
+    let member = vertical
+        .manifest
+        .members
+        .iter_mut()
+        .find(|m| m.path == "ramdisk.img")
+        .unwrap();
+    member.sha256 = arkforge_artifact::preboot::restoration_digest();
+    member.size_bytes = arkforge_artifact::preboot::MAX_IMAGE_BYTES as u64;
+    let tool = native_tool();
+    let registry = hypothetical_production_registry(&vertical, &tool);
+    let mut input = request(&vertical, tool);
+    input.intent = FlashIntent::RestoreRamdisk;
+    assert!(
+        vertical.provider.materialize(&input, &registry).is_err(),
+        "production state cannot admit this acceptance operation"
+    );
+    input.authority_support.state = AuthoritySupportState::HardwareCampaign {
+        campaign: "preboot-test".into(),
+    };
+    let built = vertical
+        .provider
+        .materialize_with_private_plan(&input, &registry)
+        .unwrap();
+    let plan = built.materialization.executable().unwrap();
+    assert_eq!(plan.effect_set.persistent.len(), 1);
+    assert_eq!(
+        plan.effect_set.persistent[0].partition().unwrap().as_str(),
+        "ramdisk"
+    );
+    assert_eq!(
+        plan.effect_set.data_impact.userdata,
+        DataImpactState::Preserved
+    );
+    assert!(plan.recovery_contract.is_none());
+    assert_eq!(
+        plan.public_steps
+            .iter()
+            .filter(|s| s.kind == FlashStepKind::WriteTarget)
+            .count(),
+        1
+    );
+    validate_projection(
+        &plan.public_steps,
+        built.private_plan.as_ref().unwrap(),
+        &plan.effect_set,
+    )
+    .unwrap();
+    input.execution_purpose = ExecutionPurpose::SupersedingRecovery;
+    assert!(vertical.provider.materialize(&input, &registry).is_err());
+    let mut unpinned = vertical.manifest.clone();
+    unpinned
+        .members
+        .iter_mut()
+        .find(|m| m.path == "ramdisk.img")
+        .unwrap()
+        .sha256 = sha256(b"other firmware");
+    input.execution_purpose = ExecutionPurpose::PrimaryFlash;
+    input.artifact = &unpinned;
+    assert!(vertical.provider.materialize(&input, &registry).is_err());
+}

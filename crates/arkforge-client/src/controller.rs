@@ -32,6 +32,7 @@ pub struct ControllerClient {
 
 #[derive(Debug, Clone)]
 pub struct MaterializeInput<'a> {
+    pub intent: &'a str,
     pub artifact_id: &'a str,
     pub profile_id: &'a str,
     pub device_id: &'a str,
@@ -52,7 +53,7 @@ impl MaterializeInput<'_> {
         wire::write_string(&mut payload, 1, self.artifact_id);
         wire::write_string(&mut payload, 2, self.profile_id);
         wire::write_string(&mut payload, 3, self.device_id);
-        wire::write_string(&mut payload, 4, "fullRestore");
+        wire::write_string(&mut payload, 4, self.intent);
         wire::write_string(&mut payload, 5, self.toolchain_id);
         wire::write_string(&mut payload, 6, self.authority_namespace);
         wire::write_string(&mut payload, 7, self.binding_id);
@@ -488,6 +489,7 @@ mod tests {
     #[test]
     fn materialize_production_encoder_matches_swift_golden() {
         let input = MaterializeInput {
+            intent: "fullRestore",
             artifact_id: "A",
             profile_id: "P",
             device_id: "O",

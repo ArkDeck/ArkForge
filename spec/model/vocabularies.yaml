@@ -149,8 +149,8 @@ vocabularies:
 
   - id: flash-intent
     source: crates/arkforge-provider/src/lib.rs FlashIntent::as_str
-    note: "the CLI accepts the argv spelling `full-restore` and maps it to the wire spelling"
-    values: [fullRestore]
+    note: "fullRestore is the ordinary flash intent; restoreRamdisk is the explicit pinned DAYU200 acceptance restoration command"
+    values: [fullRestore, restoreRamdisk]
 
   - id: execution-availability
     source: crates/arkforge-core/src/plan.rs ExecutionAvailability::as_str

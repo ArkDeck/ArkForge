@@ -82,3 +82,23 @@ and receipts unchanged. A complete matching image SHA-256 is `verified` with
 and content mismatches MUST NOT become skips or success. Any skip makes the
 aggregate partial, never fully verified. This read domain does not expand the
 measured Loader read domain or turn an old skip into an old verification.
+
+### AF-VER-009 — pre-mount userdata measurement
+status: draft
+source: crates/arkforge-artifact/src/preboot.rs; crates/arkforge-standalone/src/hdc_control/preboot.rs
+tests: []
+gap: Hardware acceptance is recorded separately; fixture output is not hardware evidence.
+
+A separately authorized acceptance ramdisk MAY measure the complete sealed
+userdata image range before stock init or any MMC filesystem mount. Its base
+and overlay MUST match the published pinned derivation byte-for-byte. The
+read-only verifier MUST bind the derivative to the successful job's ramdisk
+write, and bind its kernel-RAM report to the nonce, current boot, storage CID,
+exact range and fresh target lineage. Missing, duplicate, stale or malformed
+reports MUST fail. Expected hashes MUST remain on the host. The resulting
+fullHash proves bytes at the pre-mount point, not their state after Normal boot.
+
+Restoring the original ramdisk MUST use a separate sealed destructive plan
+with exactly that pinned partition image, original identity/permit/journal
+rules and no userdata write. It MUST NOT claim complete-overwrite recovery
+coverage. Original jobs and verification records MUST remain immutable.

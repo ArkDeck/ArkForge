@@ -11,6 +11,7 @@ pub mod approval;
 mod authority_support;
 pub mod config;
 mod hdc_control;
+pub mod preboot;
 pub mod supervisor;
 
 /// Stable application/service failure carried across CLI and UI frontends.

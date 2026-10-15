@@ -54,7 +54,7 @@ impl FlashVerificationResult {
             || result.verified > 9
             || result.skipped > 9
             || result.failed > 9
-            || result.verified + result.skipped + result.failed != 9
+            || ![1, 9].contains(&(result.verified + result.skipped + result.failed))
         {
             return Err(refused("The verification response is incomplete."));
         }
@@ -69,10 +69,14 @@ pub(super) fn handle(
     active_jobs: usize,
     arguments: &[String],
 ) -> Result<FlashVerificationResult, StandaloneError> {
-    let [job_id, budget, campaign] = arguments else {
-        return Err(StandaloneError::invalid(
-            "Verification takes a job reference, budget and campaign.",
-        ));
+    let (job_id, budget, campaign, preboot_image) = match arguments {
+        [job_id, budget, campaign] => (job_id, budget, campaign, ""),
+        [job_id, budget, campaign, image] => (job_id, budget, campaign, image.as_str()),
+        _ => {
+            return Err(StandaloneError::invalid(
+                "Verification takes a job reference, budget and campaign.",
+            ));
+        }
     };
     JobId::new(job_id).map_err(|_| StandaloneError::invalid("Invalid job reference."))?;
     let budget = budget
@@ -108,6 +112,11 @@ pub(super) fn handle(
         .filter_map(|event| event.receipt.as_ref())
         .collect::<Vec<_>>();
     validate_source(&record, &job, &lineage, &receipts, campaign)?;
+    let nonce = if preboot_image.is_empty() {
+        None
+    } else {
+        Some(preboot_nonce(runtime, &record, preboot_image)?)
+    };
     let deadline = Instant::now() + Duration::from_millis(budget);
     current_observation(runtime, &lineage, &record.profile_id, deadline)?;
 
@@ -128,7 +137,7 @@ pub(super) fn handle(
     protect_path(&directory, true).map_err(|e| internal("protect verification record", e))?;
     sync_directory(&root).map_err(|e| internal("persist verification directory", e))?;
     let started = now_ms()?;
-    let context = format!(
+    let mut context = format!(
         "\"record_id\":{},\"source_job_id\":{},\"source_plan_id\":{},\"source_plan_sha256\":{},\"source_plan_record_sha256\":{},\"profile\":{},\"device_observation_id\":{},\"stable_identity_sha256\":{},\"topology_sha256\":{},\"runtime_epoch\":{},\"hdc_sha256\":{},\"hardware_campaign\":{},\"started_at_epoch_ms\":{},\"budget_ms\":{},\"read_domain\":\"normal-block-device\",\"original_job_unchanged\":true,\"production_support_promotion\":false",
         quoted(&record_id),
         quoted(job_id),
@@ -145,6 +154,16 @@ pub(super) fn handle(
         started,
         budget,
     );
+    if nonce.is_some() {
+        context = context.replace(
+            "\"read_domain\":\"normal-block-device\"",
+            "\"read_domain\":\"normal-block-device-and-preboot-initramfs\"",
+        );
+        context.push_str(&format!(
+            ",\"preboot_ramdisk_sha256\":{}",
+            quoted(preboot_image)
+        ));
+    }
     let targets = record
         .plan
         .persistent_effects
@@ -162,7 +181,13 @@ pub(super) fn handle(
 
     let mut outcomes = Vec::new();
     let mut identity_failed = false;
-    for effect in &record.plan.persistent_effects {
+    let mut effects = record.plan.persistent_effects.iter().collect::<Vec<_>>();
+    if nonce.is_some() {
+        // Capture the bounded boot report before the longer static reads can
+        // allow unrelated kernel logging to evict it from the ring buffer.
+        effects.sort_by_key(|effect| effect.target != "userdata");
+    }
+    for effect in effects {
         let outcome = if identity_failed {
             Err("target-lineage-changed")
         } else if Instant::now() >= deadline {
@@ -170,7 +195,11 @@ pub(super) fn handle(
         } else {
             match current_observation(runtime, &lineage, &record.profile_id, deadline) {
                 Ok(observation) => {
-                    let result = hdc.read_partition(&observation, effect, deadline);
+                    let result = if effect.target == "userdata" && nonce.is_some() {
+                        hdc.read_preboot(&observation, nonce.as_deref().expect("checked"), deadline)
+                    } else {
+                        hdc.read_partition(&observation, effect, deadline)
+                    };
                     if Instant::now() >= deadline {
                         Err("verification-budget-exhausted")
                     } else if current_observation(runtime, &lineage, &record.profile_id, deadline)
@@ -203,12 +232,27 @@ pub(super) fn handle(
     };
     let mut rows = Vec::new();
     for (effect, outcome) in outcomes {
+        let preboot = match &outcome {
+            Ok(PartitionRead::PrebootHash {
+                boot_id_sha256,
+                storage_cid_sha256,
+                ..
+            }) => format!(
+                ",\"measurement_stage\":\"before-stock-init-and-first-mount\",\"boot_id_sha256\":{},\"storage_cid_sha256\":{},\"preboot_nonce\":{}",
+                quoted(boot_id_sha256),
+                quoted(storage_cid_sha256),
+                quoted(nonce.as_deref().unwrap_or_default())
+            ),
+            _ => String::new(),
+        };
         let (verdict, strength, observed, reason) = match outcome {
-            Ok(PartitionRead::Hash(digest)) if digest == effect.content_sha256 => {
+            Ok(PartitionRead::Hash(digest) | PartitionRead::PrebootHash { digest, .. })
+                if digest == effect.content_sha256 =>
+            {
                 result.verified += 1;
                 ("verified", Some("fullHash"), Some(digest), "")
             }
-            Ok(PartitionRead::Hash(digest)) => {
+            Ok(PartitionRead::Hash(digest) | PartitionRead::PrebootHash { digest, .. }) => {
                 result.failed += 1;
                 ("failed", None, Some(digest), "content-mismatch")
             }
@@ -223,7 +267,7 @@ pub(super) fn handle(
         };
         let base = effect_json(effect);
         rows.push(format!(
-            "{},\"outcome\":{},\"verification_strength\":{},\"observed_sha256\":{},\"reason\":{}}}",
+            "{},\"outcome\":{},\"verification_strength\":{},\"observed_sha256\":{},\"reason\":{}{preboot}}}",
             base.trim_end_matches('}'),
             quoted(verdict),
             nullable(strength),
@@ -293,7 +337,12 @@ fn validate_source(
             return Err(refused("The write target has no unique sealed image step."));
         }
     }
-    if names != TARGETS.into_iter().collect() {
+    let original_ramdisk_only = names == BTreeSet::from(["ramdisk"])
+        && record.plan.persistent_effects[0].content_sha256
+            == arkforge_artifact::preboot::RESTORATION_SHA256
+        && record.plan.persistent_effects[0].range_length
+            == arkforge_artifact::preboot::MAX_IMAGE_BYTES as u64;
+    if names != TARGETS.into_iter().collect() && !original_ramdisk_only {
         return Err(refused(
             "The source is not a complete supported partition set.",
         ));
@@ -318,6 +367,49 @@ fn validate_source(
         receipt.receipt_digest().map_err(refused)?;
     }
     Ok(())
+}
+
+fn preboot_nonce(
+    runtime: &Path,
+    record: &AuthorityPlanRecord,
+    image: &str,
+) -> Result<String, StandaloneError> {
+    use arkforge_artifact::preboot;
+    use std::io::Read;
+    let digest = Sha256Digest::parse_hex(image).map_err(refused)?;
+    let ramdisk = record
+        .plan
+        .persistent_effects
+        .iter()
+        .find(|e| e.target == "ramdisk")
+        .ok_or_else(|| refused("The source has no ramdisk write."))?;
+    let userdata = record
+        .plan
+        .persistent_effects
+        .iter()
+        .find(|e| e.target == "userdata")
+        .ok_or_else(|| refused("The source has no userdata write."))?;
+    if ramdisk.content_sha256 != digest.to_hex()
+        || userdata.range_start != preboot::USERDATA_START
+        || userdata.range_length != preboot::USERDATA_BYTES
+    {
+        return Err(refused(
+            "Preboot image or userdata range differs from the sealed source.",
+        ));
+    }
+    let path = runtime
+        .join("derived-artifacts")
+        .join("preboot")
+        .join(format!("{}.img", digest.to_hex()));
+    let file = std::fs::File::open(path).map_err(refused)?;
+    let mut bytes = Vec::new();
+    file.take(preboot::MAX_IMAGE_BYTES as u64 + 1)
+        .read_to_end(&mut bytes)
+        .map_err(refused)?;
+    if sha256(&bytes) != digest || bytes.len() as u64 != ramdisk.range_length {
+        return Err(refused("Preboot derivative content changed."));
+    }
+    preboot::inspect(&bytes).map_err(refused)
 }
 
 fn current_observation(

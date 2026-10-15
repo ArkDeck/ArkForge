@@ -6,3 +6,6 @@
 # generator, and their file digests are part of the generated contract.
 /profiles/** -text
 /transcripts/** -text
+
+# These scripts are sealed firmware bytes, identical on every build host.
+/crates/arkforge-artifact/src/preboot-*.sh -text

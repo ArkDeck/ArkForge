@@ -20,6 +20,7 @@ use std::process::{Command, Stdio};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 pub(super) mod partition;
+mod preboot;
 
 const POLL_INTERVAL: Duration = Duration::from_millis(100);
 const OUTPUT_LIMIT: usize = 64 * 1024;
