@@ -3,7 +3,7 @@
 set -eu
 root=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
 scratch=$(mktemp -d "${TMPDIR:-/tmp}/arkforge-preboot-holder.XXXXXXXX")
-trap 'rm -f -- "$scratch/cmdline" "$scratch/toybox" "$scratch/matcher"; rmdir -- "$scratch"' EXIT
+trap 'rm -f -- "$scratch/cmdline" "$scratch/toybox" "$scratch/matcher" "$scratch/measure.log"; rmdir -- "$scratch"' EXIT
 cat > "$scratch/toybox" <<'SH'
 #!/bin/sh
 case "$1" in
@@ -23,6 +23,7 @@ do
             /^    bytes=/ { copy=1 }
             copy {
                 gsub(/\/proc\/\$holder\/cmdline/, "\"$p/cmdline\"")
+                gsub(/\/af-preboot\/measure.log/, "\"$p/measure.log\"")
                 if ($0 ~ /^    if test /) {
                     sub(/; then.*/, "; then exit 0; else exit 1; fi")
                     print

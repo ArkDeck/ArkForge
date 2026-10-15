@@ -23,6 +23,9 @@ jobs:
       - name: Preboot shell compatibility
         shell: bash
         run: sh scripts/test-preboot-holder.sh
+      - name: Preboot init handoff
+        shell: bash
+        run: python scripts/test-preboot-init.py
       - name: Boot-loop restoration orchestration
         run: python -m unittest discover -s scripts -p test_restore_boot_loop.py
       - name: Clippy
