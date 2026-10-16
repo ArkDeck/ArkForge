@@ -754,6 +754,9 @@ fn serve(
                 // Its connection does not own the durable runtime or its jobs.
                 // Handle this request once; never replay it after a failed reply.
                 let handled = (|| -> Result<bool, StandaloneError> {
+                    stream
+                        .set_read_timeout(Some(Duration::from_secs(10)))
+                        .map_err(|error| internal("bound the supervisor request wait", error))?;
                     let Some(request) = read_frame(&mut stream)
                         .map_err(|error| internal("read supervisor request", error))?
                     else {

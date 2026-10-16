@@ -228,7 +228,11 @@ mod platform {
         }
 
         pub fn accept(&mut self) -> std::io::Result<Stream> {
-            self.0.accept().map(|(stream, _)| Stream(stream))
+            let (stream, _) = self.0.accept()?;
+            // BSD/macOS may inherit O_NONBLOCK from a polling listener.
+            // Framed sessions use blocking reads with explicit timeouts.
+            stream.set_nonblocking(false)?;
+            Ok(Stream(stream))
         }
     }
 

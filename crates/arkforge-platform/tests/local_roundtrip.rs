@@ -126,3 +126,27 @@ fn an_unserved_endpoint_read_times_out() {
         started.elapsed()
     );
 }
+
+#[test]
+fn accepted_sessions_do_not_inherit_the_polling_listeners_nonblocking_mode() {
+    let root = TempRoot::new("accepted-timeout");
+    let endpoint = LocalEndpoint::for_runtime(&root.0, LocalChannel::Supervisor);
+    let mut listener = LocalListener::bind(&endpoint).unwrap();
+    listener.set_nonblocking(true).unwrap();
+    let _client = LocalStream::connect(&endpoint).unwrap();
+    let mut server = listener.accept().unwrap();
+    server
+        .set_read_timeout(Some(Duration::from_millis(250)))
+        .unwrap();
+    let started = Instant::now();
+    let error = server.read(&mut [0]).unwrap_err();
+    assert!(matches!(
+        error.kind(),
+        std::io::ErrorKind::WouldBlock | std::io::ErrorKind::TimedOut
+    ));
+    assert!(
+        started.elapsed() >= Duration::from_millis(100),
+        "accepted session returned immediately instead of honoring its read timeout"
+    );
+    assert!(started.elapsed() < Duration::from_secs(5));
+}

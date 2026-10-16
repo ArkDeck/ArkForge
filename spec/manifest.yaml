@@ -97,6 +97,9 @@ files:
     status: draft
   - path: ports/device-control.md
     status: draft
+  - path: ports/authority-maintenance.md
+    status: draft
+    role: consumer-owned verification and original-ramdisk restoration port
   - path: ports/standalone-verification.md
     status: draft
   - path: ports/ipc-framing.md
