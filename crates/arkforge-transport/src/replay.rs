@@ -36,6 +36,16 @@ impl TranscriptTransport {
         &self.transcript
     }
 
+    /// Whether this occurrence was recorded with status `ok`.
+    ///
+    /// A missing action, a mid-transfer disconnect, and a loader-switch timeout
+    /// are all incomplete. Replay reports the recorded status and does not
+    /// promote a failure to success.
+    pub fn action_completed(&self, action: &str, occurrence: usize) -> bool {
+        self.invocation(action, occurrence)
+            .is_ok_and(|record| record.status == RecordStatus::Ok)
+    }
+
     /// The recorded result of one semantic action.
     ///
     /// `occurrence` is 0-based: a plan that writes nine partitions replays nine

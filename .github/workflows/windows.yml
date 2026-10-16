@@ -1,5 +1,12 @@
 name: Windows
 
+# Every pull request runs native Windows tests. `cargo test` on this runner
+# compiles arkforge-usb's platform_windows.rs and windows_topology.rs (those
+# files are Windows-only) and the USB transcript replay suites
+# golden_transcript_parity and failure_transcript_replay.
+# windows-acceptance.yml stays workflow_dispatch: it is physical DAYU200
+# acceptance, not this per-PR unit and replay gate.
+
 on:
   push:
   pull_request:
@@ -33,6 +40,10 @@ jobs:
         run: python -m unittest discover -s scripts -p test_restore_boot_loop.py
       - name: Clippy
         run: cargo clippy --workspace --all-targets --all-features -- -D warnings
+      - name: Windows USB unit tests and transcript replay
+        run: |
+          cargo test -p arkforge-usb --lib
+          cargo test -p arkforge-transport --test golden_transcript_parity --test failure_transcript_replay
       - name: Test native Windows workspace
         run: cargo test --workspace --all-targets
       - name: Parse release PowerShell
