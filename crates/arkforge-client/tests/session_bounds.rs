@@ -89,3 +89,67 @@ fn a_bounded_public_session_does_not_wait_on_a_silent_daemon() {
     assert!(started.elapsed() < Duration::from_secs(2));
     daemon.join().unwrap();
 }
+
+#[test]
+fn both_session_kinds_send_the_pinned_hello_and_stop_at_a_refusal() {
+    for (label, channel) in [
+        ("public-refusal", LocalChannel::Public),
+        ("controller-refusal", LocalChannel::Controller),
+    ] {
+        let root = TempRoot::new(label);
+        let endpoint = LocalEndpoint::for_runtime(&root.0, channel);
+        let mut listener = LocalListener::bind(&endpoint).unwrap();
+        let server = std::thread::spawn(move || {
+            let mut stream = listener.accept().unwrap();
+            stream
+                .set_read_timeout(Some(Duration::from_secs(2)))
+                .unwrap();
+            let hello = Hello::decode(&read_frame(&mut stream).unwrap().unwrap()).unwrap();
+            assert_eq!((hello.protocol_major, hello.protocol_minor), (1, 0));
+            assert_eq!(
+                hello.session_kind,
+                if label == "public-refusal" {
+                    arkforge_ipc::SessionKind::Public
+                } else {
+                    arkforge_ipc::SessionKind::Controller
+                }
+            );
+            write_frame(
+                &mut stream,
+                &HelloAck {
+                    protocol_major: 2,
+                    protocol_minor: 0,
+                    session_kind: hello.session_kind,
+                    daemon_version: "fixture".into(),
+                    refusal: Some("fixture major mismatch".into()),
+                    execution_ready: false,
+                    execution_blockers: vec![],
+                    toolchain_id: String::new(),
+                    toolchain_sha256: String::new(),
+                }
+                .encode(),
+            )
+            .unwrap();
+            assert!(
+                read_frame(&mut stream).unwrap().is_none(),
+                "no request may follow refusal"
+            );
+        });
+        let error = if label == "public-refusal" {
+            PublicClient::connect(&root.0).unwrap_err()
+        } else {
+            ControllerClient::connect(&root.0).unwrap_err()
+        };
+        assert_eq!(error.code, "PROTOCOL_REFUSED");
+        assert_eq!(
+            error.message,
+            if label == "public-refusal" {
+                "The daemon refused the public session: fixture major mismatch"
+            } else {
+                "fixture major mismatch"
+            }
+        );
+        assert!(!error.retryable);
+        server.join().unwrap();
+    }
+}

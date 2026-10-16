@@ -141,3 +141,16 @@ actions, another unresolved intent, cancellation or an unexpired request MUST
 NOT qualify through this case. All complete-source, identity, immutable
 artifact, published coverage, new budget and replacement verification gates
 still apply; no standalone read result can complete the old job.
+
+### AF-REC-011 — consumer authority original-ramdisk restoration
+status: draft
+source: adapters/arkforge-arkdeck-adapter/src/maintenance.rs
+tests: []
+gap: Rust fake-port single-consumption and failure tests exist; Runtime ports and hardware acceptance remain pending.
+
+The consumer maintenance port MUST restore only a confirmed full-flash source
+through a distinct exactly authorized original-ramdisk plan, as specified in
+`ports/authority-maintenance.md`. It MUST consume a durable single-use reservation
+before dispatch, never retry an unknown outcome, and require separate full-hash
+verification before returning success. It MUST NOT classify ramdisk restoration
+as complete-overwrite recovery or change historical source outcomes.

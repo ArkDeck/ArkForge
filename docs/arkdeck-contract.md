@@ -189,3 +189,16 @@ loop on the display does not by itself mean a USB session exists.
 together with `recovery_contract_id` and `recovery_contract_sha256`. ArkDeck
 shows those three fields as the profile recovery identity. The boot-loop script
 handles the ramdisk case above; it does not replace the guide.
+
+## Consumer-owned maintenance API (development)
+
+`arkforge_arkdeck_adapter::maintenance` exposes `verify` and `restore` as typed,
+in-process workflows over Runtime-owned ports. They do not spawn the standalone
+CLI or acquire its authority. The port contract and remaining integration work
+are in `spec/ports/authority-maintenance.md`. This addition leaves the IPC Hello,
+step/control tables and their 1.0.0 compatibility identifiers unchanged.
+
+Development consumers pin a full reviewed commit with `rev`; do not create a
+tag or release merely to consume this API. A consumer requiring a main-only
+pin must wait for this API's PR to merge before advancing its pin. All ArkForge
+crates must move together, and both consumer_contract tests must pass.

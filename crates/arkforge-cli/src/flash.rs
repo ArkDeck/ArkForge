@@ -479,10 +479,10 @@ pub(crate) fn require_campaign_acknowledgement(
     runtime_dir: &Path,
     given: Option<&str>,
 ) -> Result<(), CliError> {
-    let running = supervisor::status(runtime_dir)
-        .ok()
-        .map(|status| status.hardware_campaign)
-        .filter(|campaign| !campaign.is_empty());
+    // A failed read is not evidence that the runtime has no campaign.
+    // Keep the gate closed if the status socket disappears or fails decoding.
+    let status = supervisor::status(runtime_dir)?;
+    let running = (!status.hardware_campaign.is_empty()).then_some(status.hardware_campaign);
     match (running.as_deref(), given) {
         (None, None) => Ok(()),
         (Some(running), Some(given)) if running == given => Ok(()),
@@ -1357,4 +1357,18 @@ fn plan_acknowledgements(plan: &ExecutablePlan) -> Vec<String> {
 }
 fn execution_support_state_permits(state: &str) -> bool {
     matches!(state, "productionVerified" | "hardwareCampaign")
+}
+
+#[cfg(test)]
+mod campaign_status_tests {
+    use super::*;
+
+    #[test]
+    fn unavailable_status_is_not_a_non_campaign_runtime() {
+        let root =
+            std::env::temp_dir().join(format!("arkforge-absent-status-{}", std::process::id()));
+        assert!(!root.exists());
+        assert!(require_campaign_acknowledgement(&root, None).is_err());
+        assert!(require_campaign_acknowledgement(&root, Some("campaign")).is_err());
+    }
 }

@@ -242,3 +242,9 @@ areas:
         symbol: arkforge_platform
       - req: ports/device-control.md
         symbol: arkforge_standalone::hdc_control; arkforge_arkdeck_adapter::control
+
+  - area: MAINTENANCE
+    symbols:
+      - req: AF-VER-010, AF-REC-011
+        symbol: arkforge_arkdeck_adapter::maintenance::{verify, restore}
+        tests: [adapters/arkforge-arkdeck-adapter/tests/maintenance.rs]

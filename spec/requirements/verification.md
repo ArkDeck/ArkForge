@@ -112,3 +112,15 @@ Restoring the original ramdisk MUST use a separate sealed destructive plan
 with exactly that pinned partition image, original identity/permit/journal
 rules and no userdata write. It MUST NOT claim complete-overwrite recovery
 coverage. Original jobs and verification records MUST remain immutable.
+
+### AF-VER-010 — consumer authority verification port
+status: draft
+source: adapters/arkforge-arkdeck-adapter/src/maintenance.rs
+tests: []
+gap: Rust fake-port fault injection exists; cross-language fixtures and real authority integration remain pending.
+
+A consumer authority MAY use the adapter maintenance port described in
+`ports/authority-maintenance.md`. It MUST derive read ranges from a correlated
+sealed successful source, retain target exclusion, persist intent before reads,
+recheck identity around each read and persist separate typed results. It MUST
+NOT use the standalone authority's namespace, records or endpoint.

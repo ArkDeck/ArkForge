@@ -27,6 +27,7 @@
 #![forbid(unsafe_code)]
 
 pub mod control;
+pub mod maintenance;
 
 use arkforge_core::step::{
     BindingRequirement, CancellationPolicy, FlashStepKind, PublicFlashStep, WorkflowEffect,
