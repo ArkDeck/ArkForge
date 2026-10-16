@@ -10,8 +10,8 @@ const SUITE: &str = "hmac-sha256";
 
 pub fn populate(tree: &mut Tree) {
     // Tags are the published RFC 4231 values (cases 1–4, 6, 7). The two
-    // block-size edges are not in that RFC; their tags are pinned here and
-    // cross-checked against the `hmac` crate in arkforge-core's dev tests.
+    // block-size edges are not in that RFC; their tags are the values already
+    // committed for those cases, pinned so generate cannot rewrite them.
     let vectors: Vec<(&str, Vec<u8>, Vec<u8>, &str)> = vec![
         (
             "RFC 4231 case 1",

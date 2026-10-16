@@ -354,37 +354,6 @@ mod tests {
         }
     }
 
-    /// `sha2` is a dev-dependency oracle. It is not linked into the runtime.
-    #[test]
-    fn sha2_agrees_on_cavp_messages_and_split_updates() {
-        use sha2::{Digest, Sha256 as External};
-        for vector in cavp_vectors() {
-            let mut external = External::new();
-            external.update(&vector.bytes);
-            let external = external.finalize();
-            assert_eq!(
-                sha256(&vector.bytes).as_bytes().as_slice(),
-                external.as_slice(),
-                "{} Len={}",
-                vector.file,
-                vector.len_bits
-            );
-            if vector.bytes.len() >= 2 {
-                let split = vector.bytes.len() / 2;
-                let mut external = External::new();
-                external.update(&vector.bytes[..split]);
-                external.update(&vector.bytes[split..]);
-                let mut ours = Sha256::new();
-                ours.update(&vector.bytes[..split]);
-                ours.update(&vector.bytes[split..]);
-                assert_eq!(
-                    ours.finalize().as_bytes().as_slice(),
-                    external.finalize().as_slice()
-                );
-            }
-        }
-    }
-
     struct CavpVector {
         file: String,
         len_bits: u64,

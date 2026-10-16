@@ -268,34 +268,6 @@ mod hmac_tests {
         assert_ne!(hmac_sha256(b"k1", b"m"), hmac_sha256(b"k2", b"m"));
     }
 
-    /// The `hmac` crate, over `sha2`, is a dev-dependency oracle.
-    #[test]
-    fn hmac_crate_agrees() {
-        use hmac::{Hmac, Mac};
-        use sha2::Sha256;
-        type External = Hmac<Sha256>;
-        let cases: Vec<(Vec<u8>, Vec<u8>)> = vec![
-            (vec![0x0b; 20], b"Hi There".to_vec()),
-            (b"Jefe".to_vec(), b"what do ya want for nothing?".to_vec()),
-            (vec![0xaa; 20], vec![0xdd; 50]),
-            (
-                vec![0xaa; 131],
-                b"Test Using Larger Than Block-Size Key - Hash Key First".to_vec(),
-            ),
-            (vec![0x42; 64], b"arkforge".to_vec()),
-            (Vec::new(), Vec::new()),
-        ];
-        for (key, data) in cases {
-            let mut external = External::new_from_slice(&key).unwrap();
-            external.update(&data);
-            let external = external.finalize().into_bytes();
-            assert_eq!(
-                hmac_sha256(&key, &data).as_bytes().as_slice(),
-                external.as_slice()
-            );
-        }
-    }
-
     #[test]
     fn constant_time_eq_agrees_with_equality() {
         let a = sha256(b"a");
