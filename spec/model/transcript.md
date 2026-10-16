@@ -58,6 +58,8 @@ never publish `productionVerified` (AF-TRN-021).
 | `transcripts/dayu200-gj4-ecamp-96effff15.yaml` | derived-from-published-receipts | ArkDeck GJ-4 campaign ECAMP-96EFFF15, 13-step receipt chain, 2026-08-05 |
 | `transcripts/dayu200-gj4-ecamp-31e041bc.yaml` | derived-from-published-receipts | ArkDeck GJ-4 campaign ECAMP-31E041BC |
 | `transcripts/dayu600-research-synthetic.yaml` | synthetic | DAYU600 research (no device measured) |
+| `transcripts/synthetic/dayu200-mid-transfer-disconnect.yaml` | synthetic | replay of a bulk write that disconnects before the declared length |
+| `transcripts/synthetic/dayu200-loader-switch-timeout.yaml` | synthetic | replay of a Loader switch that detaches and then times out with no attach |
 
 Every digest in a derived transcript is `SHA-256("arkforge/derived-transcript/v1|<id>|<field>|<basis>")`
 and is recomputed by `crates/arkforge-transport/tests/golden_transcript_parity.rs`,

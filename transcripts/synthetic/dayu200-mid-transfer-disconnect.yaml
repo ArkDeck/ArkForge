@@ -1,0 +1,44 @@
+# Synthetic failure transcript — DAYU200 bulk write ends mid-transfer.
+#
+# Provenance: synthetic. This is not a capture and not a published receipt.
+# It exists so replay tests can see a disconnect during flash-partitions
+# without treating that record as a completed write. Nothing here is evidence
+# of how RockUSB behaves on a board.
+
+schemaVersion: arkforge.transcript/v1
+
+transcript:
+  id: SYN-DAYU200-MID-TRANSFER-DISCONNECT
+  provenance: synthetic
+  source: "synthetic mid-transfer disconnect; no device was measured"
+  profileId: org.openharmony.dayu200
+
+records:
+  - sequence: 1
+    kind: observation
+    atEpochMs: 1000
+    status: ok
+    observation:
+      id: OBS-LOADER
+      mode: rockusb-loader
+      topologyDigest: 00000000000000000000000000000000000000000000000000000000000000a1
+      descriptorDigest: 00000000000000000000000000000000000000000000000000000000000000a2
+      serialKind: absent
+      identityStrength: serialAndTopology
+    semantic:
+      - key: step
+        value: observe-loader-before-write
+  - sequence: 2
+    kind: invocation
+    atEpochMs: 1500
+    durationMs: 1200
+    status: disconnected
+    action: flash-partitions
+    requestBytes: 8388608
+    semantic:
+      - key: step
+        value: flash-partitions
+      - key: transferredBytes
+        value: "1048576"
+      - key: declaredBytes
+        value: "8388608"
