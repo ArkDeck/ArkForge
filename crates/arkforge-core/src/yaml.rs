@@ -117,7 +117,7 @@ pub fn parse(source: &str) -> Result<YamlValue, YamlError> {
         return Ok(YamlValue::Null);
     }
     let mut cursor = 0usize;
-    let value = parse_block(&lines, &mut cursor, lines[0].indent)?;
+    let value = parse_block(&lines, &mut cursor, lines[0].indent, 0)?;
     if cursor != lines.len() {
         return Err(error(
             lines[cursor].number,
@@ -181,14 +181,28 @@ fn strip_comment(text: &str) -> &str {
     text
 }
 
-fn parse_block(lines: &[Line], cursor: &mut usize, indent: usize) -> Result<YamlValue, YamlError> {
+/// Profiles are reviewed by eye. Deeper than this is not a document a person
+/// can check, and unbounded recursion is a stack overflow on attacker-controlled
+/// text (the same input the profile loader and the transcript parser accept).
+const MAX_DEPTH: usize = 64;
+
+fn parse_block(
+    lines: &[Line],
+    cursor: &mut usize,
+    indent: usize,
+    depth: usize,
+) -> Result<YamlValue, YamlError> {
+    if depth > MAX_DEPTH {
+        let line = lines.get(*cursor).map(|line| line.number).unwrap_or(1);
+        return Err(error(line, "nesting depth limit exceeded"));
+    }
     if *cursor >= lines.len() {
         return Ok(YamlValue::Null);
     }
     if lines[*cursor].content.starts_with("- ") || lines[*cursor].content == "-" {
-        parse_sequence(lines, cursor, indent)
+        parse_sequence(lines, cursor, indent, depth)
     } else {
-        parse_mapping(lines, cursor, indent)
+        parse_mapping(lines, cursor, indent, depth)
     }
 }
 
@@ -196,6 +210,7 @@ fn parse_mapping(
     lines: &[Line],
     cursor: &mut usize,
     indent: usize,
+    depth: usize,
 ) -> Result<YamlValue, YamlError> {
     let mut entries: Vec<(String, YamlValue)> = Vec::new();
     while *cursor < lines.len() {
@@ -225,7 +240,7 @@ fn parse_mapping(
         let value = if rest.is_empty() {
             let child_indent = lines.get(*cursor).map(|next| next.indent);
             match child_indent {
-                Some(child) if child > indent => parse_block(lines, cursor, child)?,
+                Some(child) if child > indent => parse_block(lines, cursor, child, depth + 1)?,
                 _ => YamlValue::Null,
             }
         } else {
@@ -240,6 +255,7 @@ fn parse_sequence(
     lines: &[Line],
     cursor: &mut usize,
     indent: usize,
+    depth: usize,
 ) -> Result<YamlValue, YamlError> {
     let mut items = Vec::new();
     while *cursor < lines.len() {
@@ -264,7 +280,7 @@ fn parse_sequence(
         if inline.is_empty() {
             let child_indent = lines.get(*cursor).map(|next| next.indent);
             let value = match child_indent {
-                Some(child) if child > indent => parse_block(lines, cursor, child)?,
+                Some(child) if child > indent => parse_block(lines, cursor, child, depth + 1)?,
                 _ => YamlValue::Null,
             };
             items.push(value);
@@ -277,7 +293,9 @@ fn parse_sequence(
             let value = if rest.is_empty() {
                 let child_indent = lines.get(*cursor).map(|next| next.indent);
                 match child_indent {
-                    Some(child) if child > item_column => parse_block(lines, cursor, child)?,
+                    Some(child) if child > item_column => {
+                        parse_block(lines, cursor, child, depth + 1)?
+                    }
                     _ => YamlValue::Null,
                 }
             } else {
@@ -299,7 +317,9 @@ fn parse_sequence(
                 let value = if rest.is_empty() {
                     let child_indent = lines.get(*cursor).map(|next| next.indent);
                     match child_indent {
-                        Some(child) if child > item_column => parse_block(lines, cursor, child)?,
+                        Some(child) if child > item_column => {
+                            parse_block(lines, cursor, child, depth + 1)?
+                        }
                         _ => YamlValue::Null,
                     }
                 } else {
@@ -620,5 +640,26 @@ modeTransitions:
     fn misaligned_indentation_is_rejected_rather_than_guessed() {
         let document = "a:\n  b: 1\n   c: 2\n";
         assert!(parse(document).is_err());
+    }
+
+    #[test]
+    fn nesting_within_the_depth_limit_is_accepted() {
+        let mut document = String::new();
+        for depth in 0..MAX_DEPTH {
+            document.push_str(&" ".repeat(depth * 2));
+            document.push_str("k:\n");
+        }
+        assert!(parse(&document).is_ok());
+    }
+
+    #[test]
+    fn nesting_past_the_depth_limit_is_rejected() {
+        let mut document = String::new();
+        for depth in 0..=MAX_DEPTH + 1 {
+            document.push_str(&" ".repeat(depth * 2));
+            document.push_str("k:\n");
+        }
+        let error = parse(&document).unwrap_err();
+        assert!(error.message.contains("nesting depth limit"), "{error}");
     }
 }
