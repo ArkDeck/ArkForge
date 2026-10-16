@@ -3,7 +3,8 @@ status: informative (the fixtures themselves are normative)
 
 `v1/` holds the conformance fixtures for spec version 1. They are generated
 from the Rust reference implementation by `crates/arkforge-conformance` and
-committed; `manifest.json` lists every file with its SHA-256.
+committed; `manifest.json` lists every file with its SHA-256. How large a new
+case may be, and what not to commit, is [GROWTH.md](GROWTH.md).
 
 ## Layout
 
@@ -60,7 +61,8 @@ The runner is the port's own code; it MUST NOT call the Rust implementation.
 
 - A committed corpus of parser-rejected archives. The same rejection surface
   is currently exercised by the seeded mutation campaign in
-  `crates/arkforge-artifact/tests/parser_fuzz.rs`.
+  `crates/arkforge-artifact/tests/parser_fuzz.rs`. Any such corpus stays a
+  reviewed subset, as [GROWTH.md](GROWTH.md) describes.
 
 ## Regenerating
 

@@ -105,6 +105,9 @@ files:
     status: draft
   - path: conformance/README.md
     status: informative
+  - path: conformance/GROWTH.md
+    status: informative
+    role: size guidance for new conformance fixtures
   - path: conformance/v1/manifest.json
     status: normative
     note: generated; lists every fixture file with its SHA-256
