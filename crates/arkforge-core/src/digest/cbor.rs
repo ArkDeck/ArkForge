@@ -235,11 +235,17 @@ struct Cursor<'a> {
 
 impl<'a> Cursor<'a> {
     fn take(&mut self, count: usize) -> Result<&'a [u8], CborError> {
-        if self.position + count > self.input.len() {
+        // A claimed length of `u64::MAX` must not wrap `position + count` into
+        // a slice of the real input. Checked addition rejects it as truncation.
+        let end = self
+            .position
+            .checked_add(count)
+            .ok_or(CborError::Truncated)?;
+        if end > self.input.len() {
             return Err(CborError::Truncated);
         }
-        let slice = &self.input[self.position..self.position + count];
-        self.position += count;
+        let slice = &self.input[self.position..end];
+        self.position = end;
         Ok(slice)
     }
 
@@ -500,6 +506,15 @@ mod tests {
         let decoded = decode_canonical(&first).unwrap();
         let second = decoded.to_canonical_bytes().unwrap();
         assert_eq!(first, second);
+    }
+
+    #[test]
+    fn a_byte_string_claiming_u64_max_is_truncated_not_an_overflow() {
+        // Major type 2, 8-byte argument, length u64::MAX. Adding that length
+        // to the cursor used to wrap and panic.
+        let mut input = vec![0x5b];
+        input.extend_from_slice(&u64::MAX.to_be_bytes());
+        assert_eq!(decode_canonical(&input), Err(CborError::Truncated));
     }
 
     fn hex(bytes: &[u8]) -> String {
