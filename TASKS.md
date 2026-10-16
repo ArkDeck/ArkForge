@@ -9,7 +9,7 @@
 |---|---|---|---|
 | AF-V1 | ArkForge Core + DAYU200 read-only parity | — | ✅ 完成([验收证据](docs/evidence/AF-V1-acceptance.md)) |
 | AF-V2 | DAYU200 ArkForge production cutover | AF-V1 | 🟡 真机全量刷写 2026-08-18 首过、08-19 原生复验([验收证据](docs/evidence/AF-V2-acceptance.md) §6)；余：真机 crash 半、掉电、multi-device、recovery 物化 |
-| NRU | 原生 RockUSB 换轨(ArkDeck chg-2026-063 的 ArkForge 半) | AF-V2 首过 | ✅ 完成：`a935798`/`26aa527`(读+parity)、`3567484`(写)、`8129a7a`(默认原生)、`c049a11`(移除 vendor 运行时)；[换轨证据](docs/evidence/runs/2026-08-19-dayu200-green-flash-and-native-cutover.md) |
+| <a id="nru"></a>NRU | 原生 RockUSB 换轨(ArkDeck chg-2026-063 的 ArkForge 半) | AF-V2 首过 | ✅ 完成：`a935798`/`26aa527`(读+parity)、`3567484`(写)、`8129a7a`(默认原生)、`c049a11`(移除 vendor 运行时)；[换轨证据](docs/evidence/runs/2026-08-19-dayu200-green-flash-and-native-cutover.md) |
 | AF-V3 | DAYU600 evidence + plan-only | AF-V1(共用 API 面) | 🟡 软件半完成([验收证据](docs/evidence/AF-V3-acceptance.md))；证据半需真机 |
 | AF-V4 | DAYU600 production execute | AF-V3 + AF-V2(engine) + 17.5 证据门全 PASS | ⛔ 阻塞：18 条证据门 0 条 PASS |
 | AF-P1 | ArkFlash/CLI 消费边界抽离 | AF-V2 软件面 | ✅ `arkforge-client`、`arkforge-standalone`、application v1 DTO/错误/进度/mock 已落地；CLI help/行为基线一致 |
@@ -24,6 +24,8 @@
 - legacy Swift Rockchip lowering 的删除门见 architecture.md 21.3。
 
 ---
+
+<a id="af-v1"></a>
 
 ## AF-V1：ArkForge Core + DAYU200 read-only parity
 
@@ -67,6 +69,8 @@ artifact import
 `proto/arkforge.proto`、`arkforge-cli` 只读诊断。
 
 **边界**：见[验收证据](docs/evidence/AF-V1-acceptance.md)第 4 节。
+
+<a id="af-v2"></a>
 
 ## AF-V2：DAYU200 ArkForge production cutover
 

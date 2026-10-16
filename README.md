@@ -20,7 +20,7 @@ ArkForge 目前处于**硬件准入阶段**。生产支持注册表仍为空；�
 
 | 设备 | 能力 | 状态 |
 | --- | --- | --- |
-| **DAYU200**（RK3568 / RockUSB） | 固件检查、设备观察、九分区完整覆写、逐分区验证、任务恢复、原生 RockUSB 救援 | 原生执行层已完成多次真机全量刷写；独立 CLI 授权链路与救援链路仍需各自的受控真机验收和维护者审核 |
+| **DAYU200**（RK3568 / RockUSB） | 固件检查、设备观察、九分区完整覆写、逐分区验证、任务恢复、原生 RockUSB 救援 | 原生执行层已完成多次真机全量刷写；独立 CLI 授权链路与救援链路仍需各自的受控真机验收和维护者审核。台账（2026-08-19）：[AF-V1](TASKS.md#af-v1)、[AF-V2](TASKS.md#af-v2)、[NRU](TASKS.md#nru) |
 | **DAYU600**（uis7885 / PAC） | PAC 结构观察、Profile 候选、不可执行的 PlanAssessment | 仅研究与计划评估；18 条执行证据门当前 0 条通过，不提供刷写入口 |
 
 `--hardware-campaign` 只用于具名、受控的硬件验收。它不是 `--force`，不会跳过安全门，
@@ -30,7 +30,9 @@ ArkForge 目前处于**硬件准入阶段**。生产支持注册表仍为空；�
 ## 构建
 
 仓库通过 `rust-toolchain.toml` 跟随 Rust stable，最低支持 Rust 1.99.0 / Edition 2024。
-当前 runtime 面向 macOS 与 Windows x64；Windows 的发布签名和真机证据按独立成熟度组合验收。
+受支持的宿主是 macOS 与 Windows x64，也是每条 pull request 实际跑 CI 的两个平台。
+Linux 没有原生 USB，也不是 CI 宿主。Windows 的发布签名和真机证据按独立成熟度组合验收，
+不由每条 PR 的单元测试代替。
 
 ```bash
 git clone https://github.com/ArkDeck/ArkForge.git
@@ -41,6 +43,25 @@ target/debug/arkforge
 
 不带子命令的 `arkforge` 等价于 `arkforge status`：它只报告主机、runtime、设备、
 artifact、任务与 blocker，不会为了回答状态而启动 runtime 或修改设备。
+
+## 持续集成
+
+每条 push 和 pull request 运行下面两个 workflow。它们覆盖的宿主就是上一节的
+macOS 与 Windows x64。
+
+| Workflow | 宿主 | 每次运行的内容 |
+| --- | --- | --- |
+| [`.github/workflows/rust.yml`](.github/workflows/rust.yml) | `macos-latest` | `cargo fmt`、clippy `-D warnings`、`cargo test --workspace --all-targets`、Swift SDK、preboot 脚本 |
+| [`.github/workflows/windows.yml`](.github/workflows/windows.yml) | `windows-latest` | 同一套 Rust 检查，加上 Windows 打包脚本解析和无硬件验收守卫。workspace 测试在 Windows 上编译 `platform_windows.rs` / `windows_topology.rs`，并跑 USB transcript replay（含 `golden_transcript_parity`） |
+
+[`.github/workflows/windows-acceptance.yml`](.github/workflows/windows-acceptance.yml)
+只接受手动 `workflow_dispatch`，跑在带 DAYU200 的自托管 Windows x64 runner 上。
+它不是每条 PR 的门。
+
+解析器 fuzz 随上面的 `cargo test` 在两个宿主上执行：seeded 变异在
+[`crates/arkforge-artifact/tests/parser_fuzz.rs`](crates/arkforge-artifact/tests/parser_fuzz.rs)。
+范围、语料和「拒绝必须是 typed error」的约定写在 [`fuzz/README.md`](fuzz/README.md)。
+默认分支上还没有独立的 libFuzzer workflow。
 
 ## 使用 ArkForge
 
