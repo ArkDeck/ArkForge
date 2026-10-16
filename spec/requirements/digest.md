@@ -12,12 +12,13 @@ host paths, locale text) is admitted into the digest model.
 
 ### AF-DIG-001 — SHA-256 is FIPS 180-4
 status: normative
-tests: [AF-CONF-SHA256-001..007]
+tests: [AF-CONF-SHA256-001..015]
 
 An implementation MUST compute SHA-256 exactly as FIPS 180-4 specifies,
 including for the empty message, single-block, multi-block and one-million-byte
-inputs. Digest text form is lowercase hex, 64 characters, no prefix
-(`model/vocabularies.yaml#digest-text-forms`).
+inputs, and for the reviewed NIST CAVP CAVS 11.0 byte-oriented short and long
+messages in the sha256 suite. Digest text form is lowercase hex, 64 characters,
+no prefix (`model/vocabularies.yaml#digest-text-forms`).
 
 ### AF-DIG-002 — HMAC-SHA-256 is RFC 2104 with a 64-byte block
 status: normative

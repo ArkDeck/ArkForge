@@ -337,6 +337,112 @@ mod tests {
         }
     }
 
+    /// NIST CAVP CAVS 11.0 byte-oriented short and long messages.
+    ///
+    /// The file stores the published `MD` lines. This test fails if the
+    /// implementation disagrees with those lines; it does not rewrite them.
+    #[test]
+    fn nist_cavp_byte_vectors() {
+        for vector in cavp_vectors() {
+            assert_eq!(
+                sha256(&vector.bytes).to_hex(),
+                vector.md,
+                "{} Len={}",
+                vector.file,
+                vector.len_bits
+            );
+        }
+    }
+
+    /// `sha2` is a dev-dependency oracle. It is not linked into the runtime.
+    #[test]
+    fn sha2_agrees_on_cavp_messages_and_split_updates() {
+        use sha2::{Digest, Sha256 as External};
+        for vector in cavp_vectors() {
+            let mut external = External::new();
+            external.update(&vector.bytes);
+            let external = external.finalize();
+            assert_eq!(
+                sha256(&vector.bytes).as_bytes().as_slice(),
+                external.as_slice(),
+                "{} Len={}",
+                vector.file,
+                vector.len_bits
+            );
+            if vector.bytes.len() >= 2 {
+                let split = vector.bytes.len() / 2;
+                let mut external = External::new();
+                external.update(&vector.bytes[..split]);
+                external.update(&vector.bytes[split..]);
+                let mut ours = Sha256::new();
+                ours.update(&vector.bytes[..split]);
+                ours.update(&vector.bytes[split..]);
+                assert_eq!(
+                    ours.finalize().as_bytes().as_slice(),
+                    external.finalize().as_slice()
+                );
+            }
+        }
+    }
+
+    struct CavpVector {
+        file: String,
+        len_bits: u64,
+        bytes: Vec<u8>,
+        md: String,
+    }
+
+    fn cavp_vectors() -> Vec<CavpVector> {
+        let mut file = String::new();
+        let mut len_bits = None;
+        let mut msg = None;
+        let mut out = Vec::new();
+        for line in include_str!("../../testdata/nist-sha256-cavp.rsp").lines() {
+            let line = line.trim();
+            if let Some(name) = line.strip_prefix("# file:") {
+                file = name.trim().to_string();
+                continue;
+            }
+            if line.is_empty() || line.starts_with('#') {
+                continue;
+            }
+            let Some((key, value)) = line.split_once('=') else {
+                continue;
+            };
+            let value = value.trim();
+            match key.trim() {
+                "Len" => len_bits = value.parse::<u64>().ok(),
+                "Msg" => msg = Some(value.to_string()),
+                "MD" => {
+                    let len_bits = len_bits.take().unwrap();
+                    let msg = msg.take().unwrap();
+                    let bytes = if len_bits == 0 {
+                        Vec::new()
+                    } else {
+                        hex_decode(&msg)
+                    };
+                    assert_eq!(bytes.len() as u64 * 8, len_bits);
+                    out.push(CavpVector {
+                        file: file.clone(),
+                        len_bits,
+                        bytes,
+                        md: value.to_string(),
+                    });
+                }
+                _ => {}
+            }
+        }
+        assert_eq!(out.len(), 8);
+        out
+    }
+
+    fn hex_decode(text: &str) -> Vec<u8> {
+        (0..text.len())
+            .step_by(2)
+            .map(|index| u8::from_str_radix(&text[index..index + 2], 16).unwrap())
+            .collect()
+    }
+
     #[test]
     fn hex_round_trip_rejects_uppercase_and_bad_length() {
         let digest = sha256(b"abc");

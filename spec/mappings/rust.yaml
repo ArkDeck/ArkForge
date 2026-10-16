@@ -17,10 +17,10 @@ areas:
     symbols:
       - req: AF-DIG-001
         symbol: arkforge_core::digest::sha256::Sha256
-        tests: [crates/arkforge-core/src/digest/sha256.rs tests]
+        tests: [crates/arkforge-core/src/digest/sha256.rs tests, including nist_cavp_byte_vectors and sha2_agrees_on_cavp_messages_and_split_updates]
       - req: AF-DIG-002
         symbol: arkforge_core::digest::hmac_sha256
-        tests: [crates/arkforge-core/src/digest/mod.rs hmac_tests::rfc4231_vectors]
+        tests: [crates/arkforge-core/src/digest/mod.rs hmac_tests::rfc4231_vectors, hmac_tests::hmac_crate_agrees]
       - req: AF-DIG-003..007
         symbol: arkforge_core::digest::cbor::{CborValue, decode_canonical, CborError}
         tests: [crates/arkforge-core/src/digest/cbor.rs tests, arkforge-conformance canonical-cbor suite]

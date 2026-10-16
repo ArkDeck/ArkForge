@@ -1,0 +1,23 @@
+{
+  "id": "AF-CONF-SHA256-013",
+  "suite": "sha256",
+  "title": "CAVP SHA256LongMsg Len=1304 bits (163 bytes)",
+  "kind": "digest",
+  "requirements": ["AF-DIG-001"],
+  "description": "SHA-256 of the input bytes, lowercase hex.",
+  "input": {
+    "source": "NIST CAVP CAVS 11.0 byte-oriented SHA-256",
+    "file": "SHA256LongMsg",
+    "lenBits": 1304,
+    "length": 163
+  },
+  "expected": {
+    "sha256": "3c593aa539fdcdae516cdf2f15000f6634185c88f505b39775fb9ab137a10aa2"
+  },
+  "files": {
+    "input.bin": {
+      "bytes": 163,
+      "sha256": "3c593aa539fdcdae516cdf2f15000f6634185c88f505b39775fb9ab137a10aa2"
+    }
+  }
+}

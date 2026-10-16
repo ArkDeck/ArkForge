@@ -980,7 +980,23 @@
       }
     },
     "sha256": {
-      "cases": ["AF-CONF-SHA256-001", "AF-CONF-SHA256-002", "AF-CONF-SHA256-003", "AF-CONF-SHA256-004", "AF-CONF-SHA256-005", "AF-CONF-SHA256-006", "AF-CONF-SHA256-007"],
+      "cases": [
+        "AF-CONF-SHA256-001",
+        "AF-CONF-SHA256-002",
+        "AF-CONF-SHA256-003",
+        "AF-CONF-SHA256-004",
+        "AF-CONF-SHA256-005",
+        "AF-CONF-SHA256-006",
+        "AF-CONF-SHA256-007",
+        "AF-CONF-SHA256-008",
+        "AF-CONF-SHA256-009",
+        "AF-CONF-SHA256-010",
+        "AF-CONF-SHA256-011",
+        "AF-CONF-SHA256-012",
+        "AF-CONF-SHA256-013",
+        "AF-CONF-SHA256-014",
+        "AF-CONF-SHA256-015"
+      ],
       "files": {
         "sha256/AF-CONF-SHA256-001/case.json": "3b4e5e3ed7a2aa9a5e117fa449c41a21249d8baf2dd9698533059aef6db1e1c1",
         "sha256/AF-CONF-SHA256-001/input.bin": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
@@ -996,7 +1012,31 @@
         "sha256/AF-CONF-SHA256-004/input.bin.hex": "7c445815054909fffb1c2a6044c544c03e51c1a024e7b84e76b71a3fb55396fa",
         "sha256/AF-CONF-SHA256-005/case.json": "e6bf76fa32f3f1ebd10799c66c5396f09ce591292e8558aa9c2f190e663e4e1b",
         "sha256/AF-CONF-SHA256-006/case.json": "d852b87141ab65cc3972806b7ed31cf986e2edb22720e365adfae0d690859af7",
-        "sha256/AF-CONF-SHA256-007/case.json": "0bf2b81500b001fb39b6478dfd915ced6970a8c0a075f4819549edb9d3a381ab"
+        "sha256/AF-CONF-SHA256-007/case.json": "0bf2b81500b001fb39b6478dfd915ced6970a8c0a075f4819549edb9d3a381ab",
+        "sha256/AF-CONF-SHA256-008/case.json": "838703be9fbcb8835e927ef29d3a5568d25c52a0d8d06a5b7d0fa061d9c36292",
+        "sha256/AF-CONF-SHA256-008/input.bin": "28969cdfa74a12c82f3bad960b0b000aca2ac329deea5c2328ebc6f2ba9802c1",
+        "sha256/AF-CONF-SHA256-008/input.bin.hex": "8241e07f6f8e159a9e0565dc2d807f1b01ef3466421865d8c2392046f9df0f65",
+        "sha256/AF-CONF-SHA256-009/case.json": "41e245e091818b88a7c9eec872485744c1fcfbefd3fd388956382854dae6ef45",
+        "sha256/AF-CONF-SHA256-009/input.bin": "6595a2ef537a69ba8583dfbf7f5bec0ab1f93ce4c8ee1916eff44a93af5749c4",
+        "sha256/AF-CONF-SHA256-009/input.bin.hex": "ad3996b53f53286905d51312ca20b5d540b48fa27815d529bf068b35d5dc68e8",
+        "sha256/AF-CONF-SHA256-010/case.json": "73c9dab05bfe653f78cd31404f1d755c6b5a4cec130520442422a4aa72af2cbf",
+        "sha256/AF-CONF-SHA256-010/input.bin": "cfb88d6faf2de3a69d36195acec2e255e2af2b7d933997f348e09f6ce5758360",
+        "sha256/AF-CONF-SHA256-010/input.bin.hex": "e1fd2dc3a140fd71f5977cd86f1c7bbbbe171fd45334b9f8e3fbd622def6fd16",
+        "sha256/AF-CONF-SHA256-011/case.json": "afb19bdb8c4e98eefa0c48c2c5ccb4530146db0b0531469440c3d98a4c697936",
+        "sha256/AF-CONF-SHA256-011/input.bin": "18041bd4665083001fba8c5411d2d748e8abbfdcdfd9218cb02b68a78e7d4c23",
+        "sha256/AF-CONF-SHA256-011/input.bin.hex": "4ed5281a8c414302398964facf31442763e62b1542774bcd3c391f6d1240f151",
+        "sha256/AF-CONF-SHA256-012/case.json": "c794b085830b60615221dc9fbb07b4d4b48aaadcb43eef7cff75f0c49658e2e0",
+        "sha256/AF-CONF-SHA256-012/input.bin": "42e61e174fbb3897d6dd6cef3dd2802fe67b331953b06114a65c772859dfc1aa",
+        "sha256/AF-CONF-SHA256-012/input.bin.hex": "48521cc915856eb5818bf61286b08433c8550c27d8c5af6c2e669901dcd531ee",
+        "sha256/AF-CONF-SHA256-013/case.json": "26ad693cf27336975b3cdd030f9bc229784ed86439360af1f2f62638be1be45e",
+        "sha256/AF-CONF-SHA256-013/input.bin": "3c593aa539fdcdae516cdf2f15000f6634185c88f505b39775fb9ab137a10aa2",
+        "sha256/AF-CONF-SHA256-013/input.bin.hex": "7dda256dd10472c4b47d43ae311a959307359f2b109274119517e48264803dcf",
+        "sha256/AF-CONF-SHA256-014/case.json": "de417c6935b495954884b7bc3c1e92f546957642d69e902fe98c25bb3b9b511d",
+        "sha256/AF-CONF-SHA256-014/input.bin": "46500b6ae1ab40bde097ef168b0f3199049b55545a1588792d39d594f493dca7",
+        "sha256/AF-CONF-SHA256-014/input.bin.hex": "93c95fdff881b69c9656b3d45db0166c72facc06b02fdcd60c74b170692f037d",
+        "sha256/AF-CONF-SHA256-015/case.json": "34a48f6f6a93817481364e3febc8729dc5a00edf5cfd6635f07f0bb7d68da049",
+        "sha256/AF-CONF-SHA256-015/input.bin": "33b6229592ca719e4e46f35b287617fedadd3b7c38be3c8c1c9f446d2d9085b3",
+        "sha256/AF-CONF-SHA256-015/input.bin.hex": "935dfac472277c84d498af5db06444b8df3b6e29d15e31179affe484f394d19d"
       }
     },
     "state-machine": {

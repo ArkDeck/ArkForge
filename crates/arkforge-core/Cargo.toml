@@ -11,3 +11,6 @@ repository.workspace = true
 
 [dev-dependencies]
 arkforge-artifact = { path = "../arkforge-artifact" }
+# Differential oracles only. They are not runtime dependencies (AFD-0001).
+hmac = "0.12.1"
+sha2 = "0.10.8"
