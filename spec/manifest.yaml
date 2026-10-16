@@ -134,7 +134,7 @@ external:
 
 suites:
   - id: sha256
-    cases: 7
+    cases: 15
   - id: hmac-sha256
     cases: 8
   - id: canonical-cbor

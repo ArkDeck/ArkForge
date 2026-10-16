@@ -39,7 +39,7 @@ The runner is the port's own code; it MUST NOT call the Rust implementation.
 
 | suite | cases | what it pins |
 |---|---:|---|
-| `sha256` | 7 | FIPS 180-4 vectors incl. 1 MB |
+| `sha256` | 15 | FIPS 180-4 vectors incl. 1 MB, plus a reviewed subset of NIST CAVP byte-oriented short and long messages |
 | `hmac-sha256` | 8 | RFC 4231 + key-length edges |
 | `canonical-cbor` | 69 | encode bytes, key ordering, depth limit, every rejection class |
 | `permit` | 49 | full signing-body bytes for the three published vectors, every verification outcome and order, strict decoding |

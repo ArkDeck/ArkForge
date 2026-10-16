@@ -17,7 +17,7 @@ areas:
     symbols:
       - req: AF-DIG-001
         symbol: arkforge_core::digest::sha256::Sha256
-        tests: [crates/arkforge-core/src/digest/sha256.rs tests]
+        tests: [crates/arkforge-core/src/digest/sha256.rs tests, including nist_cavp_byte_vectors]
       - req: AF-DIG-002
         symbol: arkforge_core::digest::hmac_sha256
         tests: [crates/arkforge-core/src/digest/mod.rs hmac_tests::rfc4231_vectors]
