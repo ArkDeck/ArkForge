@@ -13,6 +13,11 @@
 //! the ExecutionAuthority implementation and the IPC client, both of which are
 //! written against these two tables.
 //!
+//! Pin this crate and `arkforge-ipc` at the same [`CONTRACT_TAG`]. The
+//! handshake, flash-verify exits, and boot-loop surface are
+//! `docs/arkdeck-contract.md`. [`ARKDECK_CONTRACT_VERSION`] changes when those
+//! tables or that pin change.
+//!
 //! [`ManagedDeviceControlAction`]: arkforge_authority_api::ManagedDeviceControlAction
 //!
 //! Values are read from the ArkDeck audit baseline
@@ -27,6 +32,17 @@ use arkforge_core::step::{
     BindingRequirement, CancellationPolicy, FlashStepKind, PublicFlashStep, WorkflowEffect,
 };
 use core::fmt;
+
+pub use arkforge_ipc::contract::{
+    BOOT_LOOP_RESTORATION_SCHEMA, CONTRACT_TAG, FLASH_VERIFICATION_SCHEMA,
+    FLASH_VERIFY_EXIT_FAILED, FLASH_VERIFY_EXIT_MATCHED, FLASH_VERIFY_EXIT_PARTIAL,
+    PROTOCOL_VERSION, SKIP_MOUNTED_WRITABLE,
+};
+
+/// Step map, control map, IPC handshake, and recovery surface reviewed together.
+///
+/// Same `1.0.0` as [`CONTRACT_TAG`]. Bump both when ArkDeck's pin must move.
+pub const ARKDECK_CONTRACT_VERSION: &str = "arkforge.arkdeck-contract/1.0.0";
 
 /// The adapter's own version. It changes when this table changes, because the
 /// table is what ArkDeck admission depends on.

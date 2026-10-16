@@ -11,9 +11,12 @@
 //!
 //! Framing is transport-agnostic. `arkforge-platform` binds owner-only Unix
 //! sockets or local-only Windows named pipes without changing these messages.
+//!
+//! [`contract`] is the version ArkDeck pins. `Hello` / `HelloAck` negotiate it.
 
 #![forbid(unsafe_code)]
 
+pub mod contract;
 pub mod framing;
 pub mod messages;
 pub mod recovery;
@@ -21,9 +24,13 @@ pub mod wire;
 
 use core::fmt;
 
-/// Protocol version. Major must match; a peer with a higher minor is accepted
-/// and its unknown fields are skipped (IPC-001).
+/// Handshake major. A different major is [`contract::handshake_refusal`].
+///
+/// Package `arkforge.ipc.v1` tracks this major. The dotted form is
+/// [`contract::PROTOCOL_VERSION`].
 pub const PROTOCOL_MAJOR: u32 = 1;
+/// Handshake minor. A different minor is accepted; unknown fields are skipped
+/// (AF-IPC-003).
 pub const PROTOCOL_MINOR: u32 = 0;
 
 /// Which socket a peer connected on.

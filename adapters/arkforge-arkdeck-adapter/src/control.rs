@@ -29,6 +29,8 @@ use core::fmt;
 
 /// This table's version. It changes when the table changes, because ArkDeck's
 /// side of the port is written against it.
+///
+/// Included in [`crate::ARKDECK_CONTRACT_VERSION`] and [`crate::CONTRACT_TAG`].
 pub const CONTROL_TABLE_VERSION: &str = "arkforge.arkdeck-control-map/v1";
 
 /// The ArkDeck audit baseline these values were read from.

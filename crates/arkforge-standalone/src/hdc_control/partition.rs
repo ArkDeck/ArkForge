@@ -1,6 +1,7 @@
 //! Bounded Normal-mode reads. Caller paths, shell fragments and expected
 //! digests never reach the device; the closed partition name comes from a plan.
 use super::*;
+use arkforge_ipc::contract;
 use arkforge_ipc::messages::Effect;
 
 pub(crate) const TARGETS: [&str; 9] = [
@@ -66,7 +67,7 @@ impl<R: CommandPort> HdcControlPort<R> {
         let before = self.partition_metadata(&key, &query, deadline)?;
         before.validate_range(effect)?;
         if before.writable {
-            return Ok(PartitionRead::Skip("mounted-writable-after-boot"));
+            return Ok(PartitionRead::Skip(contract::SKIP_MOUNTED_WRITABLE));
         }
         let query_hash = hash_query(&before.name, effect.range_length);
         let bytes = self
