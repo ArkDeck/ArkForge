@@ -14,6 +14,7 @@
 | 用另一种语言移植 ArkForge | §3 Porting order，然后按阶段读对应 `requirements/` 切片与 `conformance/v1/` 套件 |
 | 判断某个行为是否"必须保持" | `requirements/` 中带 `AF-…` ID 的条目；`status: normative` 的条目必须保持 |
 | 校验自己的编码/摘要是否正确 | `conformance/v1/<suite>/<case>/case.json` + 同目录的完整字节文件 |
+| 给 conformance 增加 fixture | [conformance/GROWTH.md](conformance/GROWTH.md)，再改 requirement 与 manifest |
 | 查某个字符串在线上怎么拼 | `model/vocabularies.yaml` |
 | 查状态机与崩溃处置 | `state-machines/job.yaml`、`state-machines/crash-disposition.yaml` |
 | 查 OS 边界（USB、fsync、时钟、IPC）该承诺什么 | `ports/` |
@@ -120,6 +121,9 @@ code produces today, so a behaviour change in Rust cannot land without a visible
 fixture diff — which is reviewed as a **spec change** (bump `manifest.yaml`,
 note it in `ISSUES.md` or the requirement it affects). Generation is
 deterministic: no clocks, no randomness, no host paths.
+
+How large those fixtures may grow, and which external corpora stay out of
+the tree, is `conformance/GROWTH.md`.
 
 A port is not expected to run that crate. It reads `conformance/v1/manifest.json`,
 checks it holds the same files (SHA-256 per file), and runs its own runner over
