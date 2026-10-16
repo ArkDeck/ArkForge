@@ -1,5 +1,8 @@
 [workspace]
 resolver = "3"
+# `fuzz/` is its own workspace so libfuzzer stays out of this one.
+exclude = ["fuzz"]
+
 members = [
     "crates/arkforge-core",
     "crates/arkforge-usb",

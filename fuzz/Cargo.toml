@@ -1,0 +1,63 @@
+# Separate workspace. libfuzzer-sys is a fuzz-only dependency and is not a
+# member of the ArkForge runtime workspace (AFD-0001).
+[package]
+name = "arkforge-fuzz"
+version = "0.0.0"
+publish = false
+edition = "2024"
+rust-version = "1.99.0"
+license = "MIT"
+
+[package.metadata]
+cargo-fuzz = true
+
+[dependencies]
+libfuzzer-sys = "0.4.8"
+arkforge-artifact = { path = "../crates/arkforge-artifact" }
+arkforge-core = { path = "../crates/arkforge-core" }
+arkforge-ipc = { path = "../crates/arkforge-ipc" }
+
+[[bin]]
+name = "tar"
+path = "fuzz_targets/tar.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "deflate"
+path = "fuzz_targets/deflate.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "cbor"
+path = "fuzz_targets/cbor.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "protobuf"
+path = "fuzz_targets/protobuf.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "artifact-import"
+path = "fuzz_targets/artifact_import.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "profile"
+path = "fuzz_targets/profile.rs"
+test = false
+doc = false
+bench = false
+
+[workspace]
+members = ["."]
