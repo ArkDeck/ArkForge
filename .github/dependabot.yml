@@ -1,0 +1,24 @@
+version: 2
+updates:
+  # The runtime workspace vendors its primitives and currently has no
+  # third-party crates. This entry still watches the manifest so a future
+  # dependency is proposed instead of landing unnoticed.
+  - package-ecosystem: cargo
+    directory: "/"
+    schedule:
+      interval: weekly
+  # libfuzzer-sys lives only in the separate fuzz workspace.
+  - package-ecosystem: cargo
+    directory: "/fuzz"
+    schedule:
+      interval: weekly
+  - package-ecosystem: github-actions
+    directory: "/"
+    schedule:
+      interval: weekly
+  # The Swift package currently has no external dependencies. The entry
+  # watches Package.swift at the repository root.
+  - package-ecosystem: swift
+    directory: "/"
+    schedule:
+      interval: weekly
