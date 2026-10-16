@@ -22,7 +22,7 @@ empty; general users should not treat it as a one-click flasher.
 
 | Device | Capabilities | Status |
 | --- | --- | --- |
-| **DAYU200** (RK3568 / RockUSB) | Firmware inspection, device observation, complete nine-partition overwrite, per-partition verification, durable recovery, and native RockUSB rescue | Native mechanics have completed multiple full-device hardware runs. The standalone CLI authority and rescue paths still need their own controlled hardware acceptance and maintainer review |
+| **DAYU200** (RK3568 / RockUSB) | Firmware inspection, device observation, complete nine-partition overwrite, per-partition verification, durable recovery, and native RockUSB rescue | Native mechanics have completed multiple full-device hardware runs. The standalone CLI authority and rescue paths still need their own controlled hardware acceptance and maintainer review. Ledger (2026-08-19): [AF-V1](TASKS.md#af-v1), [AF-V2](TASKS.md#af-v2), [NRU](TASKS.md#nru) |
 | **DAYU600** (uis7885 / PAC) | PAC structure observation, profile candidates, and non-executable PlanAssessment | Research and assessment only. None of the 18 execution evidence gates currently pass, so no flashing entry point is available |
 
 `--hardware-campaign` opens a named, controlled acceptance run. It is not `--force`, never bypasses
@@ -32,8 +32,10 @@ safety gates, and never publishes production support automatically. See the
 ## Build
 
 The repository follows Rust stable via `rust-toolchain.toml`; the minimum supported Rust version
-is 1.99.0, with Edition 2024. The runtime currently targets macOS and Windows x64; Windows release
-signing and physical-device evidence are accepted as a separate maturity combination.
+is 1.99.0, with Edition 2024. The supported hosts are macOS and Windows x64, which are also the
+two platforms every pull request actually tests. Linux has no native USB backend and is not a CI
+host. Windows release signing and physical-device evidence are a separate maturity combination;
+the per-PR unit tests do not stand in for them.
 
 ```bash
 git clone https://github.com/ArkDeck/ArkForge.git
@@ -44,6 +46,26 @@ target/debug/arkforge
 
 A bare `arkforge` is equivalent to `arkforge status`: it reports host, runtime, device, artifact,
 job, and blocker state without starting the runtime or mutating a device.
+
+## Continuous integration
+
+Every push and pull request runs the two workflows below. Their hosts are the macOS and Windows
+x64 platforms named above.
+
+| Workflow | Host | What runs |
+| --- | --- | --- |
+| [`.github/workflows/rust.yml`](.github/workflows/rust.yml) | `macos-latest` | `cargo fmt`, clippy `-D warnings`, `cargo test --workspace --all-targets`, the Swift SDK, and the preboot scripts |
+| [`.github/workflows/windows.yml`](.github/workflows/windows.yml) | `windows-latest` | The same Rust checks, plus Windows packaging parse and no-hardware acceptance guards. The workspace tests compile `platform_windows.rs` / `windows_topology.rs` and run USB transcript replay, including `golden_transcript_parity` |
+
+[`.github/workflows/windows-acceptance.yml`](.github/workflows/windows-acceptance.yml) is
+`workflow_dispatch` only. It runs on a self-hosted Windows x64 runner that has a DAYU200. It is
+not a gate on every pull request.
+
+Parser fuzzing runs inside the `cargo test` step on both hosts: the seeded mutations live in
+[`crates/arkforge-artifact/tests/parser_fuzz.rs`](crates/arkforge-artifact/tests/parser_fuzz.rs).
+Scope, corpus, and the rule that every rejection is a typed error are in
+[`fuzz/README.md`](fuzz/README.md). The default branch does not yet have a separate libFuzzer
+workflow.
 
 ## Run ArkForge
 
