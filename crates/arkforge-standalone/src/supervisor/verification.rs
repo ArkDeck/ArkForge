@@ -1,6 +1,7 @@
 //! Independent read-only verification, never an upgrade of historical receipts.
 use super::*;
 use crate::hdc_control::partition::{PartitionRead, TARGETS, validate_range};
+use arkforge_ipc::contract;
 use arkforge_ipc::messages::{ActionReceiptSummary, Effect, JobSummary};
 use std::collections::BTreeSet;
 
@@ -17,13 +18,7 @@ pub struct FlashVerificationResult {
 
 impl FlashVerificationResult {
     pub fn exit_code(&self) -> i32 {
-        if self.failed != 0 {
-            7
-        } else if self.skipped != 0 {
-            9
-        } else {
-            0
-        }
+        contract::flash_verify_exit_code(self.failed, self.skipped)
     }
 
     pub(super) fn encode(&self) -> Vec<u8> {
@@ -250,19 +245,29 @@ pub(super) fn handle(
                 if digest == effect.content_sha256 =>
             {
                 result.verified += 1;
-                ("verified", Some("fullHash"), Some(digest), "")
+                (
+                    contract::TARGET_VERDICT_VERIFIED,
+                    Some(contract::STRENGTH_FULL_HASH),
+                    Some(digest),
+                    "",
+                )
             }
             Ok(PartitionRead::Hash(digest) | PartitionRead::PrebootHash { digest, .. }) => {
                 result.failed += 1;
-                ("failed", None, Some(digest), "content-mismatch")
+                (
+                    contract::TARGET_VERDICT_FAILED,
+                    None,
+                    Some(digest),
+                    "content-mismatch",
+                )
             }
             Ok(PartitionRead::Skip(reason)) => {
                 result.skipped += 1;
-                ("typedSkip", None, None, reason)
+                (contract::TARGET_VERDICT_TYPED_SKIP, None, None, reason)
             }
             Err(reason) => {
                 result.failed += 1;
-                ("failed", None, None, reason)
+                (contract::TARGET_VERDICT_FAILED, None, None, reason)
             }
         };
         let base = effect_json(effect);
@@ -275,13 +280,7 @@ pub(super) fn handle(
             nullable((!reason.is_empty()).then_some(reason))
         ));
     }
-    let aggregate = if result.failed != 0 {
-        "failed"
-    } else if result.skipped != 0 {
-        "partial"
-    } else {
-        "verified"
-    };
+    let aggregate = contract::flash_verify_outcome(result.failed, result.skipped);
     result.document = format!(
         "{{\"schema\":\"arkforge.flash-verification/v1\",{context},\"completed_at_epoch_ms\":{},\"outcome\":{},\"verified\":{},\"skipped\":{},\"failed\":{},\"targets\":[{}]}}",
         now_ms()?,

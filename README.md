@@ -190,6 +190,7 @@ codec 均在仓内实现，并使用公开测试向量验证。设计理由见
 - [真机与验收证据](docs/evidence/)
 - [架构决定记录](docs/decisions/)
 - [Windows x64 打包与验收](packaging/windows/README.md)
+- [ArkDeck 消费契约与版本钉扎](docs/arkdeck-contract.md)
 
 ## License
 

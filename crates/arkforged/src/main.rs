@@ -8,9 +8,10 @@
 //! - `public.sock` (0600): inspect, discover, probe, job status and guides;
 //! - `controller.sock` (0600): the above plus import, execution and permits.
 //!
+use arkforge_ipc::contract::handshake_refusal;
 use arkforge_ipc::framing::{read_frame, write_frame};
 use arkforge_ipc::messages::{Hello, HelloAck, Request, Response};
-use arkforge_ipc::{Api, PROTOCOL_MAJOR, PROTOCOL_MINOR, SessionKind, Status, negotiate};
+use arkforge_ipc::{Api, PROTOCOL_MAJOR, PROTOCOL_MINOR, SessionKind, Status};
 use arkforge_platform::{LocalChannel, LocalEndpoint, LocalListener, LocalStream};
 use arkforged::{Clock, Service};
 use std::io::{self, Read};
@@ -334,13 +335,13 @@ fn handle_connection(
         return Ok(());
     };
     let hello = Hello::decode(&frame).map_err(|error| error.to_string())?;
-    let refusal = match negotiate(hello.protocol_major, hello.protocol_minor) {
-        Ok(()) if hello.session_kind == kind => None,
-        Ok(()) => Some(format!(
+    let refusal = match handshake_refusal(hello.protocol_major, hello.protocol_minor) {
+        None if hello.session_kind == kind => None,
+        None => Some(format!(
             "this socket serves {kind:?} sessions, peer announced {:?}",
             hello.session_kind
         )),
-        Err(message) => Some(message),
+        Some(message) => Some(message),
     };
     // Readiness is reported on the handshake so a client learns it before it
     // materializes a plan it could not run, rather than after creating a job.

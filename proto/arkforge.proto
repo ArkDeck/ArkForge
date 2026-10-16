@@ -14,6 +14,16 @@
 //   - an unknown FIELD is skipped (forward compatibility);
 //   - an unknown ENUM VALUE is a hard error, not a default
 //     (architecture.md 15.2 "unknown enum fail closed").
+//
+// Consumer pin (docs/arkdeck-contract.md):
+//   Hello.protocol_major = 1 and Hello.protocol_minor = 0
+//   (arkforge_ipc::PROTOCOL_MAJOR / PROTOCOL_MINOR,
+//   arkforge_ipc::contract::PROTOCOL_VERSION = "1.0").
+//   A different major is HelloAck.refusal and the connection closes.
+//   A different minor is accepted. Package arkforge.ipc.v1 tracks the major.
+//   Tag: arkforge-contract-v1.0.0. Cargo package version and the spec draft
+//   version are separate identifiers, as is RecoveryGuide
+//   .recovery_contract_version (profile recovery data).
 
 syntax = "proto3";
 

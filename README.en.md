@@ -202,6 +202,7 @@ vectors. See [AFD-0001](docs/decisions/AFD-0001-zero-dependency-core.md) for the
 - [Hardware and acceptance evidence](docs/evidence/)
 - [Architecture decision records](docs/decisions/)
 - [Windows x64 packaging and acceptance](packaging/windows/README.md)
+- [ArkDeck consumer contract and version pin](docs/arkdeck-contract.md)
 
 ## License
 
