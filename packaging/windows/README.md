@@ -238,6 +238,13 @@ self-hosted runner labelled `arkforge-dayu200`. It will not downgrade missing
 certificate, Microsoft-signed catalog, HDC, second-account or physical-device
 inputs into a software pass.
 
+Its hosted admission job verifies GitHub-confirmed protection of the default
+branch before queueing the physical runner. A default-branch name alone is not
+protection. The ordinary `Rust workspace` and `Windows native` CI checks have
+distinct names so branch protection can require both without the former
+ambiguous pair of `verify` checks. Restrict `windows-production` deployments to
+the default branch; configure required CI on that branch before dispatch.
+
 Before signing or installing anything, the workflow checks both the exact
 default-branch ref and GitHub's `GITHUB_REF_PROTECTED=true` signal. A branch
 name alone does not prove protection; missing or false protection refuses the
