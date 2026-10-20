@@ -9,6 +9,7 @@ permissions:
 
 jobs:
   verify:
+    name: Rust workspace
     runs-on: macos-latest
     timeout-minutes: 45
     steps:

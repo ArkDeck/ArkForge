@@ -7,7 +7,21 @@ permissions:
   contents: read
 
 jobs:
+  admission:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Require the protected default branch before queueing physical work
+        env:
+          RELEASE_REF: ${{ github.ref }}
+          DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+          REF_PROTECTED: ${{ github.ref_protected }}
+        run: |
+          test "$RELEASE_REF" = "refs/heads/$DEFAULT_BRANCH"
+          test "$REF_PROTECTED" = true
+
   accept:
+    needs: admission
     runs-on: [self-hosted, Windows, X64, arkforge-dayu200]
     environment: windows-production
     timeout-minutes: 90

@@ -16,6 +16,7 @@ permissions:
 
 jobs:
   verify:
+    name: Windows native
     runs-on: windows-latest
     timeout-minutes: 45
     steps:
