@@ -372,8 +372,16 @@ fn the_daemon_can_observe_a_real_device() {
     // behavioural version would depend on what is plugged into the machine
     // running the tests, and would pass on a clean runner for the same reason
     // the bug survived: nothing was attached to contradict it.
-    let source = std::fs::read_to_string(repo_root().join("crates/arkforged/src/service.rs"))
-        .expect("the service source");
+    let mut files = Vec::new();
+    collect(
+        &repo_root().join("crates/arkforged/src/service"),
+        &mut files,
+    );
+    assert!(!files.is_empty(), "the service module source is missing");
+    let source = files
+        .into_iter()
+        .map(|(_, source)| source)
+        .collect::<String>();
     let code = code_only(&source);
     assert!(
         code.contains("UsbTransport"),
