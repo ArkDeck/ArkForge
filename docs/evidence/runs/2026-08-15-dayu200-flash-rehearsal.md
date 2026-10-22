@@ -175,7 +175,7 @@ ArkForge 这一侧需要的东西已经全部就位：
 - `adapters/arkforge-arkdeck-adapter/src/control.rs` —— 控制动作映射表，
   以及 ArkDeck 每一个 `RockchipProviderAction` 的归属(keptByAuthority /
   keptInternal / delegatedToArkForge)，有测试断言三类之和穷尽 baseline；
-- `docs/openspec/chg-arkdeck-arkforge-authority/` —— 可整个目录贴进 ArkDeck 的提案，
+- `docs/archive/openspec/chg-arkdeck-arkforge-authority/` —— 可整个目录贴进 ArkDeck 的提案，
   含 permit 交叉验证向量。
 
 被否掉的另一条是「本仓新增 bench authority crate」。它能更快刷上一次机，

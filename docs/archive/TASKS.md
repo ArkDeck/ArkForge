@@ -1,16 +1,19 @@
 # ArkForge 实施任务台账
 
+> **已归档。** 本文件是历史阶段台账，不发布设备支持。当前证据见
+> [证据账本](../evidence/ledger.md)。规范行为以 `spec/` 为准。
+
 > 状态总览(2026-08-19)：AF-V1 完成；AF-V2 第一验收项(真机全量刷写)已通过且执行面已
 > 原生化(NRU-001..004)，真机 crash 半与掉电仍未验；AF-V3 软件半完成。任务定义正本是
-> [docs/architecture.md](docs/architecture.md) 第 22 节；本文件是执行台账，若两处出入，
+> [docs/architecture.md](../architecture.md) 第 22 节；本文件是执行台账，若两处出入，
 > 以 architecture.md 为准并回改本文件。
 
 | 任务 | 内容 | 依赖 | 状态 |
 |---|---|---|---|
-| AF-V1 | ArkForge Core + DAYU200 read-only parity | — | ✅ 完成([验收证据](docs/evidence/AF-V1-acceptance.md)) |
-| AF-V2 | DAYU200 ArkForge production cutover | AF-V1 | 🟡 真机全量刷写 2026-08-18 首过、08-19 原生复验([验收证据](docs/evidence/AF-V2-acceptance.md) §6)；余：真机 crash 半、掉电、multi-device、recovery 物化 |
-| <a id="nru"></a>NRU | 原生 RockUSB 换轨(ArkDeck chg-2026-063 的 ArkForge 半) | AF-V2 首过 | ✅ 完成：`a935798`/`26aa527`(读+parity)、`3567484`(写)、`8129a7a`(默认原生)、`c049a11`(移除 vendor 运行时)；[换轨证据](docs/evidence/runs/2026-08-19-dayu200-green-flash-and-native-cutover.md) |
-| AF-V3 | DAYU600 evidence + plan-only | AF-V1(共用 API 面) | 🟡 软件半完成([验收证据](docs/evidence/AF-V3-acceptance.md))；证据半需真机 |
+| AF-V1 | ArkForge Core + DAYU200 read-only parity | — | ✅ 完成([验收证据](../evidence/AF-V1-acceptance.md)) |
+| AF-V2 | DAYU200 ArkForge production cutover | AF-V1 | 🟡 真机全量刷写 2026-08-18 首过、08-19 原生复验([验收证据](../evidence/AF-V2-acceptance.md) §6)；余：真机 crash 半、掉电、multi-device、recovery 物化 |
+| <a id="nru"></a>NRU | 原生 RockUSB 换轨(ArkDeck chg-2026-063 的 ArkForge 半) | AF-V2 首过 | ✅ 完成：`a935798`/`26aa527`(读+parity)、`3567484`(写)、`8129a7a`(默认原生)、`c049a11`(移除 vendor 运行时)；[换轨证据](../evidence/runs/2026-08-19-dayu200-green-flash-and-native-cutover.md) |
+| AF-V3 | DAYU600 evidence + plan-only | AF-V1(共用 API 面) | 🟡 软件半完成([验收证据](../evidence/AF-V3-acceptance.md))；证据半需真机 |
 | AF-V4 | DAYU600 production execute | AF-V3 + AF-V2(engine) + 17.5 证据门全 PASS | ⛔ 阻塞：18 条证据门 0 条 PASS |
 | AF-P1 | ArkFlash/CLI 消费边界抽离 | AF-V2 软件面 | ✅ `arkforge-client`、`arkforge-standalone`、application v1 DTO/错误/进度/mock 已落地；CLI help/行为基线一致 |
 | AF-W1 | Windows host enablement | AF-P1 | 🟡 Named Pipe、owner ACL、WinUSB、HDC digest+Authenticode、签名包与安装验收脚本已落地并通过 MSVC 全 workspace 交叉检查；Windows 原生 CI 与受保护 self-hosted 验收 workflow 已固化，强制证书、微软签名 catalog、HDC 自检、exact-one DAYU200 WinUSB、跨账户须以 Win32 error 5 拒绝及证据归档；余：在合格 Windows x64 runner 上真实跑绿该 workflow |
@@ -68,7 +71,7 @@ artifact import
 **额外交付**：`adapters/arkforge-arkdeck-adapter` 的 published step 映射表(5.4)、
 `proto/arkforge.proto`、`arkforge-cli` 只读诊断。
 
-**边界**：见[验收证据](docs/evidence/AF-V1-acceptance.md)第 4 节。
+**边界**：见[验收证据](../evidence/AF-V1-acceptance.md)第 4 节。
 
 <a id="af-v2"></a>
 
@@ -78,15 +81,15 @@ artifact import
 > 首次真机全量刷写 `succeeded`(当日 fixed-tool 执行面，ArkDeck authority 签发
 > permit)；同日起步的 NRU-001..004 把执行面换成原生 RockUSB 并移除 vendor
 > 运行时，2026-08-19 纯原生二进制全量复验 `succeeded`(`job-b00e006a…`)。
-> 见[首过与原生换轨](docs/evidence/runs/2026-08-19-dayu200-green-flash-and-native-cutover.md)
-> 与 [AF-V2 验收证据](docs/evidence/AF-V2-acceptance.md) §6 的逐项表。
+> 见[首过与原生换轨](../evidence/runs/2026-08-19-dayu200-green-flash-and-native-cutover.md)
+> 与 [AF-V2 验收证据](../evidence/AF-V2-acceptance.md) §6 的逐项表。
 >
 > 仍未验证：写入中途 SIGKILL 的真机 crash 半、掉电(AD-017)、multi-device、
 > complete-overwrite recovery 的 plan 物化。maturity 是组合键，每次通过只发布
 > 自己那一个组合，`ProductionVerified` 提升另需决定(AD-025)。
 >
 > (2026-08-15 的状态记录——「除写入外全部完成、authority 归属待拍板」——
-> 已按当日事实沉淀在 [2026-08-15 彩排](docs/evidence/runs/2026-08-15-dayu200-flash-rehearsal.md)
+> 已按当日事实沉淀在 [2026-08-15 彩排](../evidence/runs/2026-08-15-dayu200-flash-rehearsal.md)
 > 与验收文档 §1–§5，不在此复述。)
 
 **目标**
@@ -123,7 +126,7 @@ inspect
 - [ ] compatibility alias(flash.dayu200 → generic adapter，不保留 Rockchip lowering)
 - [ ] legacy decoder
 - [x] arkforged signing/entitlement/packaging 契约(对齐 #1299 体系与运行时校验器语义，AD-007)
-      — [AFD-0003](docs/decisions/AFD-0003-arkforged-signing-packaging.md)：两个二进制的
+      — [AFD-0003](../decisions/AFD-0003-arkforged-signing-packaging.md)：两个二进制的
       entitlement 字典都为空并在绑定前强制;Developer ID/Hardened Runtime/时间戳由
       `--require-release-signing` 强制;`packaging/macos/` 含 entitlements、fail-closed
       packager 与仓内 reader。packager→daemon 闭环已用真实 Developer ID 跑通;
@@ -133,7 +136,7 @@ inspect
 
 - [x] real DAYU200 full flash pass — **2026-08-18 通过**(`job-a4b7d539…`，fixed-tool 面)；
       2026-08-19 原生面复验同绿(`job-b00e006a…`)。每次通过只发布它自己那一个
-      maturity 组合([换轨证据](docs/evidence/runs/2026-08-19-dayu200-green-flash-and-native-cutover.md))
+      maturity 组合([换轨证据](../evidence/runs/2026-08-19-dayu200-green-flash-and-native-cutover.md))
 - [x] exact identity(两种人格均 `serialAndTopology`；locationID 跨模式变化第二次复现)
       / multi-device — 单板环境，多板未验
 - [x] nine partitions/userdata — 真机派发：九个目标全部写入并逐一摘要比对(两次全刷)
@@ -155,9 +158,9 @@ inspect
 
 ## AF-V3：DAYU600 evidence + plan-only
 
-> **状态(2026-08-14)**：软件半已完成，见[验收证据](docs/evidence/AF-V3-acceptance.md)。
+> **状态(2026-08-14)**：软件半已完成，见[验收证据](../evidence/AF-V3-acceptance.md)。
 > 证据半未做——`descriptor/transcript capture` 需真实 DAYU600；17.5 十八条门
-> 0 条 PASS(第 18 条记为 HELD，见 [ledger](docs/evidence/ledger.md))。
+> 0 条 PASS(第 18 条记为 HELD，见 [ledger](../evidence/ledger.md))。
 
 **目标**
 

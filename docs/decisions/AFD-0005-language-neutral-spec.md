@@ -12,7 +12,7 @@ ArkForge 不是 UI 工程。它的价值是一组**语义**——不可变计划
 
 - `docs/architecture.md`（2 300 多行，规范、Rust 示例、历史与实施状态混写）；
 - Rust 代码（六万行，才是真正在真机上跑过的行为）；
-- 一份只钉摘要不钉字节的 permit 向量文档，[它自己承认](../openspec/chg-arkdeck-arkforge-authority/permit-vectors.md)对不上时得运行 Rust 才能诊断。
+- 一份只钉摘要不钉字节的 permit 向量文档，[它自己承认](../archive/openspec/chg-arkdeck-arkforge-authority/permit-vectors.md)对不上时得运行 Rust 才能诊断。
 
 一个 Agent 要用 Zig 或 C++ 做移植，面对的是"理解并翻译六万行 Rust"。而 Swift SDK
 （`swift/ArkForgeSDK`）其实已经是 IPC 与 permit 的第二个实现——它的正确性靠几组

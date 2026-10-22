@@ -12,7 +12,7 @@
 > 的观测点在原生面由九条 `write-partition` 语义回执承担（`writePayloadSha256`
 > 与 staged digest 逐一比对）。2026-08-19 vendor 移除后的原生面全量复验全绿：
 > `job-b00e006a1fbe9d6de388efab4138b9a2`，见
-> `../../evidence/runs/2026-08-19-dayu200-green-flash-and-native-cutover.md`。
+> `../../../evidence/runs/2026-08-19-dayu200-green-flash-and-native-cutover.md`。
 
 ## Environment
 

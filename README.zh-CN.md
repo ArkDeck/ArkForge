@@ -20,12 +20,12 @@ ArkForge 目前处于**硬件准入阶段**。生产支持注册表仍为空；�
 
 | 设备 | 能力 | 状态 |
 | --- | --- | --- |
-| **DAYU200**（RK3568 / RockUSB） | 固件检查、设备观察、九分区完整覆写、逐分区验证、任务恢复、原生 RockUSB 救援 | 原生执行层已完成多次真机全量刷写；独立 CLI 授权链路与救援链路仍需各自的受控真机验收和维护者审核。台账（2026-08-19）：[AF-V1](TASKS.md#af-v1)、[AF-V2](TASKS.md#af-v2)、[NRU](TASKS.md#nru) |
+| **DAYU200**（RK3568 / RockUSB） | 固件检查、设备观察、九分区完整覆写、逐分区验证、任务恢复、原生 RockUSB 救援 | 原生执行层已完成多次真机全量刷写；独立 CLI 授权链路与救援链路仍需各自的受控真机验收和维护者审核。台账（2026-08-19）：[AF-V1](docs/archive/TASKS.md#af-v1)、[AF-V2](docs/archive/TASKS.md#af-v2)、[NRU](docs/archive/TASKS.md#nru) |
 | **DAYU600**（uis7885 / PAC） | PAC 结构观察、Profile 候选、不可执行的 PlanAssessment | 仅研究与计划评估；18 条执行证据门当前 0 条通过，不提供刷写入口 |
 
 `--hardware-campaign` 只用于具名、受控的硬件验收。它不是 `--force`，不会跳过安全门，
-也不会自动发布生产支持。详细状态见[实施任务台账](TASKS.md)和
-[证据账本](docs/evidence/ledger.md)。
+也不会自动发布生产支持。当前细节见[证据账本](docs/evidence/ledger.md)。阶段台账已归档到
+[docs/archive/TASKS.md](docs/archive/TASKS.md)。
 
 ## 构建
 
@@ -201,8 +201,8 @@ codec 均在仓内实现，并使用公开测试向量验证。设计理由见
 
 - [语言无关规范正本](spec/README.md) — 状态机、摘要模型、端口契约、错误码与 conformance fixtures
 - [架构与安全边界](docs/architecture.md)
-- [Agent-native CLI 设计](docs/openspec/chg-agent-native-cli/proposal.md)
-- [CLI 验收矩阵](docs/openspec/chg-agent-native-cli/verification.md)
+- [Agent-native CLI 设计](docs/archive/openspec/chg-agent-native-cli/proposal.md)（已归档的 change 草案）
+- [CLI 验收矩阵](docs/archive/openspec/chg-agent-native-cli/verification.md)（已归档的 change 草案）
 - [真机与验收证据](docs/evidence/)
 - [架构决定记录](docs/decisions/)
 - [Windows x64 打包与验收](packaging/windows/README.md)

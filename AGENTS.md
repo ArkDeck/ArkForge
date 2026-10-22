@@ -25,7 +25,7 @@ ArkForge 是设备无关的固件操作平台：Rust workspace 实现 CLI、daem
 | Job、journal、恢复、daemon | `crates/arkforge-engine/`、`crates/arkforged/`；`spec/state-machines/`、`spec/ports/` |
 | IPC 与 Swift SDK | `proto/arkforge.proto`、`crates/arkforge-ipc/`、根目录 `Package.swift`、`swift/ArkForgeSDK/` |
 | ArkDeck 集成 | `adapters/arkforge-arkdeck-adapter/`；实际修改 ArkDeck 时读取该仓 `AGENTS.md` |
-| 打包、硬件状态与证据 | `packaging/`、[TASKS.md](TASKS.md)、[evidence ledger](docs/evidence/ledger.md)；按需读取相关 `docs/decisions/` |
+| 打包、硬件状态与证据 | `packaging/`、[evidence ledger](docs/evidence/ledger.md)；按需读取相关 `docs/decisions/`。阶段台账在 [docs/archive/TASKS.md](docs/archive/TASKS.md) |
 
 ## 规范与实现边界
 
@@ -40,7 +40,7 @@ ArkForge 是设备无关的固件操作平台：Rust workspace 实现 CLI、daem
   运行时依赖。复用仓内原语与公开向量；工具链版本以 `rust-toolchain.toml` 为准。
 - ArkForge mechanics 执行已授权计划；独立 CLI 与 ArkDeck 各自承担 authority，使用独立
   runtime namespace。Core 不引入 ArkDeck 专用类型，不接管另一 authority 的 daemon。
-- `docs/architecture.md` 与 `docs/openspec/` 含历史设计，先检查 superseded 注记。
+- `docs/architecture.md` 与 `docs/archive/openspec/` 含历史设计，先检查 superseded 注记。
   现行 DAYU200 执行层是原生 RockUSB；不照抄退役 vendor-tool 启动契约或旧 CLI。
 
 ## 设备执行与证据

@@ -6,7 +6,7 @@
 //! wrong. These vectors are what makes that checkable rather than hoped for.
 //!
 //! The published copy lives at
-//! `docs/openspec/chg-arkdeck-arkforge-authority/permit-vectors.md`, and this
+//! `docs/archive/openspec/chg-arkdeck-arkforge-authority/permit-vectors.md`, and this
 //! test is what keeps it honest: change the encoding and this fails.
 
 use arkforge_authority_api::authority_side::mint_integrity_tag;
@@ -110,7 +110,7 @@ fn the_published_permit_vectors_still_hold() {
     assert_eq!(
         observed, expected,
         "\nthe permit encoding changed. Regenerate \
-         docs/openspec/chg-arkdeck-arkforge-authority/permit-vectors.md from the \
+         docs/archive/openspec/chg-arkdeck-arkforge-authority/permit-vectors.md from the \
          observed column, and treat it as a breaking change for any second \
          implementation.\n"
     );

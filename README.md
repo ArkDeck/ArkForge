@@ -22,12 +22,12 @@ empty; general users should not treat it as a one-click flasher.
 
 | Device | Capabilities | Status |
 | --- | --- | --- |
-| **DAYU200** (RK3568 / RockUSB) | Firmware inspection, device observation, complete nine-partition overwrite, per-partition verification, durable recovery, and native RockUSB rescue | Native mechanics have completed multiple full-device hardware runs. The standalone CLI authority and rescue paths still need their own controlled hardware acceptance and maintainer review. Ledger (2026-08-19): [AF-V1](TASKS.md#af-v1), [AF-V2](TASKS.md#af-v2), [NRU](TASKS.md#nru) |
+| **DAYU200** (RK3568 / RockUSB) | Firmware inspection, device observation, complete nine-partition overwrite, per-partition verification, durable recovery, and native RockUSB rescue | Native mechanics have completed multiple full-device hardware runs. The standalone CLI authority and rescue paths still need their own controlled hardware acceptance and maintainer review. Ledger (2026-08-19): [AF-V1](docs/archive/TASKS.md#af-v1), [AF-V2](docs/archive/TASKS.md#af-v2), [NRU](docs/archive/TASKS.md#nru) |
 | **DAYU600** (uis7885 / PAC) | PAC structure observation, profile candidates, and non-executable PlanAssessment | Research and assessment only. None of the 18 execution evidence gates currently pass, so no flashing entry point is available |
 
 `--hardware-campaign` opens a named, controlled acceptance run. It is not `--force`, never bypasses
 safety gates, and never publishes production support automatically. See the
-[implementation tracker](TASKS.md) and [evidence ledger](docs/evidence/ledger.md) for current details.
+[evidence ledger](docs/evidence/ledger.md) for current details. The stage ledger is archived at [docs/archive/TASKS.md](docs/archive/TASKS.md).
 
 ## Build
 
@@ -209,8 +209,8 @@ vectors. See [AFD-0001](docs/decisions/AFD-0001-zero-dependency-core.md) for the
 - [Normative, language-neutral specification](spec/README.md) — state machines, digest models,
   port contracts, stable errors, and conformance fixtures
 - [Architecture and safety boundaries](docs/architecture.md)
-- [Agent-native CLI design](docs/openspec/chg-agent-native-cli/proposal.md)
-- [CLI acceptance matrix](docs/openspec/chg-agent-native-cli/verification.md)
+- [Agent-native CLI design](docs/archive/openspec/chg-agent-native-cli/proposal.md) (archived change draft)
+- [CLI acceptance matrix](docs/archive/openspec/chg-agent-native-cli/verification.md) (archived change draft)
 - [Hardware and acceptance evidence](docs/evidence/)
 - [Architecture decision records](docs/decisions/)
 - [Windows x64 packaging and acceptance](packaging/windows/README.md)
