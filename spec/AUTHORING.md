@@ -99,6 +99,6 @@ as spelled on the wire (`"stepIntentDurable"`, not "StepIntentDurable" or
 - Rust code. A Rust snippet may appear only in `mappings/rust.yaml` or in an
   `informative` example block, never as the definition of a type.
 - Implementation status, task ledgers, hardware campaign logs. Those live in
-  `TASKS.md` and `docs/evidence/`.
+  `docs/archive/TASKS.md` and `docs/evidence/`.
 - Product/UI decisions and ArkDeck-side policy. Those live in
   `docs/architecture.md` and the ArkDeck repository.

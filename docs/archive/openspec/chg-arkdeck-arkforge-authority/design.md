@@ -33,7 +33,7 @@
 > - **顶注「还没有真机跑一次」已过时**：2026-08-18 `flash.dayu200` 首过
 >   （`job-a4b7d539571082b1958ebaaf2c14bd2c`，当日 fixed-tool 面），2026-08-19
 >   vendor 移除后原生面亦全绿（`job-b00e006a1fbe9d6de388efab4138b9a2`），见
->   `../../evidence/runs/2026-08-19-dayu200-green-flash-and-native-cutover.md`。
+>   `../../../evidence/runs/2026-08-19-dayu200-green-flash-and-native-cutover.md`。
 >
 > 治理版在 ArkDeck 仓 `openspec/changes/chg-2026-059-arkdeck-arkforge-authority/`，
 > 已同步加同等声明。authority 分界本身（permit 签发、managed control、
@@ -494,4 +494,4 @@ arkforged --runtime-dir <dir> --profile profiles/dayu200.yaml \\
 
 除此之外，ArkForge 侧的执行机制——封闭命令面、读域三态、staging 与写前
 revalidate、durable journal、permit 单次使用——**都已完成并在真机上验证到写入前的
-最后一步**，见 `../../evidence/runs/2026-08-15-dayu200-flash-rehearsal.md`。
+最后一步**，见 `../../../evidence/runs/2026-08-15-dayu200-flash-rehearsal.md`。

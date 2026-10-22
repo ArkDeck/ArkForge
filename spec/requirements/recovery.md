@@ -100,7 +100,7 @@ passive recovery consumes the complete poll and uses the latest classification.
 
 ### AF-REC-009 — standalone independent recovery budget grants
 status: draft
-source: docs/openspec/chg-recovery-budget-grants/design.md
+source: docs/archive/openspec/chg-recovery-budget-grants/design.md
 tests: [crates/arkforge-standalone/src/supervisor/recovery_tests.rs]
 gap: Authority-local durable format is covered by implementation tests; no cross-language fixture is published.
 

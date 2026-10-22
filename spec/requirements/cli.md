@@ -1,7 +1,7 @@
 # Agent-native CLI contract
 status: draft
 area: CLI
-rationale: docs/openspec/chg-agent-native-cli/{proposal,design,verification}.md
+rationale: docs/archive/openspec/chg-agent-native-cli/{proposal,design,verification}.md
 conformance: cli (process-level vectors, also executed by arkforge-cli tests)
 
 The CLI is the process boundary a full port is verified through. What is

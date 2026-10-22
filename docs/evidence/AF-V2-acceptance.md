@@ -33,7 +33,7 @@ ArkForge 侧的刷写机制**完整且在真机上验证到写入前的最后一
 
 2026-08-15 已定：**ArkDeck 做 authority**，即 architecture.md 22 节 AF-V2 的原意。
 ArkForge 这侧要交的东西已经全部交付，提案在
-[docs/openspec/chg-arkdeck-arkforge-authority](../openspec/chg-arkdeck-arkforge-authority/proposal.md)。
+[docs/archive/openspec/chg-arkdeck-arkforge-authority](../archive/openspec/chg-arkdeck-arkforge-authority/proposal.md)。
 
 ---
 
@@ -43,7 +43,7 @@ ArkForge 这侧要交的东西已经全部交付，提案在
 |---|---|---|
 | ArkForge durable engine | ✅ | `arkforge-engine::{journal,durable,recovery,superseding}` |
 | ArkDeck adapter | 🟡 ArkForge 半完成 | `adapters/arkforge-arkdeck-adapter::{lib,control}`；Swift 半属 ArkDeck 仓 |
-| StepPermit（含 8.6 完整性与重传信任模型） | ✅ | `arkforge-engine::step`；交叉验证向量 `docs/openspec/…/permit-vectors.md` |
+| StepPermit（含 8.6 完整性与重传信任模型） | ✅ | `arkforge-engine::step`；交叉验证向量 `docs/archive/openspec/…/permit-vectors.md` |
 | ManagedDeviceControlPort | ✅ | typed 动作 + Provider 侧显式拒绝 + 发布的映射表 + daemon 侧 API 13 |
 | controller execution/admission surface | ✅ | API 6/7/8/12/13 全部实现;`crates/arkforged/src/jobs.rs` |
 | execution readiness（机器可读） | ✅ | 两个常驻事实(配对 + 工具绑定)在握手里报出;工具摘要**强制**与 `--rkdeveloptool-sha256` 比对，不符拒绝启动;绑定后还要**证明能跑**(device-free 探测 + 5 秒超时)，AD-015 的 quarantine 情形已实测复现并诊断(AD-022);计划的 toolchain 摘要不符拒为 `TOOLCHAIN_DIGEST_MISMATCH` |

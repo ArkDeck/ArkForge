@@ -1,7 +1,7 @@
 //! StepPermit signing body, integrity tag and verification.
 //!
 //! Supersedes the digest-only table in
-//! `docs/openspec/chg-arkdeck-arkforge-authority/permit-vectors.md`: the
+//! `docs/archive/openspec/chg-arkdeck-arkforge-authority/permit-vectors.md`: the
 //! complete signing-body bytes are published here, so a second implementation
 //! that disagrees can diff bytes instead of running Rust.
 

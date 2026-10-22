@@ -1,5 +1,9 @@
 # OpenSpec change 草案
 
+> **已归档。** 这些 OpenSpec 草案是历史过程文档，不是现行规范。规范行为以
+> [`spec/`](../../../spec/README.md) 为准。部分 change 已复制进 ArkDeck，并在之后被
+> 超越；先看下面的状态表和 superseded 注记。
+
 本目录保存尚待维护者 review 的跨边界 change。草案不等于批准，更不开放新的
 设备写入能力。当前既包含要复制进 ArkDeck 治理流程的跨仓提案，也包含 ArkForge
 本仓能力设计；以各 change 的 front matter 和 proposal 边界为准。
