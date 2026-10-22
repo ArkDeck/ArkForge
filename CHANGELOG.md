@@ -26,3 +26,5 @@ publish git tags or GitHub Releases. Consumers pin a full git commit.
   in place.
 - `proto/` is `api/` (`api/arkforge.proto` and `api/versions.yaml`). `scripts/`
   is `hack/`. `transcripts/` is `test/transcripts/`. `spec/` is `docs/spec/`.
+  `.gitattributes` keeps those conformance fixtures and transcripts as raw
+  bytes on checkout.
