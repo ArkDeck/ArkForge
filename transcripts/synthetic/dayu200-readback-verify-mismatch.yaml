@@ -1,0 +1,48 @@
+# Synthetic failure transcript — DAYU200 readback does not match the image.
+#
+# Provenance: synthetic. This is not a capture and not a published receipt.
+# Replay must report the recorded verification failure and must not treat the
+# readback as a completed match. Nothing here is evidence of hardware.
+
+schemaVersion: arkforge.transcript/v1
+
+transcript:
+  id: SYN-DAYU200-READBACK-VERIFY-MISMATCH
+  provenance: synthetic
+  source: "synthetic readback mismatch; no device was measured"
+  profileId: org.openharmony.dayu200
+
+records:
+  - sequence: 1
+    kind: observation
+    atEpochMs: 1000
+    status: ok
+    observation:
+      id: OBS-LOADER
+      mode: rockusb-loader
+      topologyDigest: 00000000000000000000000000000000000000000000000000000000000000c1
+      descriptorDigest: 00000000000000000000000000000000000000000000000000000000000000c2
+      serialKind: absent
+      identityStrength: serialAndTopology
+    semantic:
+      - key: step
+        value: observe-loader-before-readback
+  - sequence: 2
+    kind: invocation
+    atEpochMs: 1500
+    durationMs: 800
+    status: failed
+    action: verify-flash-readback
+    semantic:
+      - key: step
+        value: verify-flash-readback
+      - key: partition
+        value: ramdisk
+      - key: readDomain
+        value: full
+      - key: verificationOutcome
+        value: failed
+      - key: expectedDigest
+        value: 11111111111111111111111111111111111111111111111111111111111111c3
+      - key: observedDigest
+        value: 22222222222222222222222222222222222222222222222222222222222222c4

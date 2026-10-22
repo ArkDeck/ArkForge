@@ -1,0 +1,61 @@
+# Synthetic failure transcript — DAYU200 Loader identity changes.
+#
+# Provenance: synthetic. Two Loader observations share a mode and differ in
+# topology, descriptor, and serial. Replay must keep both and must not treat
+# the later device as the one that was admitted. Nothing here is evidence of
+# hardware.
+
+schemaVersion: arkforge.transcript/v1
+
+transcript:
+  id: SYN-DAYU200-LOADER-IDENTITY-CHANGE
+  provenance: synthetic
+  source: "synthetic loader identity change; no device was measured"
+  profileId: org.openharmony.dayu200
+
+records:
+  - sequence: 1
+    kind: observation
+    atEpochMs: 1000
+    status: ok
+    observation:
+      id: OBS-LOADER-ADMITTED
+      mode: rockusb-loader
+      topologyDigest: 00000000000000000000000000000000000000000000000000000000000000d1
+      descriptorDigest: 00000000000000000000000000000000000000000000000000000000000000d2
+      serialKind: descriptor
+      serialDigest: 00000000000000000000000000000000000000000000000000000000000000d3
+      identityStrength: serialAndTopology
+    semantic:
+      - key: step
+        value: observe-admitted-loader
+  - sequence: 2
+    kind: observation
+    atEpochMs: 2500
+    status: ok
+    observation:
+      id: OBS-LOADER-REPLACED
+      mode: rockusb-loader
+      topologyDigest: 00000000000000000000000000000000000000000000000000000000000000d4
+      descriptorDigest: 00000000000000000000000000000000000000000000000000000000000000d5
+      serialKind: descriptor
+      serialDigest: 00000000000000000000000000000000000000000000000000000000000000d6
+      identityStrength: serialAndTopology
+    semantic:
+      - key: step
+        value: observe-replaced-loader
+  - sequence: 3
+    kind: invocation
+    atEpochMs: 2600
+    durationMs: 20
+    status: failed
+    action: confirm-loader-identity
+    semantic:
+      - key: step
+        value: confirm-loader-identity
+      - key: identityChanged
+        value: "true"
+      - key: admittedObservation
+        value: OBS-LOADER-ADMITTED
+      - key: observedObservation
+        value: OBS-LOADER-REPLACED
