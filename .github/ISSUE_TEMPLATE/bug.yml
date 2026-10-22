@@ -1,0 +1,55 @@
+name: Bug
+description: A defect in ArkForge on a supported host, without a device write.
+title: "bug: "
+labels: []
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Use this form for software defects. For a flash, rescue, or recovery on
+        real hardware, use the device report. For a vulnerability, follow
+        SECURITY.md and do not file a public issue.
+  - type: textarea
+    id: summary
+    attributes:
+      label: What happened
+      description: What you ran, what you expected, and what you got. Paste typed errors and the command, and redact paths that identify a private machine if you want to.
+    validations:
+      required: true
+  - type: textarea
+    id: reproduce
+    attributes:
+      label: Steps to reproduce
+      description: A minimal sequence. Note flags, profile, and whether a daemon was already running.
+      placeholder: |
+        1. arkforge ...
+        2. ...
+    validations:
+      required: true
+  - type: input
+    id: commit
+    attributes:
+      label: Commit or package version
+      description: "git rev-parse HEAD, or the binary you ran. This repository does not publish git tags."
+      placeholder: 40-hex commit
+    validations:
+      required: true
+  - type: dropdown
+    id: host
+    attributes:
+      label: Host
+      options:
+        - macOS
+        - Windows x64
+        - Linux (no native USB)
+        - Other
+    validations:
+      required: true
+  - type: textarea
+    id: logs
+    attributes:
+      label: Logs
+      description: Relevant stderr, JSON output, or a test failure. Do not include pairing secrets or private keys.
+      render: text
+    validations:
+      required: false

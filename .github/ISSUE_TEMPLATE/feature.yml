@@ -1,0 +1,39 @@
+name: Feature
+description: A capability, CLI, spec, or workflow change.
+title: "feat: "
+labels: []
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Describe the problem before the design. Spec changes still need a
+        requirements or model update under spec/, not only a code change.
+        Unsupported devices stay unsupported until their evidence gates pass.
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problem
+      description: Who is blocked, and what they cannot do today.
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposal
+      description: The behavior you want, including refusal and recovery cases.
+    validations:
+      required: true
+  - type: textarea
+    id: spec
+    attributes:
+      label: Spec and contract impact
+      description: "Requirements, state machines, Protobuf, digests, or the ArkDeck pin. Write none if the change stays inside an existing contract."
+    validations:
+      required: true
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives
+      description: Other shapes you considered, including doing nothing.
+    validations:
+      required: false
