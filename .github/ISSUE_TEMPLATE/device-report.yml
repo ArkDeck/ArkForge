@@ -1,0 +1,72 @@
+name: Device report
+description: A named board run — observation, flash, verify, rescue, or recovery.
+title: "device: "
+labels: []
+body:
+  - type: markdown
+    attributes:
+      value: |
+        A device report is evidence, not a request to widen support. Do not
+        paste pairing secrets, private keys, credentials, or firmware you
+        cannot share. `--hardware-campaign` does not skip safety gates.
+  - type: dropdown
+    id: device
+    attributes:
+      label: Device
+      options:
+        - DAYU200 (RK3568 / RockUSB)
+        - DAYU600 (uis7885 / PAC)
+        - Other
+    validations:
+      required: true
+  - type: dropdown
+    id: action
+    attributes:
+      label: Action
+      options:
+        - Observation or read-only
+        - Plan only
+        - Flash
+        - Verify
+        - Rescue
+        - Recovery or boot-loop restoration
+        - Other
+    validations:
+      required: true
+  - type: input
+    id: campaign
+    attributes:
+      label: Hardware campaign
+      description: The campaign id if this was an authorized write. Use "none" for read-only observation.
+    validations:
+      required: true
+  - type: input
+    id: commit
+    attributes:
+      label: ArkForge commit
+      description: Full git commit of the binaries you ran. Not a git tag.
+      placeholder: 40-hex commit
+    validations:
+      required: true
+  - type: input
+    id: host
+    attributes:
+      label: Host
+      description: OS, architecture, and whether the daemon was the packaged binary or a local build.
+      placeholder: Windows x64, packaged arkforged
+    validations:
+      required: true
+  - type: textarea
+    id: result
+    attributes:
+      label: Result
+      description: Job id, plan digest, exit code, and whether the outcome is known. An unknown outcome is not success.
+    validations:
+      required: true
+  - type: textarea
+    id: evidence
+    attributes:
+      label: Evidence
+      description: Commands, JSON receipts, and where a longer record should live (docs/evidence/runs/). Redact serial numbers if you consider them private.
+    validations:
+      required: false
