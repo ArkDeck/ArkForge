@@ -13,10 +13,11 @@
 //! the ExecutionAuthority implementation and the IPC client, both of which are
 //! written against these two tables.
 //!
-//! Pin this crate and `arkforge-ipc` at the same [`CONTRACT_TAG`]. The
-//! handshake, flash-verify exits, and boot-loop surface are
+//! Pin this crate and `arkforge-ipc` at the same 40-hex git `rev`.
+//! [`CONTRACT_TAG`] is the in-process identity string for that revision, not a
+//! git tag. The handshake, flash-verify exits, and boot-loop surface are
 //! `docs/arkdeck-contract.md`. [`ARKDECK_CONTRACT_VERSION`] changes when those
-//! tables or that pin change.
+//! tables or that identity change.
 //!
 //! [`ManagedDeviceControlAction`]: arkforge_authority_api::ManagedDeviceControlAction
 //!
@@ -42,7 +43,7 @@ pub use arkforge_ipc::contract::{
 
 /// Step map, control map, IPC handshake, and recovery surface reviewed together.
 ///
-/// Same `1.0.0` as [`CONTRACT_TAG`]. Bump both when ArkDeck's pin must move.
+/// Same `1.0.0` as [`CONTRACT_TAG`]. Bump both in the commit ArkDeck's `rev` advances to.
 pub const ARKDECK_CONTRACT_VERSION: &str = "arkforge.arkdeck-contract/1.0.0";
 
 /// The adapter's own version. It changes when this table changes, because the

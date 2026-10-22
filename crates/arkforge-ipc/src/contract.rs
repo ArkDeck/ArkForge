@@ -1,7 +1,7 @@
 //! Consumer contract for `proto/arkforge.proto`, this crate, and
 //! `arkforge-arkdeck-adapter`.
 //!
-//! The handshake is [`handshake_refusal`]. Compatibility, the tag scheme, and
+//! The handshake is [`handshake_refusal`]. Compatibility, the git-rev pin, and
 //! the recovery surface ArkDeck shows to an operator are in
 //! `docs/arkdeck-contract.md`.
 
@@ -14,11 +14,12 @@ use crate::{PROTOCOL_MAJOR, PROTOCOL_MINOR};
 /// (`HelloAck.daemon_version`) and spec `1.0.0-draft.4` are other identifiers.
 pub const PROTOCOL_VERSION: &str = "1.0";
 
-/// Annotated git tag a consumer pins for this protocol, the adapter tables
-/// reviewed with it, and the recovery surface below.
+/// In-process identity string for this protocol, the adapter tables reviewed
+/// with it, and the recovery surface below.
 ///
-/// The repository had no tags and no GitHub releases when this constant was
-/// added. Cut the tag from `main` using the steps in `docs/arkdeck-contract.md`.
+/// During development ArkDeck pins a full 40-hex commit with Cargo `rev`.
+/// `CONTRACT_TAG` names the contract revision; it is not a git tag to create.
+/// ArkDeck's `check-arkforge-pin.py` accepts only `{ git, rev }`.
 pub const CONTRACT_TAG: &str = "arkforge-contract-v1.0.0";
 
 /// `arkforge flash verify` stdout schema once verification runs.

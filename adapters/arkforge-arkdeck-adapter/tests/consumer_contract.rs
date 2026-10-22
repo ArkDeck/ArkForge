@@ -72,10 +72,21 @@ fn the_compatibility_doc_names_this_pin_and_the_verification_exits() {
         "exit 0",
         "exit 7",
         "exit 9",
+        "check-arkforge-pin.py",
+        "{ git, rev }",
+        "40-hex",
     ] {
         assert!(
             doc.contains(needle),
             "docs/arkdeck-contract.md lacks {needle}"
         );
     }
+    assert!(
+        !doc.contains("git tag -a") && !doc.contains("git push origin arkforge-contract"),
+        "docs/arkdeck-contract.md still tells a consumer to create a contract tag"
+    );
+    assert!(
+        !doc.contains("tag ="),
+        "docs/arkdeck-contract.md still shows a Cargo tag pin"
+    );
 }
