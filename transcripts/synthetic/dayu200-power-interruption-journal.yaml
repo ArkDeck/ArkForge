@@ -1,0 +1,61 @@
+# Synthetic failure transcript — DAYU200 power drops during a write.
+#
+# Provenance: synthetic. The write disconnects with an unknown outcome. A
+# later journal read recovers that fact and refuses another attempt. Replay
+# must not report the write as complete and must not invent a retry.
+# Nothing here is evidence that a host survives power loss.
+
+schemaVersion: arkforge.transcript/v1
+
+transcript:
+  id: SYN-DAYU200-POWER-INTERRUPTION-JOURNAL
+  provenance: synthetic
+  source: "synthetic power interruption and journal recovery; no device was measured"
+  profileId: org.openharmony.dayu200
+
+records:
+  - sequence: 1
+    kind: observation
+    atEpochMs: 1000
+    status: ok
+    observation:
+      id: OBS-LOADER
+      mode: rockusb-loader
+      topologyDigest: 00000000000000000000000000000000000000000000000000000000000000e1
+      descriptorDigest: 00000000000000000000000000000000000000000000000000000000000000e2
+      serialKind: absent
+      identityStrength: serialAndTopology
+    semantic:
+      - key: step
+        value: observe-loader-before-write
+  - sequence: 2
+    kind: invocation
+    atEpochMs: 1500
+    durationMs: 400
+    status: disconnected
+    action: flash-partitions
+    requestBytes: 8388608
+    semantic:
+      - key: step
+        value: flash-partitions
+      - key: outcome
+        value: unknown
+      - key: transferredBytes
+        value: "2097152"
+      - key: declaredBytes
+        value: "8388608"
+  - sequence: 3
+    kind: invocation
+    atEpochMs: 9000
+    durationMs: 30
+    status: ok
+    action: recover-journal
+    semantic:
+      - key: step
+        value: recover-journal
+      - key: journalRecovery
+        value: stopped
+      - key: replay
+        value: refused
+      - key: interruptedAction
+        value: flash-partitions

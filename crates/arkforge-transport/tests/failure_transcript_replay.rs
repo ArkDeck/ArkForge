@@ -19,6 +19,12 @@ const MID_TRANSFER: &str =
     include_str!("../../../transcripts/synthetic/dayu200-mid-transfer-disconnect.yaml");
 const LOADER_TIMEOUT: &str =
     include_str!("../../../transcripts/synthetic/dayu200-loader-switch-timeout.yaml");
+const READBACK_MISMATCH: &str =
+    include_str!("../../../transcripts/synthetic/dayu200-readback-verify-mismatch.yaml");
+const LOADER_IDENTITY: &str =
+    include_str!("../../../transcripts/synthetic/dayu200-loader-identity-change.yaml");
+const POWER_INTERRUPTION: &str =
+    include_str!("../../../transcripts/synthetic/dayu200-power-interruption-journal.yaml");
 
 fn loader_expectation() -> RebindExpectation {
     RebindExpectation {
@@ -100,4 +106,95 @@ fn a_loader_switch_timeout_does_not_settle_a_rebind() {
         .wait_for_rebind(&loader_expectation(), &previous)
         .unwrap();
     assert_eq!(outcome, RebindOutcome::NoCandidate);
+}
+
+#[test]
+fn a_readback_mismatch_is_not_a_verified_image() {
+    let transcript = transcript::parse(READBACK_MISMATCH).expect("synthetic mismatch must parse");
+    assert_eq!(transcript.provenance, TranscriptProvenance::Synthetic);
+    assert!(!transcript.provenance.supports_protocol_claims());
+
+    let transport = TranscriptTransport::new(transcript);
+    let readback = transport
+        .invocation("verify-flash-readback", 0)
+        .expect("the mismatch was recorded");
+    assert_eq!(readback.status, RecordStatus::Failed);
+    assert_eq!(readback.semantic_value("partition"), Some("ramdisk"));
+    assert_eq!(
+        readback.semantic_value("verificationOutcome"),
+        Some("failed")
+    );
+    assert_eq!(
+        readback.semantic_value("expectedDigest"),
+        Some("11111111111111111111111111111111111111111111111111111111111111c3")
+    );
+    assert_eq!(
+        readback.semantic_value("observedDigest"),
+        Some("22222222222222222222222222222222222222222222222222222222222222c4")
+    );
+    assert_ne!(
+        readback.semantic_value("expectedDigest"),
+        readback.semantic_value("observedDigest")
+    );
+    assert!(!transport.action_completed("verify-flash-readback", 0));
+}
+
+#[test]
+fn a_loader_identity_change_keeps_both_observations() {
+    let transcript =
+        transcript::parse(LOADER_IDENTITY).expect("synthetic identity change must parse");
+    assert_eq!(transcript.provenance, TranscriptProvenance::Synthetic);
+    assert!(!transcript.provenance.supports_protocol_claims());
+
+    let transport = TranscriptTransport::new(transcript);
+    let found = transport
+        .discover(&TypedDiscoveryFilter::default(), 0)
+        .unwrap();
+    assert_eq!(found.len(), 2);
+    assert!(
+        found
+            .iter()
+            .all(|observation| observation.mode.as_str() == "rockusb-loader")
+    );
+    assert_ne!(found[0].descriptor_digest, found[1].descriptor_digest);
+    assert_ne!(found[0].topology_digest, found[1].topology_digest);
+    assert_ne!(found[0].observation_id, found[1].observation_id);
+    assert!(transport.open_exact(&found[0]).is_ok());
+    assert!(transport.open_exact(&found[1]).is_ok());
+
+    let check = transport
+        .invocation("confirm-loader-identity", 0)
+        .expect("the identity refusal was recorded");
+    assert_eq!(check.status, RecordStatus::Failed);
+    assert_eq!(check.semantic_value("identityChanged"), Some("true"));
+    assert!(!transport.action_completed("confirm-loader-identity", 0));
+}
+
+#[test]
+fn a_power_interruption_recovers_from_the_journal_without_a_retry() {
+    let transcript =
+        transcript::parse(POWER_INTERRUPTION).expect("synthetic power interruption must parse");
+    assert_eq!(transcript.provenance, TranscriptProvenance::Synthetic);
+    assert!(!transcript.provenance.supports_protocol_claims());
+
+    let transport = TranscriptTransport::new(transcript);
+    let write = transport
+        .invocation("flash-partitions", 0)
+        .expect("the interrupted write was recorded");
+    assert_eq!(write.status, RecordStatus::Disconnected);
+    assert_eq!(write.semantic_value("outcome"), Some("unknown"));
+    assert!(!transport.action_completed("flash-partitions", 0));
+    assert!(transport.invocation("flash-partitions", 1).is_err());
+
+    let recovery = transport
+        .invocation("recover-journal", 0)
+        .expect("the journal recovery was recorded");
+    assert_eq!(recovery.status, RecordStatus::Ok);
+    assert_eq!(recovery.semantic_value("journalRecovery"), Some("stopped"));
+    assert_eq!(recovery.semantic_value("replay"), Some("refused"));
+    assert_eq!(
+        recovery.semantic_value("interruptedAction"),
+        Some("flash-partitions")
+    );
+    assert!(transport.action_completed("recover-journal", 0));
 }

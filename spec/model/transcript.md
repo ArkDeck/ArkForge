@@ -60,6 +60,9 @@ never publish `productionVerified` (AF-TRN-021).
 | `transcripts/dayu600-research-synthetic.yaml` | synthetic | DAYU600 research (no device measured) |
 | `transcripts/synthetic/dayu200-mid-transfer-disconnect.yaml` | synthetic | replay of a bulk write that disconnects before the declared length |
 | `transcripts/synthetic/dayu200-loader-switch-timeout.yaml` | synthetic | replay of a Loader switch that detaches and then times out with no attach |
+| `transcripts/synthetic/dayu200-readback-verify-mismatch.yaml` | synthetic | replay of a full-range readback whose observed digest differs from the image |
+| `transcripts/synthetic/dayu200-loader-identity-change.yaml` | synthetic | replay of a second Loader observation that does not match the admitted device |
+| `transcripts/synthetic/dayu200-power-interruption-journal.yaml` | synthetic | replay of a write that disconnects, then a journal read that refuses another attempt |
 
 Every digest in a derived transcript is `SHA-256("arkforge/derived-transcript/v1|<id>|<field>|<basis>")`
 and is recomputed by `crates/arkforge-transport/tests/golden_transcript_parity.rs`,
