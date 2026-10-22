@@ -33,9 +33,11 @@ size in review. Keep one new case's stored bytes, twin included, under 64 KiB
 unless the requirement is specifically about one long official sample. Then
 commit that one sample, not the series around it.
 
-`fuzz/corpus`, `fuzz/artifacts`, and `target/` stay untracked. A crash worth
-keeping becomes one small fixture or one unit-test input, not the campaign
-that found it.
+`fuzz/artifacts` and `fuzz/target` stay untracked. A crash worth keeping
+becomes one small fixture or one unit-test input, not the campaign that found
+it. `fuzz/corpus/<target>/seed-*` may hold a reviewed seed copied from an
+existing conformance sample, transcript, or in-repo fixture. Each seed stays
+under 64 KiB. Other files libFuzzer writes into that directory stay untracked.
 
 The "committed corpus of parser-rejected archives" noted in
 `conformance/README.md` is the same kind of subset: enough rejects to pin the

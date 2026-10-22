@@ -1,3 +1,8 @@
 target
 artifacts
-corpus
+# libFuzzer adds campaign inputs next to the reviewed seeds. Only seed-*
+# files are part of the tree (spec/conformance/GROWTH.md).
+corpus/**
+!corpus/
+!corpus/*/
+!corpus/**/seed-*
