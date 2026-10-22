@@ -1,25 +1,29 @@
 # ArkDeck consumer contract
 
-ArkDeck pins one ArkForge git tag and checks the constants in `arkforge-ipc`
+ArkDeck pins one ArkForge commit and checks the constants in `arkforge-ipc`
 and `arkforge-arkdeck-adapter`. This document is the compatibility rule for
 that pin, including the boot-loop and `flash verify` outcomes ArkDeck shows
 to an operator.
 
 The wire schema is `proto/arkforge.proto`. The numeric handshake is
 `arkforge_ipc::PROTOCOL_MAJOR` / `PROTOCOL_MINOR`. The dotted form and the
-recovery exits live in `arkforge_ipc::contract`. The adapter re-exports the
-pin and adds `ARKDECK_CONTRACT_VERSION`.
+recovery exits live in `arkforge_ipc::contract`. The adapter re-exports those
+constants and adds `ARKDECK_CONTRACT_VERSION`.
 
 ## Identifiers
 
-Checked on 2026-10-16: `git ls-remote --tags` and the GitHub releases and tags
-APIs for `ArkDeck/ArkForge` were empty. There is no published tag to pin yet.
+Development pins a full git commit. `CONTRACT_TAG` is an in-process identity
+string (`arkforge-contract-v1.0.0`). It is the label of this contract revision,
+and ArkDeck's `rust/scripts/check-arkforge-pin.py` rejects a Cargo `tag` or
+`branch` key. This repository does not cut a git tag or a GitHub Release to
+publish the contract while development continues.
 
 | Identifier | Current value | What ArkDeck does with it |
 | --- | --- | --- |
-| Contract tag | `arkforge-contract-v1.0.0` | Cargo `tag` for `arkforge-ipc` and `arkforge-arkdeck-adapter`. Cut from `main` after this contract is merged. |
+| Git pin | 40-hex `rev` | The same full commit on every `arkforge-*` crate in `rust/Cargo.toml`. |
+| `contract::CONTRACT_TAG` | `arkforge-contract-v1.0.0` | Compile-time identity string for this contract revision. |
 | `contract::PROTOCOL_VERSION` | `1.0` | Compile-time and `Hello` / `HelloAck` handshake. Major `1`, minor `0`. |
-| `ARKDECK_CONTRACT_VERSION` | `arkforge.arkdeck-contract/1.0.0` | Compile-time assert next to the tag. Same `1.0.0`. |
+| `ARKDECK_CONTRACT_VERSION` | `arkforge.arkdeck-contract/1.0.0` | Compile-time assert beside `CONTRACT_TAG`. Same `1.0.0`. |
 | `MAPPING_TABLE_VERSION` | `arkforge.arkdeck-step-map/v1` | Step-kind admission table. Included in contract `1.0.0`. |
 | `CONTROL_TABLE_VERSION` | `arkforge.arkdeck-control-map/v1` | Managed-control table. Included in contract `1.0.0`. |
 | Cargo package version | `0.1.0` | `HelloAck.daemon_version` only. A daemon build string. |
@@ -28,13 +32,11 @@ APIs for `ArkDeck/ArkForge` were empty. There is no published tag to pin yet.
 
 Package `arkforge.ipc.v1` tracks the handshake major.
 
-## Tag scheme
+## When the contract identity moves
 
-Annotated tag:
-
-```text
-arkforge-contract-v<MAJOR>.<MINOR>.<PATCH>
-```
+The identity string is `arkforge-contract-v<MAJOR>.<MINOR>.<PATCH>`, currently
+`arkforge-contract-v1.0.0`. A move is a commit on `main`. ArkDeck then advances
+its `rev` to that commit. The move does not create a git tag.
 
 | Component | Moves when |
 | --- | --- |
@@ -42,48 +44,27 @@ arkforge-contract-v<MAJOR>.<MINOR>.<PATCH>
 | `MINOR` | Protobuf gains optional fields, or an adapter table gains a row an older peer can ignore. `handshake_refusal` accepts any minor on the same major. Unknown fields are skipped. Unknown enum values fail closed. |
 | `PATCH` | Docs, tests, or clarifications leave Hello bytes, both adapter tables, flash-verify exits `0`/`7`/`9`, and the boot-loop success rule unchanged. |
 
-Changing `MAPPING_TABLE_VERSION` or `CONTROL_TABLE_VERSION` moves this tag even
-when the IPC major and minor stay. A published workflow-step spelling change
-is a major contract bump. An additive unmapped-or-new row is a minor bump.
-
-A published tag stays on its commit. The next change gets a new tag.
-
-### Cut the first tag
-
-After the commit that introduces this file is on `main`:
-
-```sh
-git checkout main
-git pull
-git tag -a arkforge-contract-v1.0.0 -m "ArkForge consumer contract 1.0.0"
-git push origin arkforge-contract-v1.0.0
-```
-
-This repository does not publish a GitHub Release for the contract tag. The
-tag is the pin. A Release may point at the same commit later; ArkDeck still
-pins the tag.
+Changing `MAPPING_TABLE_VERSION` or `CONTROL_TABLE_VERSION` moves this identity
+even when the IPC major and minor stay. A published workflow-step spelling
+change is a major contract bump. An additive unmapped-or-new row is a minor bump.
 
 ## What ArkDeck changes
 
-Use the same tag for both crates:
+Declare every ArkForge crate with the same git URL and the same 40-hex commit.
+`check-arkforge-pin.py` requires the key set `{ git, rev }`, one revision, and
+a lock source of `git+https://github.com/ArkDeck/ArkForge.git?rev=<commit>#<commit>`.
 
 ```toml
-arkforge-ipc = { git = "https://github.com/ArkDeck/ArkForge", tag = "arkforge-contract-v1.0.0" }
-arkforge-arkdeck-adapter = { git = "https://github.com/ArkDeck/ArkForge", tag = "arkforge-contract-v1.0.0" }
+arkforge-ipc = { git = "https://github.com/ArkDeck/ArkForge.git", rev = "<40-hex-commit>" }
+arkforge-arkdeck-adapter = { git = "https://github.com/ArkDeck/ArkForge.git", rev = "<40-hex-commit>" }
 ```
 
-Until the tag exists, pin the merge commit:
-
-```toml
-arkforge-ipc = { git = "https://github.com/ArkDeck/ArkForge", rev = "<merge-commit-of-this-contract>" }
-arkforge-arkdeck-adapter = { git = "https://github.com/ArkDeck/ArkForge", rev = "<merge-commit-of-this-contract>" }
-```
-
-Both `rev` values are the same commit. Core stays free of ArkDeck types; ArkDeck
+Both `rev` values are the same commit. Copy that SHA from the reviewed `main`
+commit (`git rev-parse HEAD`). Core stays free of ArkDeck types; ArkDeck
 depends on the adapter for admission tables and on `arkforge-ipc` for the
-handshake codec.
+handshake codec. All ArkForge crates move together.
 
-On a checkout of that tag or commit, run:
+On a checkout of that commit, run:
 
 ```sh
 cargo test -p arkforge-ipc --test consumer_contract
@@ -93,6 +74,8 @@ cargo test -p arkforge-arkdeck-adapter --test consumer_contract
 Those tests encode and decode `Hello`, `HelloAck`, and a
 `SupersedingRecoveryAssessment`, pin the public Hello bytes, and check the
 flash-verify exits. They are the roundtrip a consumer can run without a device.
+`check-arkforge-pin.py --run-vectors` runs them, plus `swift_sdk_vectors` and
+`permit_vectors`, from the checkout Cargo fetched for the lockfile.
 
 In ArkDeck's own build:
 
@@ -190,15 +173,14 @@ together with `recovery_contract_id` and `recovery_contract_sha256`. ArkDeck
 shows those three fields as the profile recovery identity. The boot-loop script
 handles the ramdisk case above; it does not replace the guide.
 
-## Consumer-owned maintenance API (development)
+## Consumer-owned maintenance API
 
 `arkforge_arkdeck_adapter::maintenance` exposes `verify` and `restore` as typed,
 in-process workflows over Runtime-owned ports. They do not spawn the standalone
-CLI or acquire its authority. The port contract and remaining integration work
-are in `spec/ports/authority-maintenance.md`. This addition leaves the IPC Hello,
-step/control tables and their 1.0.0 compatibility identifiers unchanged.
+CLI or acquire its authority. The port contract is
+`spec/ports/authority-maintenance.md`. This API leaves the IPC Hello,
+step/control tables, and their `1.0.0` identity strings unchanged.
 
-Development consumers pin a full reviewed commit with `rev`; do not create a
-tag or release merely to consume this API. A consumer requiring a main-only
-pin must wait for this API's PR to merge before advancing its pin. All ArkForge
-crates must move together, and both consumer_contract tests must pass.
+Consume it by advancing the same 40-hex `rev` on every ArkForge crate to a
+`main` commit that contains the API. `check-arkforge-pin.py` is the pin check,
+and both `consumer_contract` tests must pass at that commit.
