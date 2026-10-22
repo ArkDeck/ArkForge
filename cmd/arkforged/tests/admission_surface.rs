@@ -6,7 +6,7 @@
 //! control action and reports what it observed, and the job moves on.
 //!
 //! Every permit here is minted by the test, which is the one place in this
-//! repository that may do so: `crates/arkforged` is forbidden from even naming
+//! repository that may do so: `cmd/arkforged` is forbidden from even naming
 //! the minting function (architecture.md 8.6), and these tests stand in for the
 //! authority that will.
 

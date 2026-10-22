@@ -42,7 +42,7 @@ daemon **不可能**含原生代码；Run B 的 daemon 构建晚于移除 vendor
 | 时刻(08-18/19 本地) | 事件 |
 |---|---|
 | 08-18 14:48 | Run A `succeeded`(fixed-tool) |
-| 16:20 / 16:41 | `a935798`/`26aa527`：原生读路径 + 真机 Loader 读 parity(证据在仓：`crates/arkforged/tests/evidence/2026-08-18-task-nru-001-read-parity.txt`) |
+| 16:20 / 16:41 | `a935798`/`26aa527`：原生读路径 + 真机 Loader 读 parity(证据在仓：`cmd/arkforged/tests/evidence/2026-08-18-task-nru-001-read-parity.txt`) |
 | 17:05 | `3567484`：原生写路径 + 复位(NRU-002,台架双轨互证) |
 | 20:26 / 21:58 | 其间两次全量 `succeeded`(`job-9df5352a…`、`job-f20afd04…`),伴随双轨与默认切换窗口(backend 未逐一归属,不据此声称) |
 | 21:24 | `8129a7a`：默认切原生(NRU-004 前半) |

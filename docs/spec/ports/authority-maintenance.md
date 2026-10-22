@@ -1,6 +1,6 @@
 # Authority-owned DAYU200 maintenance
 status: draft
-source: adapters/arkforge-arkdeck-adapter/src/maintenance.rs
+source: crates/arkforge-arkdeck-adapter/src/maintenance.rs
 
 This is an in-process authority port, not a new daemon endpoint or a grant to
 access the standalone authority. ArkDeck implements the ports inside its

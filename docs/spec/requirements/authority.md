@@ -55,7 +55,7 @@ permit is left unconsumed and the job reports the break.
 
 ### AF-AUTH-006 — snapshot lifetime
 status: draft
-source: crates/arkforged/src/jobs.rs SNAPSHOT_LIFETIME_MS, StepAdmissionSnapshot::is_fresh_at
+source: cmd/arkforged/src/jobs.rs SNAPSHOT_LIFETIME_MS, StepAdmissionSnapshot::is_fresh_at
 tests: []
 
 The reference daemon publishes `snapshotLifetimeMs = 60000` and treats a
@@ -186,7 +186,7 @@ remove. The daemon MUST NOT reference the minting code path (architecture guard)
 
 ### AF-AUTH-024 — a refusal is an answer
 status: draft
-source: crates/arkforged/src/jobs.rs JobRegistry::submit_permit
+source: cmd/arkforged/src/jobs.rs JobRegistry::submit_permit
 tests: []
 
 `SubmitStepPermitRequest.refusal` (non-empty, no permit) concludes the pending

@@ -7,6 +7,6 @@ license.workspace = true
 repository.workspace = true
 
 [dependencies]
-arkforge-core = { path = "../../crates/arkforge-core" }
-arkforge-authority-api = { path = "../../crates/arkforge-authority-api" }
-arkforge-ipc = { path = "../../crates/arkforge-ipc" }
+arkforge-core = { path = "../arkforge-core" }
+arkforge-authority-api = { path = "../arkforge-authority-api" }
+arkforge-ipc = { path = "../arkforge-ipc" }

@@ -50,7 +50,7 @@ carries instead.
 
 ### AF-VER-006 — conclusive verification failure ends the job
 status: draft
-source: crates/arkforged/src/jobs.rs complete_dispatch
+source: cmd/arkforged/src/jobs.rs complete_dispatch
 tests: []
 
 A `failed` verification outcome after a checkpointed write concludes the job
@@ -115,7 +115,7 @@ coverage. Original jobs and verification records MUST remain immutable.
 
 ### AF-VER-010 — consumer authority verification port
 status: draft
-source: adapters/arkforge-arkdeck-adapter/src/maintenance.rs
+source: crates/arkforge-arkdeck-adapter/src/maintenance.rs
 tests: []
 gap: Rust fake-port fault injection exists; cross-language fixtures and real authority integration remain pending.
 

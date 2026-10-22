@@ -16,7 +16,7 @@
 
 | architecture.md 22 要求 | 交付 |
 |---|---|
-| Rust workspace(八个边界 crate) | `crates/arkforge-{core,authority-api,artifact,transport,provider,engine,ipc}` + `crates/arkforged` + `adapters/arkforge-arkdeck-adapter` |
+| Rust workspace(八个边界 crate) | `crates/arkforge-{core,authority-api,artifact,transport,provider,engine,ipc}` + `cmd/arkforged` + `crates/arkforge-arkdeck-adapter` |
 | neutral Authority API | `arkforge-authority-api`：`ExecutionAuthority`、`StepPermit`、`StepAdmissionSnapshot`、freshness 判定、`ManagedDeviceControlPort` |
 | Artifact / CAS | `arkforge-artifact::cas`：quota、available-space preflight、lease 引用计数、crash-safe GC、0600 ACL |
 | DAYU200 parser / profile | `arkforge-artifact::dayu200`(流式 gzip/tar + mtdparts 语法 + build facts)、`profiles/dayu200.yaml` |
@@ -31,7 +31,7 @@
 
 ### 2.1 Core 不依赖 ArkDeck / vendor
 
-守卫：`crates/arkforged/tests/architecture_guard.rs`。按 4.3 要求，**依赖图是主守卫**，
+守卫：`cmd/arkforged/tests/architecture_guard.rs`。按 4.3 要求，**依赖图是主守卫**，
 词法扫描是次守卫：
 
 - `core_depends_on_nothing`：读 manifest，`arkforge-core` 的 `[dependencies]` 为空；
@@ -183,7 +183,7 @@ fsync + rename)，输入为等长确定性合成流，不是厂商归档本身�
 
 ## 3. 额外交付(AF-V1 未列出但架构要求)
 
-- `adapters/arkforge-arkdeck-adapter`：published `FlashStepKind ↔ WorkflowStep kind`
+- `crates/arkforge-arkdeck-adapter`：published `FlashStepKind ↔ WorkflowStep kind`
   映射表(5.4)，含 ArkDeck registry 的 effect / cancellation / binding 下限。
   `the_materialized_dayu200_plan_would_be_admissible_by_the_arkdeck_registry` 验证本仓
   materialize 出的 23 步计划逐步映射到已发布 kind 并满足全部下限。

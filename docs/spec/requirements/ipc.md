@@ -52,7 +52,7 @@ number responses with `stream_sequence` (0 for a single reply) and end with
 
 ### AF-IPC-006 — the controller secret
 status: draft
-source: crates/arkforged/src/main.rs, crates/arkforge-standalone/src/supervisor.rs
+source: cmd/arkforged/src/main.rs, crates/arkforge-standalone/src/supervisor.rs
 tests: []
 
 The pairing secret is handed to the daemon by the process that starts it

@@ -1,0 +1,30 @@
+[package]
+name = "arkforged"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[lib]
+name = "arkforged"
+path = "src/lib.rs"
+
+[[bin]]
+name = "arkforged"
+path = "src/main.rs"
+
+[dependencies]
+arkforge-core = { path = "../../crates/arkforge-core" }
+arkforge-usb = { path = "../../crates/arkforge-usb" }
+arkforge-authority-api = { path = "../../crates/arkforge-authority-api" }
+arkforge-artifact = { path = "../../crates/arkforge-artifact" }
+arkforge-transport = { path = "../../crates/arkforge-transport" }
+arkforge-provider = { path = "../../crates/arkforge-provider" }
+arkforge-engine = { path = "../../crates/arkforge-engine" }
+arkforge-ipc = { path = "../../crates/arkforge-ipc" }
+arkforge-platform = { path = "../../crates/arkforge-platform" }
+
+[dev-dependencies]
+arkforge-arkdeck-adapter = { path = "../../crates/arkforge-arkdeck-adapter" }
+arkforge-client = { path = "../../crates/arkforge-client" }

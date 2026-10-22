@@ -14,4 +14,4 @@ arkforge-authority-api = { path = "../arkforge-authority-api" }
 arkforge-ipc = { path = "../arkforge-ipc" }
 arkforge-platform = { path = "../arkforge-platform" }
 arkforge-transport = { path = "../arkforge-transport" }
-arkforged = { path = "../arkforged" }
+arkforged = { path = "../../cmd/arkforged" }

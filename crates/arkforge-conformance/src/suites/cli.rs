@@ -1,5 +1,5 @@
 //! Process-level CLI vectors. These are also executed against the built
-//! `arkforge` binary by crates/arkforge-cli/tests/conformance_blackbox.rs.
+//! `arkforge` binary by cmd/arkforge-cli/tests/conformance_blackbox.rs.
 
 use crate::json::Json;
 use crate::suites::case_id;

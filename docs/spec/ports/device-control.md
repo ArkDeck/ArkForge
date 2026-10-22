@@ -1,6 +1,6 @@
 # Port: managed device control (HDC)
 status: draft
-source: api/arkforge.proto ManagedControl*; crates/arkforged/src/jobs.rs; crates/arkforge-standalone/src/hdc_control.rs; adapters/arkforge-arkdeck-adapter/src/control.rs
+source: api/arkforge.proto ManagedControl*; cmd/arkforged/src/jobs.rs; crates/arkforge-standalone/src/hdc_control.rs; crates/arkforge-arkdeck-adapter/src/control.rs
 requirements: AF-CTL-001..008 (`requirements/control.md`)
 
 ## Purpose
@@ -44,7 +44,7 @@ maps: `enter-updater` → `hdc -t <key> target boot loader`-class command;
 `param get` of product model / `const.ohos.fullname`. Connect keys are digested
 under `device-facts` before they appear in any fact (`SHA-256(domain ||
 connectKey)`), never in clear. The ArkDeck adapter maps the same four actions
-onto ArkDeck's typed HDC provider (`adapters/arkforge-arkdeck-adapter/src/control.rs`).
+onto ArkDeck's typed HDC provider (`crates/arkforge-arkdeck-adapter/src/control.rs`).
 
 On Windows, the standalone child environment preserves only `SystemRoot` from
 the host after clearing inherited configuration. This OS prerequisite allows

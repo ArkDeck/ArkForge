@@ -75,7 +75,7 @@ the work never left its queue (AF-ENG-014).
 
 ### AF-ENG-010 — every public step goes through admission
 status: draft
-source: crates/arkforged/src/jobs.rs request_admission, submit_permit
+source: cmd/arkforged/src/jobs.rs request_admission, submit_permit
 tests: []
 
 For each public step in order the daemon: takes a fresh observation; writes
@@ -100,7 +100,7 @@ Every transaction record carries the same `jobId`, `planId`, `stepId`,
 
 ### AF-ENG-012 — state moves follow the records
 status: draft
-source: crates/arkforged/src/jobs.rs
+source: cmd/arkforged/src/jobs.rs
 tests: []
 
 `awaitingPermit` on permit verification; `stepIntentDurable` after
@@ -114,7 +114,7 @@ first make their ActionReceipt and checkpoint durable, then conclude
 
 ### AF-ENG-013 — a step the authority performs is a managed control request
 status: draft
-source: crates/arkforged/src/jobs.rs submit_permit (managed_control_for)
+source: cmd/arkforged/src/jobs.rs submit_permit (managed_control_for)
 tests: []
 
 When the step's primary action lowers to a managed device control action, the
@@ -126,7 +126,7 @@ waits for `submitManagedControlReceipt`. An unanswered request past its deadline
 
 ### AF-ENG-014 — cancellation
 status: draft
-source: crates/arkforged/src/jobs.rs JobRegistry::cancel
+source: cmd/arkforged/src/jobs.rs JobRegistry::cancel
 tests: []
 
 `cancelJob` MUST append `cancellationRequested` (durable) and then: if the job
@@ -150,8 +150,8 @@ value reads as `outcomeUnknown`.
 
 ### AF-ENG-016 — job events
 status: normative
-source: crates/arkforged/src/jobs.rs Job::publish
-tests: [AF-CONF-PB-017, crates/arkforged/tests/admission_surface.rs]
+source: cmd/arkforged/src/jobs.rs Job::publish
+tests: [AF-CONF-PB-017, cmd/arkforged/tests/admission_surface.rs]
 
 Each published `JobEvent` carries the digest of the journal record it was
 published from. The reference daemon numbers events with its own per-job
@@ -162,8 +162,8 @@ recovered event cursor; the count of reconstructed events is not a cursor.
 
 ### AF-ENG-017 — ActionReceipt events are durably replayable
 status: normative
-source: crates/arkforged/src/jobs.rs complete_dispatch, submit_control_receipt, recover_receipt_events
-tests: [crates/arkforged/tests/admission_surface.rs a_job_dispatches_every_step_and_reaches_a_verdict_on_each, ArkDeck ArkForgeFlashSessionContractTests testPassiveObservationConsumesReconciledTerminalAndRestartedReceipt]
+source: cmd/arkforged/src/jobs.rs complete_dispatch, submit_control_receipt, recover_receipt_events
+tests: [cmd/arkforged/tests/admission_surface.rs a_job_dispatches_every_step_and_reaches_a_verdict_on_each, ArkDeck ArkForgeFlashSessionContractTests testPassiveObservationConsumesReconciledTerminalAndRestartedReceipt]
 
 Before publishing an `ACTION_RECEIPT`, the daemon MUST put the exact canonical
 AF-DIG-012 body and the reserved event cursor in the durable
@@ -306,7 +306,7 @@ no later append is allowed until `open` verifies or truncates the uncertain tail
 
 ### AF-JRN-019 — one journal per job
 status: draft
-source: crates/arkforged/src/jobs.rs JobRegistry::start
+source: cmd/arkforged/src/jobs.rs JobRegistry::start
 tests: []
 
 The reference daemon keeps one file `<jobId>.journal` per job under its runtime
@@ -414,7 +414,7 @@ finishing the record of the intent, never a dispatch.
 
 ### AF-CRASH-011 — restart policy of the reference daemon
 status: draft
-source: crates/arkforged/src/jobs.rs recover_job
+source: cmd/arkforged/src/jobs.rs recover_job
 tests: []
 
 On restart the reference daemon does not resume any job. It preserves the first

@@ -63,7 +63,7 @@ complete overwrite is supported with the contract id/version/digest.
 
 ### AF-REC-007 — settled non-success dispositions are confirmed failures
 status: normative
-source: crates/arkforged/src/jobs.rs complete_dispatch
+source: cmd/arkforged/src/jobs.rs complete_dispatch
 tests: [AF-CONF-RECEIPT-003]
 
 A dispatch disposition of `confirmedNoEffect` or `confirmedPartialEffect` is a
@@ -127,8 +127,8 @@ current complete-set proof still requires zero new dispatches.
 
 ### AF-REC-010 — unknown read-only postflight can be a recovery source
 status: draft
-source: crates/arkforged/src/recovery_assessment.rs read_only_postflight_tail
-tests: [crates/arkforged/tests/support/recovery_assessment.rs]
+source: cmd/arkforged/src/recovery_assessment.rs read_only_postflight_tail
+tests: [cmd/arkforged/tests/support/recovery_assessment.rs]
 gap: Recovery assessment is tested through the daemon API; no new wire field is introduced.
 
 An expired final read-only postflight intent MAY be included in a distinct
@@ -144,7 +144,7 @@ still apply; no standalone read result can complete the old job.
 
 ### AF-REC-011 — consumer authority original-ramdisk restoration
 status: draft
-source: adapters/arkforge-arkdeck-adapter/src/maintenance.rs
+source: crates/arkforge-arkdeck-adapter/src/maintenance.rs
 tests: []
 gap: Rust fake-port single-consumption and failure tests exist; Runtime ports and hardware acceptance remain pending.
 

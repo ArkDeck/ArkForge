@@ -120,7 +120,7 @@ arkforged       --绑定前读 Mach-O 代码签名，判 entitlement 与签名�
 
 进程读自己的签名讲给自己听，不构成任何证明，所以 `arkforged` 不做自证。
 
-`crates/arkforged/src/packaging.rs` 是 ArkForge 这一侧的实现。两个模式：
+`cmd/arkforged/src/packaging.rs` 是 ArkForge 这一侧的实现。两个模式：
 
 | 模式 | 强制 | 用途 |
 |---|---|---|

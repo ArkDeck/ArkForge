@@ -16,12 +16,12 @@
 >   `--rkdeveloptool-sha256` 不再是合法旗标（`unknown argument`，daemon 拒绝启动）；
 >   今天只接受 `--runtime-dir`/`--profile`/`--transcript`/`--hardware-campaign`/
 >   `--pair-from-stdin`。原生 RockUSB port 内建
->   （`crates/arkforged/src/dispatch.rs` 的 `NativeRockUsbPort`），不存在
+>   （`cmd/arkforged/src/dispatch.rs` 的 `NativeRockUsbPort`），不存在
 >   「不给工具就没有 dispatcher」的形态；§8.6 的 `-v` 自检与 quarantine 关卡
 >   随外部工具一起消失（AD-015 保留为历史教训）。
 > - **§8.5 的 `HelloAck` 示例值已变**：`toolchain_id = "arkforged-native-rockusb"`，
 >   `toolchain_sha256` = daemon 启动时自量的自身构建摘要
->   （`crates/arkforged/src/main.rs`）。ArkDeck 侧的比对义务不变。
+>   （`cmd/arkforged/src/main.rs`）。ArkDeck 侧的比对义务不变。
 > - **§0/§8 的 `wlx`/`ppt`/`rl`/`rd` 词汇仅存于历史。** 封闭面现为七个语义动作
 >   （enter-loader / probe-loader / validate-partition-table / write-partition /
 >   readback-partition / characterize-read-domain / reset-device，
@@ -89,7 +89,7 @@ case verifyFlashReadback(RockchipRuntimeFlashBundle) // 删
 ### 1.3 保留的十一个 case
 
 其余全部是 HDC 侧的，只有 ArkDeck 能做。完整归属表在 ArkForge 仓
-`adapters/arkforge-arkdeck-adapter/src/control.rs`，
+`crates/arkforge-arkdeck-adapter/src/control.rs`，
 每个 baseline case 都被标为 `keptByAuthority` / `keptInternal` /
 `delegatedToArkForge`，并有测试断言三类之和穷尽 baseline。
 
@@ -223,7 +223,7 @@ daemon 会把它记成 outcome unknown 而不是失败。要表达「确实没�
 
 ## 4. ManagedDeviceControlPort 的 Swift 侧
 
-映射表正本：ArkForge `adapters/arkforge-arkdeck-adapter/src/control.rs`。
+映射表正本：ArkForge `crates/arkforge-arkdeck-adapter/src/control.rs`。
 
 | 语义动作 | provider action 序列 | 语义成功 |
 |---|---|---|
@@ -369,7 +369,7 @@ controller execution/admission surface **已实现并固定**：
 | 新增消息的 Rust 编解码 | ✅ 全部 round-trip 测试 |
 | permit 的 CBOR 解码 | ✅ `StepPermit::from_canonical_bytes` |
 
-九条端到端测试在 `crates/arkforged/tests/admission_surface.rs`，
+九条端到端测试在 `cmd/arkforged/tests/admission_surface.rs`，
 用真实归档物化的真实计划驱动整套握手。
 
 ### 8.1 ArkDeck 侧现在可以对着什么写
@@ -393,7 +393,7 @@ controller execution/admission surface **已实现并固定**：
 
 ### 8.2 dispatch（2026-08-15 已实现）
 
-写入执行也接上了：`crates/arkforged/src/dispatch.rs`。
+写入执行也接上了：`cmd/arkforged/src/dispatch.rs`。
 
 - **在服务锁之外跑。** job registry 交出一份 `PendingDispatch`，dispatcher
   **取走**它（取走即标记 in-flight，第二个 dispatcher 拿不到同一份），
@@ -416,7 +416,7 @@ job 会停在第一个需要派发的步骤上等着（这是诚实的停，不�
 
 ### 8.3 端到端测试
 
-`crates/arkforged/tests/admission_surface.rs` 十一条，其中
+`cmd/arkforged/tests/admission_surface.rs` 十一条，其中
 `a_job_dispatches_every_step_and_reaches_a_verdict_on_each` 用一个脚本化的
 tool port 把整个计划跑完：九条 `wlx` 按 Profile 声明顺序发出、`ppt` 先于它们、
 `rd` 在最后、九个 readback 全部给出 `typedSkip` 且不带任何 strength。

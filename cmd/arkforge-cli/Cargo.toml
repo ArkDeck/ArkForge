@@ -1,0 +1,25 @@
+[package]
+name = "arkforge-cli"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[[bin]]
+name = "arkforge"
+path = "src/main.rs"
+
+[dependencies]
+arkforge-client = { path = "../../crates/arkforge-client" }
+arkforge-standalone = { path = "../../crates/arkforge-standalone" }
+arkforge-core = { path = "../../crates/arkforge-core" }
+arkforge-authority-api = { path = "../../crates/arkforge-authority-api" }
+arkforge-artifact = { path = "../../crates/arkforge-artifact" }
+arkforge-ipc = { path = "../../crates/arkforge-ipc" }
+arkforge-transport = { path = "../../crates/arkforge-transport" }
+arkforged = { path = "../arkforged" }
+
+[dev-dependencies]
+arkforge-artifact = { path = "../../crates/arkforge-artifact" }
+arkforge-platform = { path = "../../crates/arkforge-platform" }

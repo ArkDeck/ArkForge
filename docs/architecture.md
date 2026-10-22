@@ -358,9 +358,10 @@ arkforge/
 │   ├── arkforge-ipc
 │   ├── arkforge-client
 │   ├── arkforge-standalone
-│   └── arkforged
-├── adapters/
 │   └── arkforge-arkdeck-adapter
+├── cmd/
+│   ├── arkforge-cli
+│   └── arkforged
 ├── api/
 ├── hack/
 ├── profiles/

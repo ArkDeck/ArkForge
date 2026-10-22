@@ -49,7 +49,7 @@ areas:
         symbol: arkforged::jobs::JobRegistry::start, request_admission
       - req: AF-ID-005
         symbol: arkforged::jobs::validate_receipt_fact_keys; arkforge_engine::journal::JournalRecord
-        tests: [arkforge-conformance action-receipt 005, journal suite, crates/arkforged/src/jobs.rs tests]
+        tests: [arkforge-conformance action-receipt 005, journal suite, cmd/arkforged/src/jobs.rs tests]
       - req: AF-ID-006
         symbol: arkforge_core::effect::DeviceMode::new; arkforge_core::profile::identity_label
         tests: [crates/arkforge-core/src/effect.rs tests, profile.rs tests::vendor_identity_labels_are_visible_bounded_text]
@@ -63,18 +63,18 @@ areas:
         tests: [arkforge-conformance plan 004]
       - req: AF-PLAN-003
         symbol: arkforge_ipc::SessionKind::may_call; arkforged::service::materialize_plan
-        tests: [crates/arkforged/tests/api_surface.rs]
+        tests: [cmd/arkforged/tests/api_surface.rs]
       - req: AF-PLAN-010..012
         symbol: arkforge_core::step::{PublicFlashStep, FlashStepKind::minimum_effect, validate_self_consistent}
         tests: [crates/arkforge-core/src/step.rs tests]
       - req: AF-PLAN-020..024
         symbol: arkforge_core::plan::{FlashPlanEnvelope::seal, recompute_digest, verify_self_digest, digest_body_bytes, is_expired_at}; arkforge_engine::PlanStore::{open, insert, get}; arkforge_engine::plan_codec; arkforged::plan_storage
-        tests: [crates/arkforge-core/src/plan.rs tests, crates/arkforged/src/plan_storage_tests.rs, crates/arkforged/tests/admission_surface.rs daemon_restart_loads_the_original_private_plan_without_resuming_an_unknown_job]
+        tests: [crates/arkforge-core/src/plan.rs tests, cmd/arkforged/src/plan_storage_tests.rs, cmd/arkforged/tests/admission_surface.rs daemon_restart_loads_the_original_private_plan_without_resuming_an_unknown_job]
   - area: PROJ
     symbols:
       - req: AF-PROJ-001..003, AF-PROJ-010..014
         symbol: arkforge_core::projection::{PrivateActionRecord::digest, validate_projection, ProjectionError}; arkforge_engine::plan_codec::{validate, decode}
-        tests: [crates/arkforge-core/src/projection.rs tests, crates/arkforged/src/plan_storage_tests.rs]
+        tests: [crates/arkforge-core/src/projection.rs tests, cmd/arkforged/src/plan_storage_tests.rs]
   - area: EFF
     symbols:
       - req: AF-EFF-001..003, AF-EFF-010..011
@@ -92,12 +92,12 @@ areas:
         tests: [crates/arkforge-authority-api/tests/permit_vectors.rs, arkforge-conformance permit suite]
       - req: AF-AUTH-023
         symbol: arkforge_authority_api::authority_side::mint_integrity_tag
-        tests: [crates/arkforged/tests/architecture_guard.rs (daemon never names authority_side)]
+        tests: [cmd/arkforged/tests/architecture_guard.rs (daemon never names authority_side)]
       - req: AF-AUTH-024
         symbol: arkforged::jobs::JobRegistry::submit_permit (refusal branch)
       - req: AF-AUTH-025
         symbol: arkforged::jobs (watch-published requests and inbound submissions only); arkforged::service
-        tests: [crates/arkforged/tests/architecture_guard.rs]
+        tests: [cmd/arkforged/tests/architecture_guard.rs]
       - req: AF-AUTH-P-001..002
         symbol: arkforge_engine::recovery::{PermitLedger, PermitDisposition}
         tests: [crates/arkforge-engine/src/recovery.rs tests, arkforge-conformance crash suite]
@@ -108,7 +108,7 @@ areas:
         tests: [crates/arkforge-engine/src/lib.rs tests, arkforge-conformance state-machine suite]
       - req: AF-ENG-010..017
         symbol: arkforged::jobs::{JobRegistry::start, submit_permit, complete_dispatch, submit_control_receipt, cancel, advance, request_admission, recover_receipt_events, recover_job, Job::publish}
-        tests: [crates/arkforged/tests/admission_surface.rs, crates/arkforged/tests/api_surface.rs]
+        tests: [cmd/arkforged/tests/admission_surface.rs, cmd/arkforged/tests/api_surface.rs]
   - area: JRN
     symbols:
       - req: AF-JRN-001..006
@@ -135,19 +135,19 @@ areas:
         tests: [crates/arkforge-standalone/src/supervisor/recovery_tests.rs]
       - req: AF-REC-010
         symbol: arkforged::recovery_assessment::read_only_postflight_tail; arkforged::service::plan_superseding_recovery
-        tests: [crates/arkforged/tests/support/recovery_assessment.rs]
+        tests: [cmd/arkforged/tests/support/recovery_assessment.rs]
       - req: AF-REC-001
         symbol: arkforge_engine::JobState::may_transition_to (no edge out of outcomeUnknown to a dispatching state)
       - req: AF-REC-002..005
         symbol: arkforge_engine::superseding; arkforge_authority_api::PossibleEffectSet; arkforged::recovery_assessment; arkforged::service (reconcileJob, planSupersedingRecovery); arkforge_standalone::supervisor::recovery
-        tests: [crates/arkforge-engine/src/superseding.rs tests, crates/arkforged/tests/support/recovery_assessment.rs, crates/arkforge-standalone/src/supervisor/recovery_tests.rs]
+        tests: [crates/arkforge-engine/src/superseding.rs tests, cmd/arkforged/tests/support/recovery_assessment.rs, crates/arkforge-standalone/src/supervisor/recovery_tests.rs]
       - req: AF-REC-007
         symbol: arkforged::jobs::JobRegistry::complete_dispatch
       - req: AF-REC-006
         symbol: arkforged::service::get_recovery_guide; arkforge_ipc::messages::RecoveryGuide
       - req: AF-REC-008
         symbol: ArkDeck RuntimeJobEngine durable arkforge correlation and terminal receipt storage; ArkForgeFlashSession::observeTerminal
-        tests: [ArkDeck RuntimeJobEngineContractTests, ArkDeck ArkForgeFlashSessionContractTests testPassiveObservationConsumesReconciledTerminalAndRestartedReceipt, crates/arkforged/tests/admission_surface.rs a_job_dispatches_every_step_and_reaches_a_verdict_on_each]
+        tests: [ArkDeck RuntimeJobEngineContractTests, ArkDeck ArkForgeFlashSessionContractTests testPassiveObservationConsumesReconciledTerminalAndRestartedReceipt, cmd/arkforged/tests/admission_surface.rs a_job_dispatches_every_step_and_reaches_a_verdict_on_each]
   - area: VER
     symbols:
       - req: AF-VER-001..006
@@ -155,7 +155,7 @@ areas:
         tests: [crates/arkforge-core/src/verification.rs tests, crates/arkforge-provider/src/rockchip_execute.rs tests]
       - req: AF-VER-007
         symbol: arkforge_provider::rockchip postflight actions; arkforge_standalone::hdc_control::read_properties
-        tests: [crates/arkforged/tests/admission_surface.rs, crates/arkforge-standalone/src/hdc_control.rs tests]
+        tests: [cmd/arkforged/tests/admission_surface.rs, crates/arkforge-standalone/src/hdc_control.rs tests]
       - req: AF-VER-008
         symbol: arkforge_standalone::supervisor::verification; arkforge_standalone::hdc_control::partition
         tests: [crates/arkforge-standalone/src/supervisor/verification/tests.rs, crates/arkforge-standalone/src/hdc_control/partition.rs tests]
@@ -227,11 +227,11 @@ areas:
   - area: CLI
     symbols:
       - req: AF-CLI-001..009
-        symbol: arkforge_cli (crates/arkforge-cli/src/main.rs); arkforge_standalone::application
-        tests: [crates/arkforge-cli/tests/cli_artifact.rs, cli_signing.rs, conformance_blackbox.rs, arkforge-conformance cli suite]
+        symbol: arkforge_cli (cmd/arkforge-cli/src/main.rs); arkforge_standalone::application
+        tests: [cmd/arkforge-cli/tests/cli_artifact.rs, cli_signing.rs, conformance_blackbox.rs, arkforge-conformance cli suite]
       - req: AF-CLI-010
         symbol: arkforge_cli::run_flash_verify; arkforge_standalone::supervisor::verify_flash
-        tests: [crates/arkforge-cli/src/main.rs tests, crates/arkforge-standalone/src/supervisor/verification/tests.rs]
+        tests: [cmd/arkforge-cli/src/main.rs tests, crates/arkforge-standalone/src/supervisor/verification/tests.rs]
   - area: PORT
     symbols:
       - req: ports/durability.md
@@ -247,4 +247,4 @@ areas:
     symbols:
       - req: AF-VER-010, AF-REC-011
         symbol: arkforge_arkdeck_adapter::maintenance::{verify, restore}
-        tests: [adapters/arkforge-arkdeck-adapter/tests/maintenance.rs]
+        tests: [crates/arkforge-arkdeck-adapter/tests/maintenance.rs]

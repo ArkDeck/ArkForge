@@ -163,7 +163,7 @@ DAYU200 的枚举、Loader 切换、分区读写、复位和 read-domain-aware v
 | `arkforged` | 本地 mechanics daemon；负责解析、协议、USB、写入、验证和耐久状态 |
 | [`arkforge-client`](crates/arkforge-client) | Rust application API 与 typed client |
 | [`ArkForgeSDK`](swift/ArkForgeSDK) | Swift 的 `ArkForgeProtocol` 与 `ArkForgeClient` |
-| [`arkforge-arkdeck-adapter`](adapters/arkforge-arkdeck-adapter) | 让 ArkDeck 承担 authority，不向 ArkForge Core 引入 ArkDeck 类型 |
+| [`arkforge-arkdeck-adapter`](crates/arkforge-arkdeck-adapter) | 让 ArkDeck 承担 authority，不向 ArkForge Core 引入 ArkDeck 类型 |
 
 独立 CLI 和 ArkDeck 使用不同的 runtime namespace，不能接管彼此已经配对的 daemon。
 Authority 决定“谁可以对哪台设备执行什么”；ArkForge mechanics 只负责把已授权计划正确地

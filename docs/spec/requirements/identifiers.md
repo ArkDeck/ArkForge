@@ -32,7 +32,7 @@ body; it is lowercase hex text on JSON/YAML surfaces.
 
 ### AF-ID-004 — identifiers the daemon mints
 status: draft
-source: crates/arkforged/src/jobs.rs JobRegistry::start, request_admission
+source: cmd/arkforged/src/jobs.rs JobRegistry::start, request_admission
 tests: []
 
 The reference daemon mints: `JOB-<16 uppercase hex digits of epoch ms>-<4 digit
