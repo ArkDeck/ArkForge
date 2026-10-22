@@ -74,7 +74,7 @@ ArkForge 已经完成并在真实 DAYU200 上验证到写入前的最后一步�
 | 九条 `wlx` 真实 argv 降解与前置校验 | ✅ 全部通过，**全部未派发**——设备写入次数 0 |
 
 缺的只有一样：一张 permit。ArkForge 刻意签发不了——它的架构守卫禁止
-`crates/arkforged` 引用签发函数。这正是本 change 要补上的那一半。
+`cmd/arkforged` 引用签发函数。这正是本 change 要补上的那一半。
 
 ## What changes
 
@@ -93,7 +93,7 @@ ArkForge 已经完成并在真实 DAYU200 上验证到写入前的最后一步�
 > 这正是 ArkForge `architecture.md` 21.3 明令禁止的。
 
 保留的十一个 case 全部是 HDC 侧的，只有 ArkDeck 能做。完整归属表见
-`adapters/arkforge-arkdeck-adapter/src/control.rs`（ArkForge 仓），
+`crates/arkforge-arkdeck-adapter/src/control.rs`（ArkForge 仓），
 其中每一个 baseline case 都被分类为 keptByAuthority / keptInternal /
 delegatedToArkForge，并有测试断言三类之和穷尽 baseline。
 

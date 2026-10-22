@@ -61,12 +61,12 @@ vocabularies:
     values: [durable, buffered]
 
   - id: journal-fact-key
-    source: crates/arkforge-engine/src/recovery.rs fact; crates/arkforged/src/jobs.rs
+    source: crates/arkforge-engine/src/recovery.rs fact; cmd/arkforged/src/jobs.rs
     note: keys recovery reads are normative; the rest are what the reference daemon writes
     values: [jobId, planId, stepId, attemptId, permitId, receiptDigest, receiptBodyHex, receiptEventSequence, planDigest, totalSteps, controllerSessionId, outcome, reason, eventSequence, failureClassification, refusal, controlRequestId, controlAction, controlDeadlineEpochMs, mode]
 
   - id: outcome-classified-outcome
-    source: crates/arkforged/src/jobs.rs recover_job; crates/arkforge-engine/src/recovery.rs terminal_state
+    source: cmd/arkforged/src/jobs.rs recover_job; crates/arkforge-engine/src/recovery.rs terminal_state
     fixture: AF-CONF-CRASH-021
     unknown_value_policy: unknown   # any other text reads as outcomeUnknown
     values: [succeeded, confirmedFailed, cancelledSafe, recoveryAssessable, outcomeUnknown, confirmedNoEffect, confirmedPartialEffect]
@@ -214,7 +214,7 @@ vocabularies:
     values: [classOnly, serialAsserted, serialAndTopology, protocolConfirmed]
 
   - id: serial-evidence-kind
-    source: crates/arkforge-transport/src/lib.rs SerialEvidence; crates/arkforged/src/jobs.rs request_admission
+    source: crates/arkforge-transport/src/lib.rs SerialEvidence; cmd/arkforged/src/jobs.rs request_admission
     values: [absent, descriptor, protocolUnique]
 
   - id: rebind-outcome
@@ -242,7 +242,7 @@ vocabularies:
     values: [semanticOnly, prefixHash, sampledRanges, fullHash]
 
   - id: verification-outcome
-    source: crates/arkforged/src/jobs.rs complete_dispatch; proto ActionReceiptSummary.verification_outcome
+    source: cmd/arkforged/src/jobs.rs complete_dispatch; proto ActionReceiptSummary.verification_outcome
     fixture: AF-CONF-PB-015
     values: [verified, typedSkip, failed]
 
@@ -265,11 +265,11 @@ vocabularies:
     values: [bounded, unbounded]
 
   - id: reconcile-verdict
-    source: crates/arkforged/src/service.rs (reconcileJob); proto ReconcileJobResponse.verdict
+    source: cmd/arkforged/src/service.rs (reconcileJob); proto ReconcileJobResponse.verdict
     values: [succeeded, confirmedNotExecuted, confirmedPartial, stillUnknown, nothingToReconcile]
 
   - id: cancellation-disposition
-    source: crates/arkforged/src/jobs.rs CancellationDisposition::as_str
+    source: cmd/arkforged/src/jobs.rs CancellationDisposition::as_str
     used_in: [ipc cancelJob response, cli arkforge.job-cancellation/v1.disposition]
     values: [queued-at-safe-boundary, cancelled-safe, already-terminal, outcome-unknown]
 

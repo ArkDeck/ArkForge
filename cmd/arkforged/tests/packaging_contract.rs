@@ -67,7 +67,7 @@ fn the_release_packager_contains_only_the_canonical_cli_daemon_pair() {
 #[test]
 fn the_windows_driver_and_winusb_backend_share_one_exact_interface_identity() {
     const INF: &str = include_str!("../../../packaging/windows/driver/arkforge-rockusb.inf");
-    const BACKEND: &str = include_str!("../../arkforge-usb/src/platform_windows.rs");
+    const BACKEND: &str = include_str!("../../../crates/arkforge-usb/src/platform_windows.rs");
     const GUID: &str = "6A4E21F0-50A4-4D7A-B71B-9E945B3F6B7B";
 
     assert!(INF.contains("USB\\VID_2207&PID_350A"));

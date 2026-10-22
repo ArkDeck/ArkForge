@@ -28,3 +28,6 @@ publish git tags or GitHub Releases. Consumers pin a full git commit.
   is `hack/`. `transcripts/` is `test/transcripts/`. `spec/` is `docs/spec/`.
   `.gitattributes` keeps those conformance fixtures and transcripts as raw
   bytes on checkout.
+- `arkforge` and `arkforged` live under `cmd/`. `arkforge-arkdeck-adapter`
+  lives under `crates/`. Crate names are unchanged. `Package.swift` stays at
+  the repository root.

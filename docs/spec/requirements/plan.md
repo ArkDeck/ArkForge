@@ -34,7 +34,7 @@ entry, and `availability` MUST be `unavailable` with a reason whenever
 
 ### AF-PLAN-003 — a public caller receives at most an assessment
 status: draft
-source: crates/arkforge-ipc/src/lib.rs SessionKind::may_call; crates/arkforged/src/service.rs
+source: crates/arkforge-ipc/src/lib.rs SessionKind::may_call; cmd/arkforged/src/service.rs
 tests: []
 
 `materializePlan` on a public session MUST return an assessment even when the

@@ -164,15 +164,15 @@ wlx system /…/staging/system.img
 AF-V2 的目标原文是「在 ArkDeck 使用 ArkForge 完成真实 DAYU200」，
 ArkForge 自己不持有 authority(architecture.md 3、8)。一次写入需要 StepPermit，
 一张 permit 需要一个 authority 去签发，而本仓**刻意做不到**：
-架构守卫禁止 `crates/arkforged` 引用签发函数(`the_daemon_never_mints_a_permit`)。
+架构守卫禁止 `cmd/arkforged` 引用签发函数(`the_daemon_never_mints_a_permit`)。
 
 因此这里缺的不是代码，是一个决定：谁来做 authority。
 
 **2026-08-15 已定：ArkDeck 做 authority**，即 architecture.md 22 节 AF-V2 的原意。
 ArkForge 这一侧需要的东西已经全部就位：
 
-- `adapters/arkforge-arkdeck-adapter/src/lib.rs` —— step 映射表；
-- `adapters/arkforge-arkdeck-adapter/src/control.rs` —— 控制动作映射表，
+- `crates/arkforge-arkdeck-adapter/src/lib.rs` —— step 映射表；
+- `crates/arkforge-arkdeck-adapter/src/control.rs` —— 控制动作映射表，
   以及 ArkDeck 每一个 `RockchipProviderAction` 的归属(keptByAuthority /
   keptInternal / delegatedToArkForge)，有测试断言三类之和穷尽 baseline；
 - `docs/archive/openspec/chg-arkdeck-arkforge-authority/` —— 可整个目录贴进 ArkDeck 的提案，

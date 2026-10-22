@@ -26,7 +26,7 @@ fn repo_root() -> PathBuf {
 fn dependency_graph() -> BTreeMap<String, BTreeSet<String>> {
     let root = repo_root();
     let mut graph = BTreeMap::new();
-    for directory in ["crates", "adapters"] {
+    for directory in ["crates", "cmd"] {
         let base = root.join(directory);
         for entry in std::fs::read_dir(&base).expect("workspace directory") {
             let entry = entry.expect("directory entry");
@@ -197,7 +197,7 @@ fn unsafe_is_confined_to_the_usb_ffi_crate() {
     // pointers, but no protocol, daemon, provider, or neutral core crate may
     // acquire an unsafe surface as a side effect of that decision.
     let root = repo_root();
-    for directory in ["crates", "adapters"] {
+    for directory in ["crates", "cmd"] {
         for entry in std::fs::read_dir(root.join(directory)).expect("workspace directory") {
             let entry = entry.expect("directory entry");
             if matches!(
@@ -347,7 +347,7 @@ fn the_daemon_never_mints_a_permit() {
     // architecture.md 8.6: arkforged verifies, it does not mint. The minting
     // function lives behind `authority_side`, and this asserts the daemon never
     // reaches for it.
-    for (path, source) in sources_of("crates/arkforged") {
+    for (path, source) in sources_of("cmd/arkforged") {
         let code = code_only(&source);
         for needle in ["authority_side", "mint_integrity_tag"] {
             assert!(
@@ -373,10 +373,7 @@ fn the_daemon_can_observe_a_real_device() {
     // running the tests, and would pass on a clean runner for the same reason
     // the bug survived: nothing was attached to contradict it.
     let mut files = Vec::new();
-    collect(
-        &repo_root().join("crates/arkforged/src/service"),
-        &mut files,
-    );
+    collect(&repo_root().join("cmd/arkforged/src/service"), &mut files);
     assert!(!files.is_empty(), "the service module source is missing");
     let source = files
         .into_iter()
@@ -395,7 +392,7 @@ fn the_workspace_has_no_third_party_runtime_dependencies() {
     // AFD-0001. A dependency added without a decision record would show up as a
     // non-path dependency here.
     let root = repo_root();
-    for directory in ["crates", "adapters"] {
+    for directory in ["crates", "cmd"] {
         for entry in std::fs::read_dir(root.join(directory)).expect("workspace directory") {
             let entry = entry.expect("directory entry");
             let manifest_path = entry.path().join("Cargo.toml");

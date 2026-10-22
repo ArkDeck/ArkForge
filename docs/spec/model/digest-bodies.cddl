@@ -338,7 +338,7 @@ maturity-key = {
 ; ---------------------------------------------------------------------------
 ; Domain: "arkforge/v1/toolchain-facts\0"  over toolchain-identity
 ; Domain: "arkforge/v1/artifact-facts\0"   over artifact-identity
-; source: crates/arkforged/src/service.rs (admission snapshot inputs)   (draft)
+; source: cmd/arkforged/src/service.rs (admission snapshot inputs)   (draft)
 ; ---------------------------------------------------------------------------
 
 ; ---------------------------------------------------------------------------
@@ -457,7 +457,7 @@ action-receipt = {
 ; Domain: "arkforge/v1/transcript\0"          see model/transcript.md
 ; Domain: "arkforge/v1/transport-session\0"   over session facts (usb.rs) — draft
 ; Domain: "arkforge/v1/rescue-plan\0", "arkforge/v1/rescue-receipt\0"
-;                                             rescue surface (crates/arkforged/src/rescue.rs) — draft
+;                                             rescue surface (cmd/arkforged/src/rescue.rs) — draft
 ; Domain: "arkforge/v1/authority-support-key\0"
 ;                                             standalone authority support key — draft
 ; ---------------------------------------------------------------------------

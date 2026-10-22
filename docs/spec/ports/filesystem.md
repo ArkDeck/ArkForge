@@ -1,6 +1,6 @@
 # Port: file system (runtime directory, content-addressed store)
 status: draft
-source: crates/arkforge-artifact/src/cas.rs, crates/arkforge-artifact/src/staging.rs, crates/arkforged/src/main.rs
+source: crates/arkforge-artifact/src/cas.rs, crates/arkforge-artifact/src/staging.rs, cmd/arkforged/src/main.rs
 
 ## Purpose
 Hold the journal files, the content-addressed artifact store and the staged

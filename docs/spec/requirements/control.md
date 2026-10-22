@@ -46,7 +46,7 @@ that lacks any expected key MUST be refused (`CONTROL_FACTS_INCOMPLETE`).
 
 ### AF-CTL-006 — deadline
 status: draft
-source: crates/arkforged/src/jobs.rs submit_permit, expire_stale_controls
+source: cmd/arkforged/src/jobs.rs submit_permit, expire_stale_controls
 tests: []
 
 The request carries `deadlineEpochMs` (reference: permit time + 120 000 ms).

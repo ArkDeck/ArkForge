@@ -174,7 +174,7 @@ vendor RockUSB flashing tool.
 | `arkforged` | Local mechanics daemon responsible for parsing, protocols, USB, writes, verification, and durable state |
 | [`arkforge-client`](crates/arkforge-client) | Rust application API and typed client |
 | [`ArkForgeSDK`](swift/ArkForgeSDK) | `ArkForgeProtocol` and `ArkForgeClient` for Swift |
-| [`arkforge-arkdeck-adapter`](adapters/arkforge-arkdeck-adapter) | Lets ArkDeck provide authority without introducing ArkDeck types into ArkForge Core |
+| [`arkforge-arkdeck-adapter`](crates/arkforge-arkdeck-adapter) | Lets ArkDeck provide authority without introducing ArkDeck types into ArkForge Core |
 
 The standalone CLI and ArkDeck use separate runtime namespaces and cannot take over each other's
 paired daemon. Authority decides who may perform which operation on which device; ArkForge mechanics

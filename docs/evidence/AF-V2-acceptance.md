@@ -28,7 +28,7 @@
 ## 1. 一句话结论
 
 ArkForge 侧的刷写机制**完整且在真机上验证到写入前的最后一步**。
-缺的是一张 StepPermit，而本仓刻意签发不了——架构守卫禁止 `crates/arkforged`
+缺的是一张 StepPermit，而本仓刻意签发不了——架构守卫禁止 `cmd/arkforged`
 引用签发函数（`the_daemon_never_mints_a_permit`）。
 
 2026-08-15 已定：**ArkDeck 做 authority**，即 architecture.md 22 节 AF-V2 的原意。
@@ -42,18 +42,18 @@ ArkForge 这侧要交的东西已经全部交付，提案在
 | architecture.md 22 要求 | 状态 | 交付 |
 |---|---|---|
 | ArkForge durable engine | ✅ | `arkforge-engine::{journal,durable,recovery,superseding}` |
-| ArkDeck adapter | 🟡 ArkForge 半完成 | `adapters/arkforge-arkdeck-adapter::{lib,control}`；Swift 半属 ArkDeck 仓 |
+| ArkDeck adapter | 🟡 ArkForge 半完成 | `crates/arkforge-arkdeck-adapter::{lib,control}`；Swift 半属 ArkDeck 仓 |
 | StepPermit（含 8.6 完整性与重传信任模型） | ✅ | `arkforge-engine::step`；交叉验证向量 `docs/archive/openspec/…/permit-vectors.md` |
 | ManagedDeviceControlPort | ✅ | typed 动作 + Provider 侧显式拒绝 + 发布的映射表 + daemon 侧 API 13 |
-| controller execution/admission surface | ✅ | API 6/7/8/12/13 全部实现;`crates/arkforged/src/jobs.rs` |
+| controller execution/admission surface | ✅ | API 6/7/8/12/13 全部实现;`cmd/arkforged/src/jobs.rs` |
 | execution readiness（机器可读） | ✅ | 两个常驻事实(配对 + 工具绑定)在握手里报出;工具摘要**强制**与 `--rkdeveloptool-sha256` 比对，不符拒绝启动;绑定后还要**证明能跑**(device-free 探测 + 5 秒超时)，AD-015 的 quarantine 情形已实测复现并诊断(AD-022);计划的 toolchain 摘要不符拒为 `TOOLCHAIN_DIGEST_MISMATCH` |
-| dispatch（执行侧接线） | ✅ 软件层 | `crates/arkforged/src/dispatch.rs`;服务锁之外运行，十一条端到端测试用脚本化 tool port 跑完整个计划（九条 `wlx` + 读域三态）。**未在真机上跑过** |
+| dispatch（执行侧接线） | ✅ 软件层 | `cmd/arkforged/src/dispatch.rs`;服务锁之外运行，十一条端到端测试用脚本化 tool port 跑完整个计划（九条 `wlx` + 读域三态）。**未在真机上跑过** |
 | Rockchip fixed-tool Provider | ✅ | `arkforge-provider::rockchip_execute` |
 | generic Runtime integration | ⛔ | ArkDeck 仓 |
 | generic UI | ⛔ | ArkDeck 仓 |
 | compatibility alias | ⛔ | 换实现之后另开 change |
 | legacy decoder | ⛔ | 同上 |
-| arkforged signing/entitlement/packaging 契约 | ✅ | [AFD-0003](../decisions/AFD-0003-arkforged-signing-packaging.md);`crates/arkforged/src/packaging.rs`、`packaging/macos/`。两个二进制 entitlement 字典皆空并在绑定前强制(AD-007 的留白已对齐);release 签名形状由 `--require-release-signing` 强制。**公证未做过**——nested code 随容器公证，属 ArkDeck 侧 |
+| arkforged signing/entitlement/packaging 契约 | ✅ | [AFD-0003](../decisions/AFD-0003-arkforged-signing-packaging.md);`cmd/arkforged/src/packaging.rs`、`packaging/macos/`。两个二进制 entitlement 字典皆空并在绑定前强制(AD-007 的留白已对齐);release 签名形状由 `--require-release-signing` 强制。**公证未做过**——nested code 随容器公证，属 ArkDeck 侧 |
 
 ### 2.1 durable engine
 

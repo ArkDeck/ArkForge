@@ -58,8 +58,8 @@
 
 提案引用的 ArkForge 侧产物，都是已经在仓里、可被 ArkDeck 侧测试直接对照的：
 
-- `adapters/arkforge-arkdeck-adapter/src/lib.rs` — step 映射表
-- `adapters/arkforge-arkdeck-adapter/src/control.rs` — 控制动作映射表 + ArkDeck
+- `crates/arkforge-arkdeck-adapter/src/lib.rs` — step 映射表
+- `crates/arkforge-arkdeck-adapter/src/control.rs` — 控制动作映射表 + ArkDeck
   provider action 的归属表（keptByAuthority / keptInternal / delegatedToArkForge）
 - `chg-arkdeck-arkforge-authority/permit-vectors.md` — permit 编码的交叉验证向量，
   由 `crates/arkforge-authority-api/tests/permit_vectors.rs` 守卫

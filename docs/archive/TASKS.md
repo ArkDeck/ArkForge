@@ -68,7 +68,7 @@ artifact import
 - [x] DAYU200 整包 CAS 导入在声明预算内(实测 3.07 s / 227 MiB/s，预算 60 s)
 - [x] 无设备 mutation
 
-**额外交付**：`adapters/arkforge-arkdeck-adapter` 的 published step 映射表(5.4)、
+**额外交付**：`crates/arkforge-arkdeck-adapter` 的 published step 映射表(5.4)、
 `api/arkforge.proto`、`arkforge-cli` 只读诊断。
 
 **边界**：见[验收证据](../evidence/AF-V1-acceptance.md)第 4 节。

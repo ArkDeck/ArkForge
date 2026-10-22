@@ -15,7 +15,7 @@ PAC inspect → USB discover/probe → profile candidate → PlanAssessment
 ```
 
 全链路通过**与 DAYU200 相同的 API** 跑通：
-`crates/arkforged/tests/dayu600_api_surface.rs::the_dayu600_research_vertical_runs_over_the_same_api`
+`cmd/arkforged/tests/dayu600_api_surface.rs::the_dayu600_research_vertical_runs_over_the_same_api`
 依次调用 `importArtifact` → `inspectArtifact` → `discoverDevices` → `probeDevice`
 → `materializePlan`，与 DAYU200 用例调用的是同一组 API、同一个 daemon、同一份编解码器。
 Provider 与 parser 的选择由 **profile 声明的 artifact format** 与**容器自身的 framing**
@@ -36,7 +36,7 @@ Provider 与 parser 的选择由 **profile 声明的 artifact format** 与**容�
 并由 `evidence_ledger.rs::the_dayu600_profile_references_only_evidence_the_ledger_confirms`
 断言。
 
-ledger 是**可机器检查**的：`crates/arkforged/tests/evidence_ledger.rs` 解析它并断言
+ledger 是**可机器检查**的：`cmd/arkforged/tests/evidence_ledger.rs` 解析它并断言
 AD-004 记录了 static 限定、未知清单与 parser 一致、以及第 5 节规则原文在位。
 
 ### 2.2 PAC parser ResearchOnly
@@ -83,7 +83,7 @@ USB identity、稳定芯片标识、协议 request/ACK/error/timeout、存储与
 ### 2.4 wrong device tests
 
 `crates/arkforge-provider/tests/dayu600_vertical.rs` 与
-`crates/arkforged/tests/dayu600_api_surface.rs`：
+`cmd/arkforged/tests/dayu600_api_surface.rs`：
 
 | 场景 | 结果 |
 |---|---|

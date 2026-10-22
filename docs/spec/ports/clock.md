@@ -1,6 +1,6 @@
 # Port: clocks
 status: normative
-source: crates/arkforge-authority-api/src/lib.rs evaluate_freshness; crates/arkforged/src/jobs.rs
+source: crates/arkforge-authority-api/src/lib.rs evaluate_freshness; cmd/arkforged/src/jobs.rs
 
 ## Purpose
 Say which timestamps are wall-clock and which decisions may depend on them.

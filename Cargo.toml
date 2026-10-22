@@ -15,10 +15,10 @@ members = [
     "crates/arkforge-platform",
     "crates/arkforge-client",
     "crates/arkforge-standalone",
-    "crates/arkforge-cli",
-    "crates/arkforged",
+    "cmd/arkforge-cli",
+    "cmd/arkforged",
     "crates/arkforge-conformance",
-    "adapters/arkforge-arkdeck-adapter",
+    "crates/arkforge-arkdeck-adapter",
 ]
 
 [workspace.package]
