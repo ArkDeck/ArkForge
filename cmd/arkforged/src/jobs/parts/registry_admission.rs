@@ -1,5 +1,6 @@
-impl JobRegistry {
+use super::*;
 
+impl JobRegistry {
     /// Answers an admission the daemon asked for.
     ///
     /// The permit is verified against the durable ledger, not against memory: a

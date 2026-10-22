@@ -1,6 +1,6 @@
+use super::*;
 
 impl JobRegistry {
-
     pub fn new(root: impl Into<PathBuf>) -> Self {
         let root = root.into();
         Self::open(root).expect("job registry must be readable")

@@ -1,5 +1,6 @@
+use super::*;
 
-fn append_stable_observation(
+pub(super) fn append_stable_observation(
     stable: &mut Vec<u8>,
     source: &str,
     observation: &DeviceObservationView,
@@ -47,14 +48,14 @@ fn append_stable_observation(
     }
 }
 
-fn append_stable_field(stable: &mut Vec<u8>, label: &str, value: &[u8]) {
+pub(super) fn append_stable_field(stable: &mut Vec<u8>, label: &str, value: &[u8]) {
     stable.extend_from_slice(&(label.len() as u64).to_be_bytes());
     stable.extend_from_slice(label.as_bytes());
     stable.extend_from_slice(&(value.len() as u64).to_be_bytes());
     stable.extend_from_slice(value);
 }
 
-fn recompute_admitted_device_digest(
+pub(super) fn recompute_admitted_device_digest(
     snapshot: &StepAdmissionSnapshot,
 ) -> Result<Sha256Digest, StandaloneError> {
     use arkforge_transport::{
@@ -96,7 +97,7 @@ fn recompute_admitted_device_digest(
     observation.admission_facts_digest().map_err(permit_invalid)
 }
 
-fn digest_bytes(bytes: &[u8], name: &str) -> Result<Sha256Digest, StandaloneError> {
+pub(super) fn digest_bytes(bytes: &[u8], name: &str) -> Result<Sha256Digest, StandaloneError> {
     if bytes.len() != 32 {
         return Err(permit_invalid(format!("{name} is not 32 bytes")));
     }
@@ -105,7 +106,7 @@ fn digest_bytes(bytes: &[u8], name: &str) -> Result<Sha256Digest, StandaloneErro
     Ok(Sha256Digest::from_bytes(digest))
 }
 
-fn permit_invalid(error: impl std::fmt::Display) -> StandaloneError {
+pub(super) fn permit_invalid(error: impl std::fmt::Display) -> StandaloneError {
     StandaloneError::new(
         "PERMIT_INPUT_INVALID",
         format!("Cannot construct an exact step permit: {error}"),
@@ -114,7 +115,7 @@ fn permit_invalid(error: impl std::fmt::Display) -> StandaloneError {
     )
 }
 
-fn persist_binding(
+pub(super) fn persist_binding(
     runtime_dir: &Path,
     binding_id: &str,
     device: &str,
@@ -155,7 +156,7 @@ fn persist_binding(
         .map_err(|error| internal("commit the durable target binding", error))
 }
 
-fn encode_status(status: &DaemonStatus) -> Vec<u8> {
+pub(super) fn encode_status(status: &DaemonStatus) -> Vec<u8> {
     let mut out = Vec::new();
     wire::write_uint32(&mut out, 1, status.supervisor_pid);
     wire::write_uint32(&mut out, 2, status.daemon_pid);
@@ -175,7 +176,7 @@ fn encode_status(status: &DaemonStatus) -> Vec<u8> {
     out
 }
 
-fn decode_status(input: &[u8]) -> Result<DaemonStatus, StandaloneError> {
+pub(super) fn decode_status(input: &[u8]) -> Result<DaemonStatus, StandaloneError> {
     let mut status = DaemonStatus {
         supervisor_pid: 0,
         daemon_pid: 0,
@@ -231,7 +232,7 @@ fn decode_status(input: &[u8]) -> Result<DaemonStatus, StandaloneError> {
     Ok(status)
 }
 
-fn decode_request(input: &[u8]) -> Result<(String, Vec<String>), StandaloneError> {
+pub(super) fn decode_request(input: &[u8]) -> Result<(String, Vec<String>), StandaloneError> {
     let mut command = String::new();
     let mut arguments = Vec::new();
     let mut reader = wire::Reader::new(input);
@@ -256,7 +257,7 @@ fn decode_request(input: &[u8]) -> Result<(String, Vec<String>), StandaloneError
     Ok((command, arguments))
 }
 
-fn write_reply(
+pub(super) fn write_reply(
     stream: &mut LocalStream,
     result: Result<Vec<u8>, StandaloneError>,
 ) -> Result<(), StandaloneError> {
@@ -280,7 +281,7 @@ fn write_reply(
     write_frame(stream, &out).map_err(|error| internal("write supervisor response", error))
 }
 
-fn decode_reply(input: &[u8]) -> Result<Vec<u8>, StandaloneError> {
+pub(super) fn decode_reply(input: &[u8]) -> Result<Vec<u8>, StandaloneError> {
     let mut disposition = 0;
     let mut code = String::new();
     let mut message = String::new();
@@ -319,7 +320,7 @@ fn decode_reply(input: &[u8]) -> Result<Vec<u8>, StandaloneError> {
     }
 }
 
-fn status_decode(error: impl std::fmt::Display) -> StandaloneError {
+pub(super) fn status_decode(error: impl std::fmt::Display) -> StandaloneError {
     StandaloneError::new(
         "SUPERVISOR_RESPONSE_INVALID",
         format!("The authority supervisor response is invalid: {error}"),
@@ -338,11 +339,11 @@ pub fn prepare_storage(runtime_dir: &Path) -> Result<(), StandaloneError> {
         .map_err(|error| internal("protect the runtime directory", error))
 }
 
-fn prepare_runtime(runtime_dir: &Path) -> Result<(), StandaloneError> {
+pub(super) fn prepare_runtime(runtime_dir: &Path) -> Result<(), StandaloneError> {
     prepare_storage(runtime_dir)
 }
 
-fn fresh_pairing(runtime_dir: &Path) -> Result<(u64, Vec<u8>), StandaloneError> {
+pub(super) fn fresh_pairing(runtime_dir: &Path) -> Result<(u64, Vec<u8>), StandaloneError> {
     let mut secret = [0u8; 32];
     fill_random(&mut secret)
         .map_err(|error| internal("read host randomness for pairing", error))?;

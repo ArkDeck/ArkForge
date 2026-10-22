@@ -1,7 +1,8 @@
-impl Service {
+use super::*;
 
+impl Service {
     /// Answers an admission the daemon asked for on the watchJob stream.
-    fn submit_step_permit(&mut self, request: &Request) -> Response {
+    pub(super) fn submit_step_permit(&mut self, request: &Request) -> Response {
         let Ok(submission) = SubmitStepPermitRequest::decode(&request.payload) else {
             return self.refuse(
                 request,
@@ -113,7 +114,7 @@ impl Service {
     }
 
     /// Records what the authority's own control channel observed.
-    fn submit_control_receipt(&mut self, request: &Request) -> Response {
+    pub(super) fn submit_control_receipt(&mut self, request: &Request) -> Response {
         let Ok(receipt) = SubmitManagedControlReceiptRequest::decode(&request.payload) else {
             return self.refuse(
                 request,
@@ -185,7 +186,7 @@ impl Service {
     /// Looked up through the job rather than taken from the caller: a
     /// submission that could name its own plan could answer one job's
     /// admission with another job's permit.
-    fn stored_plan_for_job(&self, job_id: &str) -> Option<StoredPlan> {
+    pub(super) fn stored_plan_for_job(&self, job_id: &str) -> Option<StoredPlan> {
         let job = self.jobs.job(job_id)?;
         let plan_id = PlanId::new(job.plan_id()).ok()?;
         self.engine

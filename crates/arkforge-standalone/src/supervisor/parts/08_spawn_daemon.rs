@@ -1,5 +1,6 @@
+use super::*;
 
-fn spawn_daemon(
+pub(super) fn spawn_daemon(
     runtime_dir: &Path,
     options: &DaemonOptions,
     epoch: u64,
@@ -48,7 +49,7 @@ fn spawn_daemon(
     Ok(child)
 }
 
-fn validate_tool_bindings(options: &DaemonOptions) -> Result<(), StandaloneError> {
+pub(super) fn validate_tool_bindings(options: &DaemonOptions) -> Result<(), StandaloneError> {
     if let (Some(hdc), Some(expected)) = (&options.hdc, &options.expect_hdc_sha256) {
         let actual = arkforged::dispatch::executable_digest(hdc).map_err(|_| {
             StandaloneError::new(
@@ -106,7 +107,7 @@ fn validate_tool_bindings(options: &DaemonOptions) -> Result<(), StandaloneError
 }
 
 #[cfg(windows)]
-fn verify_windows_signature(path: &Path, role: &str) -> Result<(), StandaloneError> {
+pub(super) fn verify_windows_signature(path: &Path, role: &str) -> Result<(), StandaloneError> {
     arkforge_platform::verify_trusted_signature(path).map_err(|error| {
         StandaloneError::new(
             "RELEASE_SIGNING_REQUIRED",
@@ -120,7 +121,7 @@ fn verify_windows_signature(path: &Path, role: &str) -> Result<(), StandaloneErr
     })
 }
 
-fn sibling_daemon() -> Result<PathBuf, StandaloneError> {
+pub(super) fn sibling_daemon() -> Result<PathBuf, StandaloneError> {
     let executable =
         std::env::current_exe().map_err(|error| internal("identify arkforge", error))?;
     let path = executable
@@ -141,7 +142,7 @@ fn sibling_daemon() -> Result<PathBuf, StandaloneError> {
     Ok(path)
 }
 
-fn wait_for_daemon(
+pub(super) fn wait_for_daemon(
     runtime_dir: &Path,
     daemon: &mut Child,
 ) -> Result<PublicRuntimeInfo, StandaloneError> {
@@ -173,7 +174,7 @@ fn wait_for_daemon(
     }
 }
 
-fn internal(context: &str, error: impl std::fmt::Display) -> StandaloneError {
+pub(super) fn internal(context: &str, error: impl std::fmt::Display) -> StandaloneError {
     StandaloneError::new(
         "SUPERVISOR_IO_FAILED",
         format!("Cannot {context}: {error}"),

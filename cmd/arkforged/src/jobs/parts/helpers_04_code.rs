@@ -1,3 +1,4 @@
+use super::*;
 
 impl JobError {
     /// A stable code for the IPC error body.
@@ -136,7 +137,7 @@ impl fmt::Display for JobError {
 }
 
 impl JobError {
-    fn from_step(error: StepError) -> Self {
+    pub(super) fn from_step(error: StepError) -> Self {
         match error {
             StepError::Verification(error) => JobError::Verification(error),
             StepError::Journal(error) => JobError::Journal(error),

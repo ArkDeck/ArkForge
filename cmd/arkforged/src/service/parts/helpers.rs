@@ -1,5 +1,6 @@
+use super::*;
 
-fn profile_key(id: &OpaqueId, version: Version) -> String {
+pub(super) fn profile_key(id: &OpaqueId, version: Version) -> String {
     format!("{id}@{version}")
 }
 
@@ -7,7 +8,7 @@ fn profile_key(id: &OpaqueId, version: Version) -> String {
 ///
 /// All of them rather than the first: an operator fixing one at a time should
 /// not have to discover the second by trying again.
-fn blocker_list(blockers: &[arkforge_engine::ExecutionBlocker]) -> String {
+pub(super) fn blocker_list(blockers: &[arkforge_engine::ExecutionBlocker]) -> String {
     blockers
         .iter()
         .map(|blocker| format!("{}: {blocker}", blocker.code()))
@@ -15,7 +16,7 @@ fn blocker_list(blockers: &[arkforge_engine::ExecutionBlocker]) -> String {
         .join("; ")
 }
 
-fn admission_facts(
+pub(super) fn admission_facts(
     envelope: &arkforge_core::plan::FlashPlanEnvelope,
     observation: DeviceObservation,
     transport_session_digest: Sha256Digest,
@@ -38,7 +39,7 @@ fn admission_facts(
 /// A declared transition without semantic success proves nothing, and missing
 /// mode facts are not inferred. Same-mode steps retain their open continuity
 /// session.
-fn successful_dispatch_requires_rebind(
+pub(super) fn successful_dispatch_requires_rebind(
     disposition: ActionDisposition,
     expected_before: Option<&DeviceMode>,
     expected_after: Option<&DeviceMode>,
@@ -50,7 +51,7 @@ fn successful_dispatch_requires_rebind(
         )
 }
 
-fn encode_job_summary(job: &crate::jobs::Job) -> JobSummary {
+pub(super) fn encode_job_summary(job: &crate::jobs::Job) -> JobSummary {
     JobSummary {
         job_id: job.job_id().to_string(),
         plan_id: job.plan_id().to_string(),
@@ -65,7 +66,7 @@ fn encode_job_summary(job: &crate::jobs::Job) -> JobSummary {
     }
 }
 
-fn next_expected_mode(
+pub(super) fn next_expected_mode(
     stored: &StoredPlan,
     job: Option<&crate::jobs::Job>,
 ) -> Result<Option<DeviceMode>, String> {
@@ -78,7 +79,7 @@ fn next_expected_mode(
 /// The daemon does not decide that a device belongs to a vendor; the profile
 /// says which formats apply, and a provider that handles one of them takes it.
 /// A profile whose formats nobody handles gets a refusal, not a default.
-fn provider_for<'a>(
+pub(super) fn provider_for<'a>(
     profile: &DeviceProfile,
     rockchip: &'a RockchipProvider,
     unisoc: &'a UnisocProvider,
@@ -100,17 +101,17 @@ fn provider_for<'a>(
     None
 }
 
-fn driver_facts_digest() -> Sha256Digest {
+pub(super) fn driver_facts_digest() -> Sha256Digest {
     sha256(b"arkforge/driver-facts/none-measured")
 }
 
-fn evidence_set_digest() -> Sha256Digest {
+pub(super) fn evidence_set_digest() -> Sha256Digest {
     sha256(b"AD-003,AD-005,AD-006")
 }
 
 /// The research backend the Unisoc provider dispatches through — which is to
 /// say, no backend at all.
-fn research_toolchain_identity() -> ToolchainIdentity {
+pub(super) fn research_toolchain_identity() -> ToolchainIdentity {
     ToolchainIdentity {
         id: OpaqueId::new("research-inspect").expect("literal identifier"),
         kind: ToolchainKind::Replay,
@@ -134,11 +135,11 @@ pub fn native_toolchain_identity(backend_digest: Sha256Digest) -> ToolchainIdent
 /// Identity used only for assessments built before the daemon binds its own
 /// executable. It can never pass execution readiness because no dispatcher is
 /// bound; the digest exists only to keep the assessment's maturity key exact.
-fn unbound_native_toolchain_identity() -> ToolchainIdentity {
+pub(super) fn unbound_native_toolchain_identity() -> ToolchainIdentity {
     native_toolchain_identity(sha256(b"arkforge/native-rockusb/unbound"))
 }
 
-fn replay_toolchain_identity() -> ToolchainIdentity {
+pub(super) fn replay_toolchain_identity() -> ToolchainIdentity {
     ToolchainIdentity {
         id: OpaqueId::new("transcript-replay").expect("literal identifier"),
         kind: ToolchainKind::Replay,
@@ -148,12 +149,12 @@ fn replay_toolchain_identity() -> ToolchainIdentity {
     }
 }
 
-struct ImportPayload {
-    expected_size_bytes: u64,
-    expected_sha256: Option<String>,
+pub(super) struct ImportPayload {
+    pub(super) expected_size_bytes: u64,
+    pub(super) expected_sha256: Option<String>,
 }
 
-fn decode_import_request(payload: &[u8]) -> Result<ImportPayload, String> {
+pub(super) fn decode_import_request(payload: &[u8]) -> Result<ImportPayload, String> {
     let mut expected_size_bytes = 0u64;
     let mut expected_sha256 = None;
     let mut reader = arkforge_ipc::wire::Reader::new(payload);
@@ -176,7 +177,7 @@ fn decode_import_request(payload: &[u8]) -> Result<ImportPayload, String> {
     })
 }
 
-fn first_string_field(payload: &[u8], wanted: u32) -> Option<String> {
+pub(super) fn first_string_field(payload: &[u8], wanted: u32) -> Option<String> {
     let mut reader = arkforge_ipc::wire::Reader::new(payload);
     while let Ok(Some((field, value))) = reader.next_field() {
         if field == wanted {
@@ -186,7 +187,7 @@ fn first_string_field(payload: &[u8], wanted: u32) -> Option<String> {
     None
 }
 
-fn first_u64_field(payload: &[u8], wanted: u32) -> Option<u64> {
+pub(super) fn first_u64_field(payload: &[u8], wanted: u32) -> Option<u64> {
     let mut reader = arkforge_ipc::wire::Reader::new(payload);
     while let Ok(Some((field, value))) = reader.next_field() {
         if field == wanted {
@@ -196,7 +197,7 @@ fn first_u64_field(payload: &[u8], wanted: u32) -> Option<u64> {
     None
 }
 
-fn first_bytes_field(payload: &[u8], wanted: u32) -> Option<Vec<u8>> {
+pub(super) fn first_bytes_field(payload: &[u8], wanted: u32) -> Option<Vec<u8>> {
     let mut reader = arkforge_ipc::wire::Reader::new(payload);
     while let Ok(Some((field, value))) = reader.next_field() {
         if field == wanted {
@@ -206,7 +207,7 @@ fn first_bytes_field(payload: &[u8], wanted: u32) -> Option<Vec<u8>> {
     None
 }
 
-fn digest_from_bytes(bytes: &[u8]) -> Option<Sha256Digest> {
+pub(super) fn digest_from_bytes(bytes: &[u8]) -> Option<Sha256Digest> {
     if bytes.len() != 32 {
         return None;
     }
@@ -215,7 +216,7 @@ fn digest_from_bytes(bytes: &[u8]) -> Option<Sha256Digest> {
     Some(Sha256Digest::from_bytes(digest))
 }
 
-fn encode_observation(observation: &DeviceObservation) -> Vec<u8> {
+pub(super) fn encode_observation(observation: &DeviceObservation) -> Vec<u8> {
     let mut out = Vec::new();
     arkforge_ipc::wire::write_string(&mut out, 1, observation.observation_id.as_str());
     arkforge_ipc::wire::write_uint64(&mut out, 2, observation.observed_at_epoch_ms);
@@ -256,7 +257,7 @@ fn encode_observation(observation: &DeviceObservation) -> Vec<u8> {
     out
 }
 
-fn encode_step(step: &arkforge_core::PublicFlashStep) -> PublicStep {
+pub(super) fn encode_step(step: &arkforge_core::PublicFlashStep) -> PublicStep {
     PublicStep {
         step_id: step.step_id.to_string(),
         kind: step.kind.as_str().to_string(),
@@ -290,7 +291,7 @@ fn encode_step(step: &arkforge_core::PublicFlashStep) -> PublicStep {
     }
 }
 
-fn encode_effect(effect: &PersistentEffect) -> Effect {
+pub(super) fn encode_effect(effect: &PersistentEffect) -> Effect {
     match effect {
         PersistentEffect::WritePartition {
             partition,
@@ -338,7 +339,7 @@ fn encode_effect(effect: &PersistentEffect) -> Effect {
     }
 }
 
-fn recovered_managed_control_possible_effects(
+pub(super) fn recovered_managed_control_possible_effects(
     journal: &arkforge_engine::journal::Journal,
 ) -> Option<PossibleEffectSet> {
     let ledger = PermitLedger::from_journal(journal);
@@ -369,14 +370,14 @@ fn recovered_managed_control_possible_effects(
     })
 }
 
-fn journal_fact<'a>(facts: &'a [(OpaqueId, String)], key: &str) -> Option<&'a str> {
+pub(super) fn journal_fact<'a>(facts: &'a [(OpaqueId, String)], key: &str) -> Option<&'a str> {
     facts
         .iter()
         .find(|(candidate, _)| candidate.as_str() == key)
         .map(|(_, value)| value.as_str())
 }
 
-fn encode_transient(effect: &TransientEffect) -> Effect {
+pub(super) fn encode_transient(effect: &TransientEffect) -> Effect {
     match effect {
         TransientEffect::EnterMode { from, to } => Effect {
             kind: "enterMode".into(),
@@ -402,7 +403,7 @@ fn encode_transient(effect: &TransientEffect) -> Effect {
     }
 }
 
-fn encode_data_impact(impact: &arkforge_core::DataImpact) -> Vec<KeyValue> {
+pub(super) fn encode_data_impact(impact: &arkforge_core::DataImpact) -> Vec<KeyValue> {
     vec![
         KeyValue {
             key: "userdata".into(),
@@ -423,14 +424,14 @@ fn encode_data_impact(impact: &arkforge_core::DataImpact) -> Vec<KeyValue> {
     ]
 }
 
-fn completeness_name(completeness: EffectSetCompleteness) -> &'static str {
+pub(super) fn completeness_name(completeness: EffectSetCompleteness) -> &'static str {
     match completeness {
         EffectSetCompleteness::Bounded => "bounded",
         EffectSetCompleteness::Unbounded => "unbounded",
     }
 }
 
-fn persistent_effect_name(effect: &PersistentEffect) -> String {
+pub(super) fn persistent_effect_name(effect: &PersistentEffect) -> String {
     match effect {
         PersistentEffect::WritePartition { partition, .. }
         | PersistentEffect::ErasePartition { partition, .. } => {
@@ -444,7 +445,7 @@ fn persistent_effect_name(effect: &PersistentEffect) -> String {
     }
 }
 
-fn recovery_blocker_code(blocker: &RecoveryBlocker) -> &'static str {
+pub(super) fn recovery_blocker_code(blocker: &RecoveryBlocker) -> &'static str {
     match blocker {
         RecoveryBlocker::EffectsUnbounded => "effectsUnbounded",
         RecoveryBlocker::NoPublishedCoverage { .. } => "noPublishedCoverage",

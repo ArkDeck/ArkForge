@@ -1,12 +1,13 @@
-impl Service {
+use super::*;
 
+impl Service {
     /// Returns the strongest read-only conclusion currently supported.
     ///
     /// DAYU200's measured RockUSB read face does not cover most writable
     /// partitions, so an unresolved write normally remains unknown. Returning
     /// that typed verdict is still materially different from replaying it or
     /// pretending the recovery API does not exist.
-    fn reconcile_job(&mut self, request: &Request) -> Response {
+    pub(super) fn reconcile_job(&mut self, request: &Request) -> Response {
         let job_id = first_string_field(&request.payload, 1).unwrap_or_default();
         let Some(job) = self.jobs.job(&job_id) else {
             return self.refuse(
@@ -197,7 +198,7 @@ impl Service {
 
     /// Assesses whether a distinct complete-overwrite plan may supersede an
     /// unknown outcome. This never starts or replays either plan.
-    fn plan_superseding_recovery(&self, request: &Request) -> Response {
+    pub(super) fn plan_superseding_recovery(&self, request: &Request) -> Response {
         use arkforge_ipc::recovery::SupersedingRecoveryAssessment as Assessment;
         let job_id = first_string_field(&request.payload, 1).unwrap_or_default();
         let Some(job) = self.jobs.job(&job_id) else {
@@ -350,7 +351,7 @@ impl Service {
     }
 
     /// A typed operator/agent guide available on the public read-only socket.
-    fn get_recovery_guide(&self, request: &Request) -> Response {
+    pub(super) fn get_recovery_guide(&self, request: &Request) -> Response {
         let job_id = first_string_field(&request.payload, 1).unwrap_or_default();
         let Some(job) = self.jobs.job(&job_id) else {
             return self.refuse(
@@ -396,7 +397,7 @@ impl Service {
         self.ok(request, payload)
     }
 
-    fn recovery_surface_context(&self, job_id: &str) -> Option<RecoverySurfaceContext> {
+    pub(super) fn recovery_surface_context(&self, job_id: &str) -> Option<RecoverySurfaceContext> {
         let stored = self.stored_plan_for_job(job_id)?;
         let profile = self.profiles.get(&profile_key(
             &stored.envelope.profile.id,
@@ -419,7 +420,7 @@ impl Service {
         })
     }
 
-    fn cancel_job(&mut self, request: &Request) -> Response {
+    pub(super) fn cancel_job(&mut self, request: &Request) -> Response {
         let job_id = first_string_field(&request.payload, 1).unwrap_or_default();
         let Some(expected_sequence) = first_u64_field(&request.payload, 2) else {
             return self.refuse(

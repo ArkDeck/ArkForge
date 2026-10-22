@@ -1,3 +1,4 @@
+use super::*;
 
 /// Executes one decoded action.
 ///
@@ -130,7 +131,7 @@ pub fn execute_action(
 /// name-addressed write has nothing to resolve against. The backup table sits
 /// at the far end; if that reads as uniform filler while the primary did not,
 /// the read face is windowed and every filler read past it is uninformative.
-fn characterize_read_domain(
+pub(super) fn characterize_read_domain(
     record: &PrivateActionRecord,
     session: &mut ExecutionSession,
     port: &dyn RockUsbPort,
@@ -190,7 +191,7 @@ fn characterize_read_domain(
 }
 
 #[allow(clippy::too_many_arguments)]
-fn write_partition(
+pub(super) fn write_partition(
     record: &PrivateActionRecord,
     session: &mut ExecutionSession,
     profile: &DeviceProfile,

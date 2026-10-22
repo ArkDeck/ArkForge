@@ -1,52 +1,4 @@
-use crate::artifact_ops::{inspect_stored_container, manifest_response};
-use crate::dispatch::{PendingPreparation, PendingReconcile, ReconcileDispatchOutcome};
-use crate::jobs::{AdmissionFacts, JobRegistry};
-use arkforge_artifact::cas::{CasQuota, ContentAddressedStore};
-use arkforge_artifact::manifest::ArtifactManifest;
-use arkforge_artifact::{dayu200, pac};
-use arkforge_authority_api::{
-    ControllerPairingSecret, CurrentFacts, EffectSetCompleteness, PossibleEffectSet, StepPermit,
-};
-use arkforge_core::digest::{Domain, digest_canonical, digest_in_domain, sha256};
-use arkforge_core::identity::{
-    HostPlatform, MaturityKey, ToolchainIdentity, ToolchainKind, Version,
-};
-use arkforge_core::ids::{OpaqueId, PlanId};
-use arkforge_core::outcome::ActionDisposition;
-use arkforge_core::plan::RecoveryContractRef;
-use arkforge_core::plan::{ExecutionPurpose, PlanMaterialization};
-use arkforge_core::profile::{DeviceProfile, RecoveryDeclaration};
-use arkforge_core::{
-    AuthorityBindingRef, AuthorityNamespace, AuthoritySupportBinding, AuthoritySupportState,
-    DeviceMode, PersistentEffect, Sha256Digest, TransientEffect,
-};
-use arkforge_engine::superseding::{
-    EffectObservation, RecoveryBlocker, SupersedingRecoveryAssessment, assess_superseding_recovery,
-    possible_effects as assess_possible_effects,
-};
-use arkforge_engine::{BoundToolchain, Engine, ExecutionReadiness, StoredPlan};
-use arkforge_engine::{journal::JournalRecordKind, recovery::PermitLedger};
-use arkforge_ipc::messages::{
-    Assessment, Effect, ErrorBody, ExecutablePlan, JobSummary, KeyValue, ManagedControlAction,
-    MaterializePlanResponse, PublicStep, Request, Response, SubmissionOutcome,
-    SubmitManagedControlReceiptRequest, SubmitStepPermitRequest, WatchJobRequest,
-};
-use arkforge_ipc::{Api, SessionKind, Status};
-use arkforge_provider::rockchip::{RockchipProvider, publish_dayu200_maturity};
-use arkforge_provider::unisoc::{UnisocProvider, publish_af_v3_maturity};
-use arkforge_provider::{
-    FlashIntent, FlashProvider, MaterializeRequest, MaturityRegistry, ProbeContext,
-    ReadOnlyReconcilePlan, ReconcileRequest,
-};
-use arkforge_transport::replay::TranscriptTransport;
-use arkforge_transport::usb::{UsbDeviceRecord, UsbEnumerator, UsbTransport};
-use arkforge_transport::{
-    DeviceObservation, DeviceTransport, TransportError, TransportSession, TypedDiscoveryFilter,
-    transcript,
-};
-use std::collections::{BTreeMap, BTreeSet, VecDeque};
-use std::io::Read;
-use std::path::Path;
+use super::*;
 
 /// Adapts the daemon's safe native IOKit boundary to the read-only transport
 /// record shape. Unlike the historical `ioreg` enumerator this performs no
@@ -54,7 +6,7 @@ use std::path::Path;
 /// cheap. Interface records belonging to one USB device are collapsed before
 /// the transport applies a Profile's VID/PID allowlist.
 #[derive(Debug, Clone, Copy)]
-struct NativeIokitEnumerator;
+pub(super) struct NativeIokitEnumerator;
 
 /// Resolves HDC's raw USB connect key without spawning its slow target-list
 /// command. The serial is returned only to the in-process CLI authority and is
@@ -76,7 +28,7 @@ pub fn native_hdc_connect_key(
     )
 }
 
-fn select_hdc_connect_key(
+pub(super) fn select_hdc_connect_key(
     candidates: impl IntoIterator<Item = (u32, Option<String>)>,
     serial_sha256: &str,
     topology_sha256: &str,
@@ -128,7 +80,7 @@ pub fn native_normal_topology_projection(
     )
 }
 
-fn select_normal_topology_projection(
+pub(super) fn select_normal_topology_projection(
     observations: Vec<arkforge_usb::LegacyTopologyObservation>,
     observation_id: &str,
     topology_sha256: &str,
@@ -243,13 +195,13 @@ impl Clock {
 /// Everything the daemon serves from.
 #[derive(Debug)]
 pub struct Service {
-    store: ContentAddressedStore,
-    engine: Engine,
-    rockchip: RockchipProvider,
-    unisoc: UnisocProvider,
-    maturity: MaturityRegistry,
-    profiles: BTreeMap<String, DeviceProfile>,
-    manifests: BTreeMap<String, ArtifactManifest>,
+    pub(super) store: ContentAddressedStore,
+    pub(super) engine: Engine,
+    pub(super) rockchip: RockchipProvider,
+    pub(super) unisoc: UnisocProvider,
+    pub(super) maturity: MaturityRegistry,
+    pub(super) profiles: BTreeMap<String, DeviceProfile>,
+    pub(super) manifests: BTreeMap<String, ArtifactManifest>,
     /// Every transport this daemon can observe through.
     ///
     /// Boxed rather than one concrete type because the daemon needs both: a
@@ -259,13 +211,13 @@ pub struct Service {
     /// `ioreg` was listing the board — and `materializePlan`, which matches an
     /// observation before probing, could therefore never reach a real device
     /// (AD-027).
-    transports: Vec<Box<dyn DeviceTransport>>,
+    pub(super) transports: Vec<Box<dyn DeviceTransport>>,
     /// Exact observation/transport used when each executable plan was sealed.
     /// Starting a plan re-opens this observation; it never performs a fresh
     /// unqualified "first matching device" selection.
-    plan_observations: BTreeMap<String, PlanObservationContext>,
+    pub(super) plan_observations: BTreeMap<String, PlanObservationContext>,
     /// Open continuity session for every running job.
-    job_sessions: BTreeMap<String, JobObservationSession>,
+    pub(super) job_sessions: BTreeMap<String, JobObservationSession>,
     /// Jobs with a proven mode transition: either the authority accepted its
     /// own managed-control receipt, or ArkForge durably recorded semantic
     /// success for a sealed native step whose expected mode changed.
@@ -273,46 +225,46 @@ pub struct Service {
     /// Only those jobs may replace a detached session with the single device
     /// observed in the next expected mode. A periodic sweep must never turn an
     /// unexplained detach into permission to select a new device.
-    authorized_rebinds: BTreeSet<String>,
-    pending_preparations: VecDeque<PendingPreparation>,
-    pending_reconciliations: VecDeque<PendingReconcile>,
-    clock: Clock,
-    jobs: JobRegistry,
+    pub(super) authorized_rebinds: BTreeSet<String>,
+    pub(super) pending_preparations: VecDeque<PendingPreparation>,
+    pub(super) pending_reconciliations: VecDeque<PendingReconcile>,
+    pub(super) clock: Clock,
+    pub(super) jobs: JobRegistry,
     /// The secret the authority handed this daemon at startup. Held here and
     /// nowhere else; there is no getter.
-    pairing: Option<ControllerPairingSecret>,
+    pub(super) pairing: Option<ControllerPairingSecret>,
     /// What this daemon can do, as standing facts. Kept beside the secret
     /// rather than derived from it, because pairing is only half of it.
-    readiness: ExecutionReadiness,
+    pub(super) readiness: ExecutionReadiness,
     /// The exact RockUSB backend identity bound to the dispatcher.
     ///
     /// `ExecutionReadiness` deliberately carries only the id and digest needed
     /// by the engine's start gate. Materialization additionally needs the
     /// backend kind and version because those are part of the maturity key, so
     /// the daemon retains the full native identity here.
-    rockchip_toolchain: Option<ToolchainIdentity>,
+    pub(super) rockchip_toolchain: Option<ToolchainIdentity>,
     /// The acceptance campaign this daemon runs, if any. Held because
     /// Native dispatcher binding republishes maturity and must publish the same
     /// campaign the construction did — a binding that silently dropped it
     /// would turn an authorized campaign back into `hardwareGated`.
-    campaign: Option<String>,
+    pub(super) campaign: Option<String>,
 }
 
 #[derive(Debug, Clone)]
-struct PlanObservationContext {
-    transport_index: usize,
-    observation: DeviceObservation,
+pub(super) struct PlanObservationContext {
+    pub(super) transport_index: usize,
+    pub(super) observation: DeviceObservation,
 }
 
 #[derive(Debug, Clone)]
-struct RecoverySurfaceContext {
-    possible: PossibleEffectSet,
-    declaration: RecoveryDeclaration,
-    contract: Option<RecoveryContractRef>,
+pub(super) struct RecoverySurfaceContext {
+    pub(super) possible: PossibleEffectSet,
+    pub(super) declaration: RecoveryDeclaration,
+    pub(super) contract: Option<RecoveryContractRef>,
 }
 
 #[derive(Debug)]
-struct JobObservationSession {
-    transport_index: usize,
-    session: Box<dyn TransportSession>,
+pub(super) struct JobObservationSession {
+    pub(super) transport_index: usize,
+    pub(super) session: Box<dyn TransportSession>,
 }

@@ -1,5 +1,6 @@
-impl JobRegistry {
+use super::*;
 
+impl JobRegistry {
     /// Records what the dispatcher observed and advances the job.
     ///
     /// An outcome of `OutcomeUnknown` stops the job there. It does not retry,

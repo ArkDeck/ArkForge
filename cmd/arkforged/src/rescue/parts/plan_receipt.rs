@@ -1,3 +1,4 @@
+use super::*;
 
 impl RescuePlan {
     pub fn digest(&self) -> Result<Sha256Digest, RescueError> {
@@ -15,7 +16,7 @@ impl RescuePlan {
         self.operation.acknowledgements()
     }
 
-    fn validate_shape(&self) -> Result<(), RescueError> {
+    pub(super) fn validate_shape(&self) -> Result<(), RescueError> {
         if self.expires_at_epoch_ms
             != self
                 .created_at_epoch_ms
@@ -242,9 +243,9 @@ impl RescueApplyResult {
 
 #[derive(Debug)]
 pub struct RescueManager<B: RescueBackend> {
-    runtime_root: PathBuf,
-    profile: DeviceProfile,
-    profile_digest: Sha256Digest,
-    native_build_digest: Sha256Digest,
-    backend: B,
+    pub(super) runtime_root: PathBuf,
+    pub(super) profile: DeviceProfile,
+    pub(super) profile_digest: Sha256Digest,
+    pub(super) native_build_digest: Sha256Digest,
+    pub(super) backend: B,
 }

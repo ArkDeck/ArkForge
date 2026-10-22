@@ -1,35 +1,6 @@
-use crate::StandaloneError;
-use crate::authority_support::{self, AuthoritySupportKey};
-use crate::hdc_control::{ControlContext, HdcControlPort};
-use arkforge_authority_api::authority_side::mint_integrity_tag;
-use arkforge_authority_api::{
-    ControllerPairingSecret, PairingEpoch, PermitIntegrityTag, StepPermit,
-};
-use arkforge_client::{ControllerClient, MaterializeInput};
-use arkforge_client::{DeviceObservationView, DeviceProbeView, PublicClient, PublicRuntimeInfo};
-use arkforge_core::Sha256Digest;
-use arkforge_core::authority::{AuthorityBindingRef, AuthorityNamespace, AuthoritySupportState};
-use arkforge_core::digest::sha256;
-use arkforge_core::ids::{
-    AttemptId, ControllerSessionId, JobId, OpaqueId, PermitId, PlanId, StepId,
-};
-use arkforge_ipc::framing::{read_frame, write_frame};
-use arkforge_ipc::messages::{
-    ExecutablePlan, JobEventKind, MaterializePlanResponse, StepAdmissionSnapshot,
-    SubmitManagedControlReceiptRequest, SubmitStepPermitRequest,
-};
-use arkforge_ipc::wire;
-use arkforge_platform::{
-    LocalChannel, LocalEndpoint, LocalListener, LocalStream, detach_standard_handles, fill_random,
-    protect_path, replace_file, sync_directory, unix_socket_path,
-};
-use std::collections::BTreeMap;
-use std::io::Write;
-use std::path::{Path, PathBuf};
-use std::process::{Child, Command, Stdio};
-use std::time::{Duration, Instant};
+use super::*;
 
-const READY_TIMEOUT: Duration = Duration::from_secs(10);
+pub(super) const READY_TIMEOUT: Duration = Duration::from_secs(10);
 /// How long a supervisor request waits for its answer.
 ///
 /// `status` and `stop` are answered at once by a supervisor that is serving.
@@ -38,9 +9,9 @@ const READY_TIMEOUT: Duration = Duration::from_secs(10);
 /// handshake, and on Windows that pipe connects perfectly well in the interim.
 /// Without a bound the caller waits there forever, and `READY_TIMEOUT` cannot
 /// help because it is only consulted between calls, never inside one.
-const REQUEST_TIMEOUT: Duration = Duration::from_secs(10);
+pub(super) const REQUEST_TIMEOUT: Duration = Duration::from_secs(10);
 
-fn request_read_timeout(verb: &str) -> Duration {
+pub(super) fn request_read_timeout(verb: &str) -> Duration {
     match verb {
         "verify-flash" => Duration::from_secs(620),
         // Parsing and hashing a firmware archive is not a lifecycle handshake.
@@ -55,11 +26,11 @@ fn request_read_timeout(verb: &str) -> Duration {
 
 #[derive(Debug, Clone, Default)]
 pub struct DaemonOptions {
-    profile_files: Vec<PathBuf>,
-    hdc: Option<PathBuf>,
-    expect_hdc_sha256: Option<String>,
-    hardware_campaign: Option<String>,
-    require_release_signing: bool,
+    pub(super) profile_files: Vec<PathBuf>,
+    pub(super) hdc: Option<PathBuf>,
+    pub(super) expect_hdc_sha256: Option<String>,
+    pub(super) hardware_campaign: Option<String>,
+    pub(super) require_release_signing: bool,
 }
 
 impl DaemonOptions {
@@ -200,7 +171,7 @@ impl DaemonOptions {
         Ok(options)
     }
 
-    fn append_public_arguments(&self, command: &mut Command, runtime_dir: &Path) {
+    pub(super) fn append_public_arguments(&self, command: &mut Command, runtime_dir: &Path) {
         command
             .arg("--runtime-dir")
             .arg(runtime_dir)
@@ -253,28 +224,28 @@ pub struct ReconcileStatus {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-struct AuthorityPlanRecord {
-    plan: ExecutablePlan,
-    binding_id: String,
-    stable_identity_sha256: Vec<u8>,
-    device_id: String,
-    profile_id: String,
-    supersedes_job_id: String,
-    topology_sha256: String,
-    toolchain_id: String,
+pub(super) struct AuthorityPlanRecord {
+    pub(super) plan: ExecutablePlan,
+    pub(super) binding_id: String,
+    pub(super) stable_identity_sha256: Vec<u8>,
+    pub(super) device_id: String,
+    pub(super) profile_id: String,
+    pub(super) supersedes_job_id: String,
+    pub(super) topology_sha256: String,
+    pub(super) toolchain_id: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-struct ActiveTargetLineage {
-    plan_id: String,
-    current_device_id: String,
-    current_stable_identity_sha256: Vec<u8>,
-    topology_sha256: String,
-    revision: u64,
+pub(super) struct ActiveTargetLineage {
+    pub(super) plan_id: String,
+    pub(super) current_device_id: String,
+    pub(super) current_stable_identity_sha256: Vec<u8>,
+    pub(super) topology_sha256: String,
+    pub(super) revision: u64,
 }
 
 /// How long to wait for a competing process to finish starting the runtime.
-const STARTUP_LOCK_TIMEOUT: Duration = Duration::from_secs(20);
+pub(super) const STARTUP_LOCK_TIMEOUT: Duration = Duration::from_secs(20);
 
 /// Makes a runtime exist, reporting whether this call is the one that made it.
 ///
@@ -297,12 +268,12 @@ pub fn ensure_started(runtime_dir: &Path, options: DaemonOptions) -> Result<bool
 }
 
 /// An owner-only exclusive lock held while one process starts the runtime.
-struct StartupLock {
-    path: PathBuf,
+pub(super) struct StartupLock {
+    pub(super) path: PathBuf,
 }
 
 impl StartupLock {
-    fn acquire(runtime_dir: &Path) -> Result<Self, StandaloneError> {
+    pub(super) fn acquire(runtime_dir: &Path) -> Result<Self, StandaloneError> {
         std::fs::create_dir_all(runtime_dir)
             .map_err(|error| internal("create the runtime directory", error))?;
         let path = runtime_dir.join("startup.lock");

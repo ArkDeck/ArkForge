@@ -1,5 +1,6 @@
+use super::*;
 
-fn digest_from(bytes: &[u8]) -> Option<Sha256Digest> {
+pub(super) fn digest_from(bytes: &[u8]) -> Option<Sha256Digest> {
     if bytes.len() != 32 {
         return None;
     }
@@ -8,7 +9,7 @@ fn digest_from(bytes: &[u8]) -> Option<Sha256Digest> {
     Some(Sha256Digest::from_bytes(array))
 }
 
-fn encode_hex(bytes: &[u8]) -> String {
+pub(super) fn encode_hex(bytes: &[u8]) -> String {
     const HEX: &[u8; 16] = b"0123456789abcdef";
     let mut out = String::with_capacity(bytes.len() * 2);
     for byte in bytes {
@@ -18,7 +19,7 @@ fn encode_hex(bytes: &[u8]) -> String {
     out
 }
 
-fn decode_hex(text: &str) -> Option<Vec<u8>> {
+pub(super) fn decode_hex(text: &str) -> Option<Vec<u8>> {
     if !text.len().is_multiple_of(2) || !text.is_ascii() {
         return None;
     }
@@ -37,11 +38,11 @@ fn decode_hex(text: &str) -> Option<Vec<u8>> {
         .collect()
 }
 
-fn id(value: &str) -> Result<OpaqueId, JobError> {
+pub(super) fn id(value: &str) -> Result<OpaqueId, JobError> {
     OpaqueId::new(value).map_err(|_| JobError::UnusableIdentifier(value.to_string()))
 }
 
-fn recover_receipt_events(records: &[JournalRecord], job_id: &str) -> Vec<JobEvent> {
+pub(super) fn recover_receipt_events(records: &[JournalRecord], job_id: &str) -> Vec<JobEvent> {
     let mut events = BTreeMap::<u64, JobEvent>::new();
     for record in records {
         if record.kind != JournalRecordKind::SemanticReceiptRecorded {

@@ -1,3 +1,4 @@
+use super::*;
 
 /// What the medium's read face turned out to be.
 ///
@@ -159,7 +160,7 @@ impl StoredAction {
     }
 }
 
-fn parse_strength(text: &str) -> Result<VerificationStrength, ExecutionError> {
+pub(super) fn parse_strength(text: &str) -> Result<VerificationStrength, ExecutionError> {
     match text {
         "fullHash" => Ok(VerificationStrength::FullHash),
         "sampledRanges" => Ok(VerificationStrength::SampledRanges),
@@ -191,14 +192,14 @@ pub struct ActionOutcome {
 /// running against a table nobody looked at.
 #[derive(Debug, Default)]
 pub struct ExecutionSession {
-    observed_table: Option<PartitionTableFact>,
-    read_domain: Option<MeasuredReadDomain>,
+    pub(super) observed_table: Option<PartitionTableFact>,
+    pub(super) read_domain: Option<MeasuredReadDomain>,
     /// Sectors that returned real (non-uniform) data before any write. A
     /// partition start in here is inside the read face, so filler read there
     /// afterwards is a real failure rather than an unreadable address.
-    demonstrated_readable: Vec<u64>,
-    staged: BTreeMap<String, StagedImage>,
-    validating: BTreeMap<String, JoinHandle<Result<ValidatedImage, ExecutionError>>>,
+    pub(super) demonstrated_readable: Vec<u64>,
+    pub(super) staged: BTreeMap<String, StagedImage>,
+    pub(super) validating: BTreeMap<String, JoinHandle<Result<ValidatedImage, ExecutionError>>>,
 }
 
 impl ExecutionSession {
@@ -260,7 +261,7 @@ impl ExecutionSession {
         }
     }
 
-    fn take_validated_image(
+    pub(super) fn take_validated_image(
         &mut self,
         member: &str,
     ) -> Result<(ValidatedImage, u64, bool), ExecutionError> {

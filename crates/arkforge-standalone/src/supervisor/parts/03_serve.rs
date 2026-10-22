@@ -1,5 +1,6 @@
+use super::*;
 
-fn serve(
+pub(super) fn serve(
     mut listener: LocalListener,
     runtime_dir: &Path,
     daemon: &mut Child,
@@ -202,7 +203,10 @@ fn serve(
     }
 }
 
-fn handle_cancel(runtime_dir: &Path, arguments: &[String]) -> Result<Vec<u8>, StandaloneError> {
+pub(super) fn handle_cancel(
+    runtime_dir: &Path,
+    arguments: &[String],
+) -> Result<Vec<u8>, StandaloneError> {
     let [job_id, expected] = arguments else {
         return Err(StandaloneError::new(
             "SUPERVISOR_REQUEST_INVALID",
@@ -234,7 +238,10 @@ fn handle_cancel(runtime_dir: &Path, arguments: &[String]) -> Result<Vec<u8>, St
     Ok(out)
 }
 
-fn handle_reconcile(runtime_dir: &Path, arguments: &[String]) -> Result<Vec<u8>, StandaloneError> {
+pub(super) fn handle_reconcile(
+    runtime_dir: &Path,
+    arguments: &[String],
+) -> Result<Vec<u8>, StandaloneError> {
     let [job_id] = arguments else {
         return Err(StandaloneError::new(
             "SUPERVISOR_REQUEST_INVALID",
@@ -255,7 +262,7 @@ fn handle_reconcile(runtime_dir: &Path, arguments: &[String]) -> Result<Vec<u8>,
     Ok(controller.reconcile(job_id)?)
 }
 
-fn decode_single_string(
+pub(super) fn decode_single_string(
     input: &[u8],
     wanted: u32,
     context: &str,
@@ -277,7 +284,7 @@ fn decode_single_string(
     ))
 }
 
-fn decode_reconcile(input: &[u8]) -> Result<ReconcileStatus, StandaloneError> {
+pub(super) fn decode_reconcile(input: &[u8]) -> Result<ReconcileStatus, StandaloneError> {
     let mut status = ReconcileStatus {
         job_id: String::new(),
         verdict: String::new(),
@@ -314,7 +321,7 @@ fn decode_reconcile(input: &[u8]) -> Result<ReconcileStatus, StandaloneError> {
     Ok(status)
 }
 
-fn handle_materialize(
+pub(super) fn handle_materialize(
     runtime_dir: &Path,
     public: &mut PublicClient,
     arguments: &[String],
@@ -335,7 +342,7 @@ fn handle_materialize(
     )
 }
 
-fn handle_assess(
+pub(super) fn handle_assess(
     runtime_dir: &Path,
     public: &mut PublicClient,
     arguments: &[String],
@@ -356,7 +363,7 @@ fn handle_assess(
     )
 }
 
-fn handle_recovery_plan(
+pub(super) fn handle_recovery_plan(
     runtime_dir: &Path,
     public: &mut PublicClient,
     arguments: &[String],
@@ -406,8 +413,8 @@ fn handle_recovery_plan(
     Ok(response)
 }
 
-struct MaterializationKind<'a> {
-    execution_purpose: &'a str,
-    supersedes_job_id: &'a str,
-    assessment_only: bool,
+pub(super) struct MaterializationKind<'a> {
+    pub(super) execution_purpose: &'a str,
+    pub(super) supersedes_job_id: &'a str,
+    pub(super) assessment_only: bool,
 }

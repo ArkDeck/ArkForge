@@ -1,6 +1,7 @@
+use super::*;
 
 #[allow(clippy::too_many_arguments)]
-fn readback_partition(
+pub(super) fn readback_partition(
     record: &PrivateActionRecord,
     session: &mut ExecutionSession,
     port: &dyn RockUsbPort,
@@ -103,7 +104,7 @@ fn readback_partition(
 /// classified *before* any hash comparison, and outside a windowed read face it
 /// is a skip rather than a failure. Every "the write did not land" verdict of
 /// 2026-08-04 came from hashing filler that the read face had invented.
-fn classify_readback(
+pub(super) fn classify_readback(
     read: &[u8],
     range: ByteRange,
     expected: Sha256Digest,
@@ -164,12 +165,12 @@ fn classify_readback(
 }
 
 /// The single byte a buffer consists of, if it consists of one.
-fn uniform_byte(bytes: &[u8]) -> Option<u8> {
+pub(super) fn uniform_byte(bytes: &[u8]) -> Option<u8> {
     let first = *bytes.first()?;
     bytes.iter().all(|byte| *byte == first).then_some(first)
 }
 
-fn read_sectors(
+pub(super) fn read_sectors(
     port: &dyn RockUsbPort,
     scratch: &Path,
     begin_sector: u64,
@@ -185,7 +186,7 @@ fn read_sectors(
         .map_err(|error| port_error("readSectors", error))
 }
 
-fn port_error(operation: &str, error: RockUsbPortFailure) -> ExecutionError {
+pub(super) fn port_error(operation: &str, error: RockUsbPortFailure) -> ExecutionError {
     match error {
         RockUsbPortFailure::BeforeIo(message) => ExecutionError::PortRefused {
             operation: operation.into(),
@@ -198,7 +199,7 @@ fn port_error(operation: &str, error: RockUsbPortFailure) -> ExecutionError {
     }
 }
 
-fn outcome(
+pub(super) fn outcome(
     record: &PrivateActionRecord,
     disposition: ActionDisposition,
     facts: Vec<(OpaqueId, String)>,
@@ -215,11 +216,11 @@ fn outcome(
     }
 }
 
-fn fact(key: &str, value: impl Into<String>) -> (OpaqueId, String) {
+pub(super) fn fact(key: &str, value: impl Into<String>) -> (OpaqueId, String) {
     (OpaqueId::new(key).expect("literal fact key"), value.into())
 }
 
-fn check_conformance(
+pub(super) fn check_conformance(
     observed: &PartitionTableFact,
     profile: &DeviceProfile,
 ) -> Result<(), ExecutionError> {
@@ -273,7 +274,7 @@ pub fn validate_partition_table_for_profile(
 /// The Profile's own declared layout, hashed the way the Provider hashed it
 /// when it built the plan. Recomputed here so a plan that drifted from the
 /// Profile it names is caught before the device is touched.
-fn profile_layout_digest(profile: &DeviceProfile) -> Sha256Digest {
+pub(super) fn profile_layout_digest(profile: &DeviceProfile) -> Sha256Digest {
     use arkforge_core::digest::{Domain, digest_in_domain};
     let mut ordered: Vec<_> = profile.allowed_targets.iter().collect();
     ordered.sort_by_key(|target| target.write_order);
@@ -299,7 +300,7 @@ fn profile_layout_digest(profile: &DeviceProfile) -> Sha256Digest {
 /// Deliberately not the archive's grammar branch or attributes: the device's
 /// table does not carry them, and a digest over fields only one side has would
 /// never match.
-fn layout_digest_of(table: &PartitionTableFact) -> Sha256Digest {
+pub(super) fn layout_digest_of(table: &PartitionTableFact) -> Sha256Digest {
     let mut hasher = Sha256::new();
     for entry in &table.entries {
         hasher.update(entry.name.as_bytes());

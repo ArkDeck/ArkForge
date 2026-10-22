@@ -1,5 +1,6 @@
+use super::*;
 
-fn handle_materialize_for(
+pub(super) fn handle_materialize_for(
     runtime_dir: &Path,
     public: &mut PublicClient,
     arguments: &[String],
@@ -162,7 +163,9 @@ fn handle_materialize_for(
     Ok(response)
 }
 
-fn close_resolved_authority_blocker(assessment: &mut arkforge_ipc::messages::Assessment) {
+pub(super) fn close_resolved_authority_blocker(
+    assessment: &mut arkforge_ipc::messages::Assessment,
+) {
     assessment
         .unknowns
         .retain(|unknown| unknown.key != "RK-A01");
@@ -180,7 +183,7 @@ fn close_resolved_authority_blocker(assessment: &mut arkforge_ipc::messages::Ass
     }
 }
 
-fn parse_mechanics_key(value: &str) -> Result<Sha256Digest, StandaloneError> {
+pub(super) fn parse_mechanics_key(value: &str) -> Result<Sha256Digest, StandaloneError> {
     Sha256Digest::parse_hex(value).map_err(|error| {
         StandaloneError::new(
             "MECHANICS_MATURITY_KEY_INVALID",
@@ -191,7 +194,7 @@ fn parse_mechanics_key(value: &str) -> Result<Sha256Digest, StandaloneError> {
     })
 }
 
-fn current_authority_support(
+pub(super) fn current_authority_support(
     mechanics: Sha256Digest,
     hdc_digest: Option<Sha256Digest>,
     hardware_campaign: Option<&str>,
@@ -218,7 +221,7 @@ fn current_authority_support(
     Ok((key_digest, state))
 }
 
-fn require_authority_support(
+pub(super) fn require_authority_support(
     plan: &ExecutablePlan,
     expected_key: Sha256Digest,
     expected_state: &AuthoritySupportState,
@@ -247,7 +250,7 @@ fn require_authority_support(
     Ok(())
 }
 
-fn require_current_authority_support(
+pub(super) fn require_current_authority_support(
     plan: &ExecutablePlan,
     hdc_digest: Option<Sha256Digest>,
     hardware_campaign: Option<&str>,
@@ -268,7 +271,7 @@ fn require_current_authority_support(
     require_authority_support(plan, support_key, &support_state)
 }
 
-fn handle_apply(
+pub(super) fn handle_apply(
     runtime_dir: &Path,
     public: &mut PublicClient,
     epoch: u64,
@@ -411,7 +414,7 @@ pub fn required_acknowledgements(plan: &ExecutablePlan) -> Vec<String> {
         .collect()
 }
 
-fn record_acknowledgements(record: &AuthorityPlanRecord) -> Vec<String> {
+pub(super) fn record_acknowledgements(record: &AuthorityPlanRecord) -> Vec<String> {
     let mut tokens = required_acknowledgements(&record.plan);
     if !record.supersedes_job_id.is_empty() {
         tokens.push(format!(
@@ -423,7 +426,7 @@ fn record_acknowledgements(record: &AuthorityPlanRecord) -> Vec<String> {
     tokens
 }
 
-fn authority_plan_path(runtime_dir: &Path, plan_id: &str) -> PathBuf {
+pub(super) fn authority_plan_path(runtime_dir: &Path, plan_id: &str) -> PathBuf {
     runtime_dir
         .join("authority")
         .join("plans")

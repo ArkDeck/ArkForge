@@ -1,3 +1,4 @@
+use super::*;
 
 impl ActionReceiptSummary {
     /// The semantic receipt digest stored in the durable permit ledger.
@@ -232,11 +233,11 @@ impl ActionReceiptSummary {
     }
 }
 
-fn receipt_model(message: impl Into<String>) -> CborError {
+pub(super) fn receipt_model(message: impl Into<String>) -> CborError {
     CborError::ModelViolation(message.into())
 }
 
-fn take_receipt_field(
+pub(super) fn take_receipt_field(
     fields: &mut BTreeMap<String, CborValue>,
     name: &str,
 ) -> Result<CborValue, CborError> {
@@ -245,7 +246,7 @@ fn take_receipt_field(
         .ok_or_else(|| receipt_model(format!("missing receipt field {name}")))
 }
 
-fn take_text_field(
+pub(super) fn take_text_field(
     fields: &mut BTreeMap<String, CborValue>,
     name: &str,
 ) -> Result<String, CborError> {
@@ -255,7 +256,7 @@ fn take_text_field(
     }
 }
 
-fn take_optional_text_field(
+pub(super) fn take_optional_text_field(
     fields: &mut BTreeMap<String, CborValue>,
     name: &str,
 ) -> Result<String, CborError> {
@@ -266,7 +267,7 @@ fn take_optional_text_field(
     }
 }
 
-fn take_unsigned_field(
+pub(super) fn take_unsigned_field(
     fields: &mut BTreeMap<String, CborValue>,
     name: &str,
 ) -> Result<u64, CborError> {

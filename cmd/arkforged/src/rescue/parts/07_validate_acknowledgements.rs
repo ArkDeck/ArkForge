@@ -1,5 +1,6 @@
+use super::*;
 
-fn validate_acknowledgements(
+pub(super) fn validate_acknowledgements(
     plan: &RescuePlan,
     acknowledgements: &[String],
 ) -> Result<(), RescueError> {
@@ -23,7 +24,7 @@ fn validate_acknowledgements(
     Ok(())
 }
 
-fn mutation_precondition<T>(
+pub(super) fn mutation_precondition<T>(
     result: Result<RockUsbObservation<T>, RockUsbPortFailure>,
     operation: &str,
 ) -> Result<RockUsbObservation<T>, (RescueDisposition, String, Sha256Digest)> {
@@ -40,7 +41,7 @@ fn mutation_precondition<T>(
     }
 }
 
-fn confirmed_no_effect(message: String) -> (RescueDisposition, String, Sha256Digest) {
+pub(super) fn confirmed_no_effect(message: String) -> (RescueDisposition, String, Sha256Digest) {
     (
         RescueDisposition::ConfirmedNoEffect,
         message.clone(),
@@ -48,7 +49,7 @@ fn confirmed_no_effect(message: String) -> (RescueDisposition, String, Sha256Dig
     )
 }
 
-fn outcome_unknown(message: String) -> (RescueDisposition, String, Sha256Digest) {
+pub(super) fn outcome_unknown(message: String) -> (RescueDisposition, String, Sha256Digest) {
     (
         RescueDisposition::OutcomeUnknown,
         message.clone(),
@@ -56,7 +57,7 @@ fn outcome_unknown(message: String) -> (RescueDisposition, String, Sha256Digest)
     )
 }
 
-fn receipt_from_mutation(
+pub(super) fn receipt_from_mutation(
     plan_id: &str,
     plan_digest: Sha256Digest,
     device: &RescueDevice,
@@ -95,7 +96,7 @@ pub fn now_epoch_ms() -> Result<u64, RescueError> {
         .as_millis() as u64)
 }
 
-fn create_private_dir(path: &Path) -> Result<(), RescueError> {
+pub(super) fn create_private_dir(path: &Path) -> Result<(), RescueError> {
     fs::create_dir_all(path)
         .map_err(|error| RescueError::io(&format!("create {}", path.display()), error))?;
     protect_path(path, true)
@@ -103,7 +104,7 @@ fn create_private_dir(path: &Path) -> Result<(), RescueError> {
     Ok(())
 }
 
-fn create_private_file_new(path: &Path) -> std::io::Result<File> {
+pub(super) fn create_private_file_new(path: &Path) -> std::io::Result<File> {
     let mut options = OpenOptions::new();
     options.write(true).create_new(true);
     #[cfg(unix)]
@@ -114,7 +115,7 @@ fn create_private_file_new(path: &Path) -> std::io::Result<File> {
     options.open(path)
 }
 
-fn write_content_addressed(path: &Path, bytes: &[u8]) -> Result<(), RescueError> {
+pub(super) fn write_content_addressed(path: &Path, bytes: &[u8]) -> Result<(), RescueError> {
     match create_private_file_new(path) {
         Ok(mut file) => {
             file.write_all(bytes)
@@ -143,7 +144,7 @@ fn write_content_addressed(path: &Path, bytes: &[u8]) -> Result<(), RescueError>
     }
 }
 
-fn sync_parent(path: &Path) -> Result<(), RescueError> {
+pub(super) fn sync_parent(path: &Path) -> Result<(), RescueError> {
     let parent = path
         .parent()
         .ok_or_else(|| RescueError::io("sync parent", "path has no parent"))?;
@@ -151,7 +152,7 @@ fn sync_parent(path: &Path) -> Result<(), RescueError> {
         .map_err(|error| RescueError::io(&format!("sync {}", parent.display()), error))
 }
 
-fn value_map<'a>(
+pub(super) fn value_map<'a>(
     value: &'a CborValue,
     name: &str,
 ) -> Result<&'a [(CborValue, CborValue)], RescueError> {
@@ -164,7 +165,7 @@ fn value_map<'a>(
     }
 }
 
-fn field<'a>(
+pub(super) fn field<'a>(
     entries: &'a [(CborValue, CborValue)],
     name: &str,
 ) -> Result<&'a CborValue, RescueError> {
@@ -179,7 +180,7 @@ fn field<'a>(
         })
 }
 
-fn text_field<'a>(
+pub(super) fn text_field<'a>(
     entries: &'a [(CborValue, CborValue)],
     name: &str,
 ) -> Result<&'a str, RescueError> {
@@ -192,7 +193,10 @@ fn text_field<'a>(
     }
 }
 
-fn unsigned_field(entries: &[(CborValue, CborValue)], name: &str) -> Result<u64, RescueError> {
+pub(super) fn unsigned_field(
+    entries: &[(CborValue, CborValue)],
+    name: &str,
+) -> Result<u64, RescueError> {
     match field(entries, name)? {
         CborValue::Unsigned(value) => Ok(*value),
         _ => Err(RescueError::refused(
@@ -202,14 +206,14 @@ fn unsigned_field(entries: &[(CborValue, CborValue)], name: &str) -> Result<u64,
     }
 }
 
-fn digest_field(
+pub(super) fn digest_field(
     entries: &[(CborValue, CborValue)],
     name: &str,
 ) -> Result<Sha256Digest, RescueError> {
     digest_value(field(entries, name)?, name)
 }
 
-fn digest_value(value: &CborValue, name: &str) -> Result<Sha256Digest, RescueError> {
+pub(super) fn digest_value(value: &CborValue, name: &str) -> Result<Sha256Digest, RescueError> {
     match value {
         CborValue::Bytes(bytes) if bytes.len() == 32 => {
             let mut digest = [0u8; 32];
@@ -223,7 +227,7 @@ fn digest_value(value: &CborValue, name: &str) -> Result<Sha256Digest, RescueErr
     }
 }
 
-fn ensure_fields(
+pub(super) fn ensure_fields(
     entries: &[(CborValue, CborValue)],
     expected: &[&str],
     name: &str,

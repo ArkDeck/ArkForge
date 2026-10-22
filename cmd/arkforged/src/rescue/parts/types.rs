@@ -1,29 +1,11 @@
-use crate::dispatch::{NativeRockUsbPort, device_from_descriptor};
-use arkforge_artifact::cas::{CasQuota, ContentAddressedStore};
-use arkforge_artifact::manifest::PartitionTableFact;
-use arkforge_core::digest::{
-    CanonicalCbor, CborValue, Domain, Sha256Digest, decode_canonical, digest_in_domain, sha256,
-};
-use arkforge_core::profile::DeviceProfile;
-use arkforge_platform::{protect_path, sync_directory};
-use arkforge_provider::rockchip_execute::{
-    ROCKUSB_SECTOR_BYTES, RockUsbDevice, RockUsbLocation, RockUsbMutationReceipt,
-    RockUsbObservation, RockUsbPort, RockUsbPortFailure, StagedImage, observed_layout_digest,
-    validate_partition_table_for_profile,
-};
-use core::fmt;
-use std::collections::BTreeSet;
-use std::fs::{self, File, OpenOptions};
-use std::io::Write;
-use std::path::{Path, PathBuf};
-use std::time::{Duration, SystemTime};
+use super::*;
 
-const RESCUE_PLAN_SCHEMA: &str = "arkforge.rescue-plan/v1";
-const RESCUE_RECEIPT_SCHEMA: &str = "arkforge.rescue-receipt/v1";
-const RESCUE_INTENT_SCHEMA: &str = "arkforge.rescue-intent/v1";
-const PLAN_LIFETIME: Duration = Duration::from_secs(15 * 60);
-const MAX_READ_BYTES: u64 = 512 * 1024 * 1024;
-const PROFILE_SOURCE: &str = include_str!("../../../../../profiles/dayu200.yaml");
+pub(super) const RESCUE_PLAN_SCHEMA: &str = "arkforge.rescue-plan/v1";
+pub(super) const RESCUE_RECEIPT_SCHEMA: &str = "arkforge.rescue-receipt/v1";
+pub(super) const RESCUE_INTENT_SCHEMA: &str = "arkforge.rescue-intent/v1";
+pub(super) const PLAN_LIFETIME: Duration = Duration::from_secs(15 * 60);
+pub(super) const MAX_READ_BYTES: u64 = 512 * 1024 * 1024;
+pub(super) const PROFILE_SOURCE: &str = include_str!("../../../../../profiles/dayu200.yaml");
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RescueError {
@@ -34,7 +16,7 @@ pub struct RescueError {
 }
 
 impl RescueError {
-    fn new(code: &'static str, message: impl Into<String>, exit_code: i32) -> Self {
+    pub(super) fn new(code: &'static str, message: impl Into<String>, exit_code: i32) -> Self {
         Self {
             code,
             message: message.into(),
@@ -43,20 +25,20 @@ impl RescueError {
         }
     }
 
-    fn retryable(mut self) -> Self {
+    pub(super) fn retryable(mut self) -> Self {
         self.retryable = true;
         self
     }
 
-    fn invalid(message: impl Into<String>) -> Self {
+    pub(super) fn invalid(message: impl Into<String>) -> Self {
         Self::new("INVALID_ARGUMENT", message, 2)
     }
 
-    fn refused(code: &'static str, message: impl Into<String>) -> Self {
+    pub(super) fn refused(code: &'static str, message: impl Into<String>) -> Self {
         Self::new(code, message, 3)
     }
 
-    fn io(context: &str, error: impl fmt::Display) -> Self {
+    pub(super) fn io(context: &str, error: impl fmt::Display) -> Self {
         Self::new("RESCUE_STORE_IO", format!("{context}: {error}"), 10)
     }
 }
@@ -81,7 +63,7 @@ pub struct RescueDevice {
 }
 
 impl RescueDevice {
-    fn from_rockusb(device: &RockUsbDevice) -> Result<Self, RescueError> {
+    pub(super) fn from_rockusb(device: &RockUsbDevice) -> Result<Self, RescueError> {
         let facts = device_facts_value(device);
         let bytes = facts
             .to_canonical_bytes()
@@ -100,7 +82,7 @@ impl RescueDevice {
     }
 }
 
-fn device_facts_value(device: &RockUsbDevice) -> CborValue {
+pub(super) fn device_facts_value(device: &RockUsbDevice) -> CborValue {
     let RockUsbLocation::IokitTopology(location_id) = device.location;
     CborValue::map(vec![
         ("vendorId", CborValue::Unsigned(device.vendor_id as u64)),
@@ -165,7 +147,9 @@ impl NativeRescueBackend {
         Self
     }
 
-    fn descriptors(&self) -> Result<Vec<arkforge_usb::UsbInterfaceDescriptor>, RescueError> {
+    pub(super) fn descriptors(
+        &self,
+    ) -> Result<Vec<arkforge_usb::UsbInterfaceDescriptor>, RescueError> {
         NativeRockUsbPort::new()
             .matching_descriptors()
             .map_err(|error| port_refusal("enumerate Loader devices", error))
@@ -210,7 +194,7 @@ impl RescueBackend for NativeRescueBackend {
     }
 }
 
-fn port_refusal(operation: &str, failure: RockUsbPortFailure) -> RescueError {
+pub(super) fn port_refusal(operation: &str, failure: RockUsbPortFailure) -> RescueError {
     match failure {
         RockUsbPortFailure::BeforeIo(message) => RescueError::refused(
             "NATIVE_USB_REFUSED",
@@ -268,7 +252,7 @@ impl RescueOperation {
         }
     }
 
-    fn acknowledgements(&self) -> Vec<String> {
+    pub(super) fn acknowledgements(&self) -> Vec<String> {
         let mut values = vec!["rescue:native-rockusb".to_string()];
         match self {
             Self::WritePartition { partition, .. } => {
@@ -279,7 +263,7 @@ impl RescueOperation {
         values
     }
 
-    fn to_value(&self) -> CborValue {
+    pub(super) fn to_value(&self) -> CborValue {
         match self {
             Self::WritePartition {
                 partition,
@@ -299,7 +283,7 @@ impl RescueOperation {
         }
     }
 
-    fn from_value(value: &CborValue) -> Result<Self, RescueError> {
+    pub(super) fn from_value(value: &CborValue) -> Result<Self, RescueError> {
         let entries = value_map(value, "operation")?;
         let kind = text_field(entries, "kind")?;
         match kind {

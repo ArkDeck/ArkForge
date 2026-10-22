@@ -1,5 +1,6 @@
+use super::*;
 
-fn submit_control_refusal(
+pub(super) fn submit_control_refusal(
     controller: &mut ControllerClient,
     request: &arkforge_ipc::messages::ManagedControlRequest,
     reason: &str,
@@ -16,7 +17,7 @@ fn submit_control_refusal(
     submit_control_receipt(controller, &receipt)
 }
 
-fn answer_admission(
+pub(super) fn answer_admission(
     runtime_dir: &Path,
     epoch: u64,
     pairing: &ControllerPairingSecret,
@@ -111,7 +112,7 @@ fn answer_admission(
     Ok(())
 }
 
-fn resolve_lineage_for_admission(
+pub(super) fn resolve_lineage_for_admission(
     runtime_dir: &Path,
     public: &mut PublicClient,
     snapshot: &StepAdmissionSnapshot,
@@ -158,7 +159,10 @@ fn resolve_lineage_for_admission(
     Ok(Some(advanced))
 }
 
-fn prior_reboot_authorizes_rebind(plan: &ExecutablePlan, snapshot: &StepAdmissionSnapshot) -> bool {
+pub(super) fn prior_reboot_authorizes_rebind(
+    plan: &ExecutablePlan,
+    snapshot: &StepAdmissionSnapshot,
+) -> bool {
     let Some(index) = plan
         .public_steps
         .iter()
@@ -183,7 +187,7 @@ fn prior_reboot_authorizes_rebind(plan: &ExecutablePlan, snapshot: &StepAdmissio
             .is_ok_and(|digest| digest.to_hex() == current.private_action_sha256)
 }
 
-fn observation_matches_admission(
+pub(super) fn observation_matches_admission(
     observation: &DeviceObservationView,
     snapshot: &StepAdmissionSnapshot,
 ) -> bool {
@@ -200,7 +204,7 @@ fn observation_matches_admission(
         && observation.malformed_descriptor == snapshot.malformed_descriptor
 }
 
-fn submit_permit_refusal(
+pub(super) fn submit_permit_refusal(
     controller: &mut ControllerClient,
     snapshot: &StepAdmissionSnapshot,
     epoch: u64,
@@ -226,7 +230,7 @@ fn submit_permit_refusal(
 }
 
 #[allow(clippy::too_many_arguments)]
-fn load_or_create_permit(
+pub(super) fn load_or_create_permit(
     runtime_dir: &Path,
     epoch: u64,
     pairing: &ControllerPairingSecret,
@@ -318,7 +322,7 @@ fn load_or_create_permit(
     Ok(submission)
 }
 
-fn encode_persisted_permit(submission: &SubmitStepPermitRequest) -> Vec<u8> {
+pub(super) fn encode_persisted_permit(submission: &SubmitStepPermitRequest) -> Vec<u8> {
     let mut out = Vec::new();
     wire::write_bytes(&mut out, 1, &submission.permit_cbor);
     wire::write_bytes(&mut out, 2, &submission.integrity_tag);
@@ -326,7 +330,7 @@ fn encode_persisted_permit(submission: &SubmitStepPermitRequest) -> Vec<u8> {
     out
 }
 
-fn decode_persisted_permit(
+pub(super) fn decode_persisted_permit(
     snapshot: &StepAdmissionSnapshot,
     epoch: u64,
     input: &[u8],
@@ -364,7 +368,7 @@ fn decode_persisted_permit(
     })
 }
 
-fn current_stable_identity(
+pub(super) fn current_stable_identity(
     public: &mut PublicClient,
     device: &str,
     profile: &str,
@@ -385,7 +389,7 @@ fn current_stable_identity(
     Ok(stable_identity_digest(observation, &probe))
 }
 
-fn stable_identity_digest(
+pub(super) fn stable_identity_digest(
     observation: &DeviceObservationView,
     probe: &DeviceProbeView,
 ) -> Sha256Digest {

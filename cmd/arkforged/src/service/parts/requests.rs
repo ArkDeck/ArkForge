@@ -1,5 +1,6 @@
-impl Service {
+use super::*;
 
+impl Service {
     /// Dispatches one request.
     ///
     /// `artifact_stream` is present only for `importArtifact`, which is the one
@@ -42,7 +43,13 @@ impl Service {
         }
     }
 
-    fn refuse(&self, request: &Request, status: Status, code: &str, message: &str) -> Response {
+    pub(super) fn refuse(
+        &self,
+        request: &Request,
+        status: Status,
+        code: &str,
+        message: &str,
+    ) -> Response {
         Response {
             request_id: request.request_id.clone(),
             api: request.api,
@@ -57,7 +64,7 @@ impl Service {
         }
     }
 
-    fn ok(&self, request: &Request, payload: Vec<u8>) -> Response {
+    pub(super) fn ok(&self, request: &Request, payload: Vec<u8>) -> Response {
         Response {
             request_id: request.request_id.clone(),
             api: request.api,
@@ -68,7 +75,7 @@ impl Service {
         }
     }
 
-    fn import_artifact(
+    pub(super) fn import_artifact(
         &mut self,
         request: &Request,
         artifact_stream: Option<&mut dyn Read>,
@@ -128,7 +135,7 @@ impl Service {
         }
     }
 
-    fn inspect_artifact(&mut self, request: &Request) -> Response {
+    pub(super) fn inspect_artifact(&mut self, request: &Request) -> Response {
         let artifact_id = match first_string_field(&request.payload, 1) {
             Some(value) => value,
             None => {
@@ -182,7 +189,7 @@ impl Service {
         self.ok(request, manifest_response(&manifest).encode())
     }
 
-    fn discover_devices(&mut self, request: &Request) -> Response {
+    pub(super) fn discover_devices(&mut self, request: &Request) -> Response {
         let filter = TypedDiscoveryFilter::default();
         let mut out = Vec::new();
         for transport in &self.transports {
@@ -204,7 +211,7 @@ impl Service {
         self.ok(request, out)
     }
 
-    fn probe_device(&mut self, request: &Request) -> Response {
+    pub(super) fn probe_device(&mut self, request: &Request) -> Response {
         let observation_id = first_string_field(&request.payload, 1).unwrap_or_default();
         let profile_id = first_string_field(&request.payload, 2).unwrap_or_default();
         let Some(profile) = self.profiles.get(&profile_id) else {
@@ -294,7 +301,7 @@ impl Service {
     /// partition, address, tool, timeout or effect override in the request,
     /// and the plan is resolved out of the daemon's own store rather than
     /// rebuilt from anything the caller sent (architecture.md 15.3).
-    fn start_execution(&mut self, request: &Request) -> Response {
+    pub(super) fn start_execution(&mut self, request: &Request) -> Response {
         // Standing blockers first, because they are facts about this daemon
         // and the payload is a fact about one request. A daemon with no
         // authority answering "unknown plan" would send an operator to fix a
@@ -475,7 +482,7 @@ impl Service {
     /// A poll rather than a push, because the daemon serves every connection
     /// under one lock and a handler that parked waiting for the next event
     /// would stop every other call — including the one that produces it.
-    fn watch_job(&mut self, request: &Request) -> Response {
+    pub(super) fn watch_job(&mut self, request: &Request) -> Response {
         let Ok(watch) = WatchJobRequest::decode(&request.payload) else {
             return self.refuse(
                 request,
@@ -500,7 +507,7 @@ impl Service {
         self.ok(request, payload)
     }
 
-    fn get_job(&self, request: &Request) -> Response {
+    pub(super) fn get_job(&self, request: &Request) -> Response {
         let job_id = first_string_field(&request.payload, 1).unwrap_or_default();
         let Some(job) = self.jobs.job(&job_id) else {
             return self.refuse(
@@ -515,7 +522,7 @@ impl Service {
         self.ok(request, payload)
     }
 
-    fn list_jobs(&self, request: &Request) -> Response {
+    pub(super) fn list_jobs(&self, request: &Request) -> Response {
         let mut payload = Vec::new();
         for job in self.jobs.all_jobs() {
             arkforge_ipc::wire::write_message(&mut payload, 1, &encode_job_summary(job).encode());

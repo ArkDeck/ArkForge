@@ -1,6 +1,7 @@
-impl<B: RescueBackend> RescueManager<B> {
+use super::*;
 
-    fn store_plan(&self, plan: RescuePlan) -> Result<RescuePlanSummary, RescueError> {
+impl<B: RescueBackend> RescueManager<B> {
+    pub(super) fn store_plan(&self, plan: RescuePlan) -> Result<RescuePlanSummary, RescueError> {
         plan.validate_shape()?;
         let bytes = plan
             .to_canonical_bytes()
@@ -17,7 +18,10 @@ impl<B: RescueBackend> RescueManager<B> {
         })
     }
 
-    fn load_plan(&self, plan_id: &str) -> Result<(RescuePlan, Sha256Digest, Vec<u8>), RescueError> {
+    pub(super) fn load_plan(
+        &self,
+        plan_id: &str,
+    ) -> Result<(RescuePlan, Sha256Digest, Vec<u8>), RescueError> {
         let digest_text = plan_id.strip_prefix("rescue-plan:").ok_or_else(|| {
             RescueError::invalid("Use a rescue plan ID in the form rescue-plan:<sha256>.")
         })?;
@@ -47,7 +51,7 @@ impl<B: RescueBackend> RescueManager<B> {
         Ok((plan, observed, bytes))
     }
 
-    fn record_intent(
+    pub(super) fn record_intent(
         &self,
         plan_id: &str,
         plan_digest: Sha256Digest,
@@ -88,7 +92,7 @@ impl<B: RescueBackend> RescueManager<B> {
         }
     }
 
-    fn store_receipt(&self, receipt: &RescueReceipt) -> Result<(), RescueError> {
+    pub(super) fn store_receipt(&self, receipt: &RescueReceipt) -> Result<(), RescueError> {
         create_private_dir(&self.receipts_dir())?;
         let bytes = receipt
             .to_canonical_bytes()
@@ -99,7 +103,7 @@ impl<B: RescueBackend> RescueManager<B> {
         write_content_addressed(&path, &bytes)
     }
 
-    fn open_store(&self) -> Result<ContentAddressedStore, RescueError> {
+    pub(super) fn open_store(&self) -> Result<ContentAddressedStore, RescueError> {
         ContentAddressedStore::open(
             self.rescue_root().join("store"),
             CasQuota::dayu200_default(),
@@ -107,23 +111,23 @@ impl<B: RescueBackend> RescueManager<B> {
         .map_err(|error| RescueError::new("RESCUE_STORE_UNAVAILABLE", error.to_string(), 10))
     }
 
-    fn rescue_root(&self) -> PathBuf {
+    pub(super) fn rescue_root(&self) -> PathBuf {
         self.runtime_root.join("rescue")
     }
 
-    fn plans_dir(&self) -> PathBuf {
+    pub(super) fn plans_dir(&self) -> PathBuf {
         self.rescue_root().join("plans")
     }
 
-    fn intents_dir(&self) -> PathBuf {
+    pub(super) fn intents_dir(&self) -> PathBuf {
         self.rescue_root().join("intents")
     }
 
-    fn receipts_dir(&self) -> PathBuf {
+    pub(super) fn receipts_dir(&self) -> PathBuf {
         self.rescue_root().join("receipts")
     }
 
-    fn work_dir(&self) -> PathBuf {
+    pub(super) fn work_dir(&self) -> PathBuf {
         self.rescue_root().join("work")
     }
 }

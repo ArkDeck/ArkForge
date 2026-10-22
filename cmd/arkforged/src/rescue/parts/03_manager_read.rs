@@ -1,6 +1,6 @@
+use super::*;
 
 impl<B: RescueBackend> RescueManager<B> {
-
     pub fn new(
         runtime_root: impl Into<PathBuf>,
         native_build_digest: Sha256Digest,
