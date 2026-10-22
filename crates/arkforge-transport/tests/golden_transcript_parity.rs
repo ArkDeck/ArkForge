@@ -14,8 +14,8 @@ use arkforge_transport::transcript::{
 };
 use arkforge_transport::{IdentityEvidenceStrength, TypedDiscoveryFilter};
 
-const ECAMP_A: &str = include_str!("../../../transcripts/dayu200-gj4-ecamp-96effff15.yaml");
-const ECAMP_B: &str = include_str!("../../../transcripts/dayu200-gj4-ecamp-31e041bc.yaml");
+const ECAMP_A: &str = include_str!("../../../test/transcripts/dayu200-gj4-ecamp-96effff15.yaml");
+const ECAMP_B: &str = include_str!("../../../test/transcripts/dayu200-gj4-ecamp-31e041bc.yaml");
 
 /// The documented derivation rule, restated here so the test is the check and
 /// not a copy of the generator.

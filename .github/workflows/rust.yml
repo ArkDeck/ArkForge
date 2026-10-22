@@ -22,13 +22,13 @@ jobs:
       - name: Format
         run: cargo fmt --all -- --check
       - name: Preboot shell compatibility
-        run: sh scripts/test-preboot-holder.sh
+        run: sh hack/test-preboot-holder.sh
       - name: Preboot init handoff
-        run: python3 scripts/test-preboot-init.py
+        run: python3 hack/test-preboot-init.py
       - name: Preboot report storage guard
-        run: python3 scripts/test-preboot-report.py
+        run: python3 hack/test-preboot-report.py
       - name: Boot-loop restoration orchestration
-        run: python3 -m unittest discover -s scripts -p test_restore_boot_loop.py
+        run: python3 -m unittest discover -s hack -p test_restore_boot_loop.py
       - name: Clippy
         run: cargo clippy --workspace --all-targets --all-features -- -D warnings
       - name: Test

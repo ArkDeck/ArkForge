@@ -19,21 +19,21 @@ ArkForge 是设备无关的固件操作平台：Rust workspace 实现 CLI、daem
 | 任务 | 入口 |
 | --- | --- |
 | 构建与用法 | [README.md](README.md)、`Cargo.toml`、`rust-toolchain.toml`；实际 flags 查当前 CLI help |
-| CLI 与独立授权 | `crates/arkforge-cli/`、`crates/arkforge-client/`、`crates/arkforge-standalone/`、`spec/requirements/cli.md` |
-| 计划、摘要、permit | `crates/arkforge-core/`、`crates/arkforge-authority-api/`；对应 `spec/requirements/` 与 `spec/model/` |
+| CLI 与独立授权 | `crates/arkforge-cli/`、`crates/arkforge-client/`、`crates/arkforge-standalone/`、`docs/spec/requirements/cli.md` |
+| 计划、摘要、permit | `crates/arkforge-core/`、`crates/arkforge-authority-api/`；对应 `docs/spec/requirements/` 与 `docs/spec/model/` |
 | 固件、Profile、Provider、传输 | `crates/arkforge-artifact/`、`crates/arkforge-provider/`、`crates/arkforge-transport/`、`crates/arkforge-usb/`、`profiles/` |
-| Job、journal、恢复、daemon | `crates/arkforge-engine/`、`crates/arkforged/`；`spec/state-machines/`、`spec/ports/` |
-| IPC 与 Swift SDK | `proto/arkforge.proto`、`crates/arkforge-ipc/`、根目录 `Package.swift`、`swift/ArkForgeSDK/` |
+| Job、journal、恢复、daemon | `crates/arkforge-engine/`、`crates/arkforged/`；`docs/spec/state-machines/`、`docs/spec/ports/` |
+| IPC 与 Swift SDK | `api/arkforge.proto`、`crates/arkforge-ipc/`、根目录 `Package.swift`、`swift/ArkForgeSDK/` |
 | ArkDeck 集成 | `adapters/arkforge-arkdeck-adapter/`；实际修改 ArkDeck 时读取该仓 `AGENTS.md` |
 | 打包、硬件状态与证据 | `packaging/`、[evidence ledger](docs/evidence/ledger.md)；按需读取相关 `docs/decisions/`。阶段台账在 [docs/archive/TASKS.md](docs/archive/TASKS.md) |
 
 ## 规范与实现边界
 
-- [spec/README.md](spec/README.md) 定义规范权威顺序：conformance fixture bytes >
+- [docs/spec/README.md](docs/spec/README.md) 定义规范权威顺序：conformance fixture bytes >
   machine-readable models/state-machines/errors > requirements > 架构文档 > Rust 实现。
-  同时检查 normative/draft/informative 状态。代码不是规范；差异登记到 `spec/ISSUES.md`，
+  同时检查 normative/draft/informative 状态。代码不是规范；差异登记到 `docs/spec/ISSUES.md`，
   不靠改 expected 值掩盖行为变化。
-- 修改规范、wire、摘要或生成 fixture 时读取 [spec/AUTHORING.md](spec/AUTHORING.md)，
+- 修改规范、wire、摘要或生成 fixture 时读取 [docs/spec/AUTHORING.md](docs/spec/AUTHORING.md)，
   同步实际受影响的 model、requirement、manifest、mapping 与 conformance case。
   fixture 变化按规范变更审阅，不能用重新生成代替正确性判断。
 - Rust workspace 按 [AFD-0001](docs/decisions/AFD-0001-zero-dependency-core.md) 保持零第三方

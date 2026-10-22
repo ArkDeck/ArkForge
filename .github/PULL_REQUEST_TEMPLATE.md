@@ -7,7 +7,7 @@
 <!-- Delete the lines that do not apply. -->
 
 - [ ] No spec, digest, Protobuf, or ArkDeck contract change
-- [ ] Spec or conformance fixtures changed, and `spec/manifest.yaml` / `spec/ISSUES.md` match the diff
+- [ ] Spec or conformance fixtures changed, and `docs/spec/manifest.yaml` / `docs/spec/ISSUES.md` match the diff
 - [ ] IPC or adapter contract constants changed, and `docs/arkdeck-contract.md` matches
 
 This pull request does not create a git tag or a GitHub Release.

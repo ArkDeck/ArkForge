@@ -514,7 +514,8 @@ mod support {
     use arkforge_transport::{DeviceTransport, TypedDiscoveryFilter, transcript};
 
     const PROFILE_SOURCE: &str = include_str!("../../../profiles/dayu200.yaml");
-    const CAMPAIGN: &str = include_str!("../../../transcripts/dayu200-gj4-ecamp-96effff15.yaml");
+    const CAMPAIGN: &str =
+        include_str!("../../../test/transcripts/dayu200-gj4-ecamp-96effff15.yaml");
 
     /// Materializes the DAYU200 plan through the executable branch, so the
     /// admission check has a full step list to examine.

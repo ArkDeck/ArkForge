@@ -1,7 +1,7 @@
 //! # arkforge-conformance
 //!
 //! Generates the language-neutral conformance fixtures under
-//! `spec/conformance/v1` from the Rust reference implementation, and checks
+//! `docs/spec/conformance/v1` from the Rust reference implementation, and checks
 //! that the committed fixtures are current.
 //!
 //! The Rust implementation is the *oracle* that produced these bytes; once
@@ -24,7 +24,7 @@ pub mod tree;
 
 pub use tree::{Case, Tree};
 
-/// The spec version these fixtures belong to. Bumped with `spec/manifest.yaml`.
+/// The spec version these fixtures belong to. Bumped with `docs/spec/manifest.yaml`.
 pub const SPEC_VERSION: &str = "1.0.0-draft.4";
 
 /// Every fixture, in memory.
@@ -56,6 +56,7 @@ pub fn committed_root() -> std::path::PathBuf {
     std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("..")
         .join("..")
+        .join("docs")
         .join("spec")
         .join("conformance")
         .join("v1")

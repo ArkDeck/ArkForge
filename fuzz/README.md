@@ -35,7 +35,7 @@ minutes each. Both jobs upload `fuzz/artifacts` when a target crashes.
 
 Reviewed seeds live in `fuzz/corpus/<target>/seed-*`. Each file is under 64
 KiB and is copied from a conformance sample, a transcript, or the in-repo
-DAYU200 fixture shape (`spec/conformance/GROWTH.md`). libFuzzer reads that
+DAYU200 fixture shape (`docs/spec/conformance/GROWTH.md`). libFuzzer reads that
 directory at the start of a run. Campaign files it adds are gitignored.
 
 ## Mutation tests

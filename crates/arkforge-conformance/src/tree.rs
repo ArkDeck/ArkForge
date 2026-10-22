@@ -1,5 +1,5 @@
 //! The fixture tree: every file the generator produces, keyed by its path
-//! relative to `spec/conformance/v1`.
+//! relative to `docs/spec/conformance/v1`.
 //!
 //! Generation is pure — no clocks, no randomness, no host paths — so the tree
 //! is a function of the reference implementation alone, and "the committed
@@ -140,7 +140,7 @@ impl Tree {
             (
                 "authority",
                 Json::str(
-                    "These bytes are normative. If a fixture and the prose in spec/ disagree, \
+                    "These bytes are normative. If a fixture and the prose in docs/spec/ disagree, \
                      that is a spec defect to be resolved by a spec revision, never by an \
                      implementation choosing one side silently.",
                 ),

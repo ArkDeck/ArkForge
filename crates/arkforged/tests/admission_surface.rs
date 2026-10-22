@@ -52,7 +52,7 @@ use arkforged::jobs::{
 use std::path::PathBuf;
 
 const PROFILE_SOURCE: &str = include_str!("../../../profiles/dayu200.yaml");
-const CAMPAIGN: &str = include_str!("../../../transcripts/dayu200-gj4-ecamp-96effff15.yaml");
+const CAMPAIGN: &str = include_str!("../../../test/transcripts/dayu200-gj4-ecamp-96effff15.yaml");
 const SECRET: &[u8] = b"an-admission-surface-test-pairing-secret";
 const EPOCH: PairingEpoch = PairingEpoch(4);
 const NOW: u64 = 1_754_380_800_000;

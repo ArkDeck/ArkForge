@@ -1,7 +1,7 @@
 # ArkForge 实施任务台账
 
 > **已归档。** 本文件是历史阶段台账，不发布设备支持。当前证据见
-> [证据账本](../evidence/ledger.md)。规范行为以 `spec/` 为准。
+> [证据账本](../evidence/ledger.md)。规范行为以 `docs/spec/` 为准。
 
 > 状态总览(2026-08-19)：AF-V1 完成；AF-V2 第一验收项(真机全量刷写)已通过且执行面已
 > 原生化(NRU-001..004)，真机 crash 半与掉电仍未验；AF-V3 软件半完成。任务定义正本是
@@ -69,7 +69,7 @@ artifact import
 - [x] 无设备 mutation
 
 **额外交付**：`adapters/arkforge-arkdeck-adapter` 的 published step 映射表(5.4)、
-`proto/arkforge.proto`、`arkforge-cli` 只读诊断。
+`api/arkforge.proto`、`arkforge-cli` 只读诊断。
 
 **边界**：见[验收证据](../evidence/AF-V1-acceptance.md)第 4 节。
 

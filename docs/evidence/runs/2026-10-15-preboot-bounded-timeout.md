@@ -8,7 +8,7 @@ No persistent write requires a graceful measurement shutdown.
 
 ## Local targeted checks
 
-- `bash scripts/test-preboot-holder.sh`: exit 0; both exact command matchers and
+- `bash hack/test-preboot-holder.sh`: exit 0; both exact command matchers and
   their eight rejection cases remain intact.
 - `cargo fmt --all -- --check`: exit 0.
 - Workspace Clippy with all targets/features and warnings denied: exit 0.

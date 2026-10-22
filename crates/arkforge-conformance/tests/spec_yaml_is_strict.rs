@@ -1,5 +1,5 @@
-//! Every YAML file under `spec/` must be readable by the strict YAML subset
-//! reader that loads a DeviceProfile (spec/AUTHORING.md §4). A spec table that
+//! Every YAML file under `docs/spec/` must be readable by the strict YAML subset
+//! reader that loads a DeviceProfile (docs/spec/AUTHORING.md §4). A spec table that
 //! needs anchors, flow mappings or multi-line scalars would be a table the
 //! reference loader cannot read.
 
@@ -30,6 +30,7 @@ fn every_spec_yaml_file_parses_with_the_strict_subset() {
     let spec = Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("..")
         .join("..")
+        .join("docs")
         .join("spec");
     let mut files = Vec::new();
     collect(&spec, &mut files);
@@ -46,7 +47,7 @@ fn every_spec_yaml_file_parses_with_the_strict_subset() {
 
 /// Every published profile and transcript must still load, and the set is read
 /// from the directories rather than listed here: a file added to `profiles/` or
-/// `transcripts/` that the reference loader cannot read is exactly the drift
+/// `test/transcripts/` that the reference loader cannot read is exactly the drift
 /// this check exists to catch, and a hand-maintained list silently misses it.
 #[test]
 fn published_profiles_and_transcripts_still_load() {
@@ -62,7 +63,7 @@ fn published_profiles_and_transcripts_still_load() {
     }
 
     let mut transcripts = Vec::new();
-    collect(&root.join("transcripts"), &mut transcripts);
+    collect(&root.join("test").join("transcripts"), &mut transcripts);
     assert!(transcripts.len() >= 3, "published transcripts went missing");
     for transcript in &transcripts {
         let source = std::fs::read_to_string(transcript).unwrap();
@@ -75,7 +76,7 @@ fn published_profiles_and_transcripts_still_load() {
 /// observations would alter evidence and the replay backend identity (SI-018).
 #[test]
 fn historical_usb_capture_bytes_are_preserved() {
-    let captured = include_bytes!("../../../transcripts/captured/dayu200-hdc-normal.yaml");
+    let captured = include_bytes!("../../../test/transcripts/captured/dayu200-hdc-normal.yaml");
     assert_eq!(
         arkforge_core::digest::sha256(captured).to_hex(),
         "301acc7d07623d71edc35881edb98923fae3e607f8cdac4dafe8c6b75b7470a9"

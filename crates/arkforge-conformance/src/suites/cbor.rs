@@ -4,7 +4,7 @@
 //! encode to (and MUST decode back from); `decode` cases give bytes a
 //! canonical decoder MUST refuse. The rejection *class* recorded is the one
 //! the reference implementation reports; the requirement on a port is to
-//! reject, and to report a class from `spec/errors/registry.yaml`'s
+//! reject, and to report a class from `docs/spec/errors/registry.yaml`'s
 //! `cbor` family.
 
 use crate::cbor_repr::{diag, typed_json};

@@ -56,6 +56,24 @@ fn flash_verify_and_boot_loop_constants_match_the_ipc_contract() {
 }
 
 #[test]
+fn the_api_versions_file_matches_the_adapter_tables() {
+    let versions = include_str!("../../../api/versions.yaml");
+    for needle in [
+        &format!("contractTag: {CONTRACT_TAG}"),
+        &format!("protocolVersion: \"{PROTOCOL_VERSION}\""),
+        &format!("arkdeckContract: {ARKDECK_CONTRACT_VERSION}"),
+        &format!("mappingTable: {MAPPING_TABLE_VERSION}"),
+        &format!("controlTable: {CONTROL_TABLE_VERSION}"),
+        "proto: api/arkforge.proto",
+    ] {
+        assert!(
+            versions.contains(needle),
+            "api/versions.yaml lacks {needle}"
+        );
+    }
+}
+
+#[test]
 fn the_compatibility_doc_names_this_pin_and_the_verification_exits() {
     let doc = include_str!("../../../docs/arkdeck-contract.md");
     for needle in [

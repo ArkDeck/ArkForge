@@ -8,6 +8,7 @@ fn fixture(case: &str, file: &str) -> Vec<u8> {
     let root = Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("..")
         .join("..")
+        .join("docs")
         .join("spec")
         .join("conformance")
         .join("v1")

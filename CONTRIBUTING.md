@@ -15,8 +15,8 @@ Community documents in this repository are English.
 - The language-neutral specification outranks the Rust code. Precedence is
   conformance fixture bytes, then machine-readable models, state machines, and
   errors, then requirements, then architecture documents, then the Rust
-  implementation. Record disagreements in [spec/ISSUES.md](spec/ISSUES.md).
-  Follow [spec/AUTHORING.md](spec/AUTHORING.md) when you change the spec, the
+  implementation. Record disagreements in [docs/spec/ISSUES.md](docs/spec/ISSUES.md).
+  Follow [docs/spec/AUTHORING.md](docs/spec/AUTHORING.md) when you change the spec, the
   wire format, digests, or generated fixtures.
 - A pull request that builds and tests a change is not permission to flash,
   reset, or rescue a device, and it does not publish hardware support. Device

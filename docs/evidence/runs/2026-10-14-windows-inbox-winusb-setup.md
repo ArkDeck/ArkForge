@@ -32,7 +32,7 @@ driver package remains installed for an explicitly assessed restoration.
 - Actual read-only plan generation and guard round trip: exit 0. An attempted
   unelevated apply refused before intent creation or modification. The local
   plan contains private device identifiers and is not committed or exported.
-- PowerShell parse: all 12 release/setup scripts/modules, zero errors; local
+- PowerShell parse: all 12 release/setup hack/modules, zero errors; local
   `windows-inbox-winusb-20261014/powershell-parse-final.json`. `git diff --check`:
   exit 0. No Rust or Swift runtime/wire source changed; full workspace checks
   run in PR CI, not as an additional local build alongside the ongoing soak.

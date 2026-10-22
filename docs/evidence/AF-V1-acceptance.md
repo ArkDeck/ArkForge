@@ -25,7 +25,7 @@
 | deterministic digest | `arkforge-core::digest`：SHA-256(FIPS 180-4 向量)、RFC 8949 §4.2 CBOR(Appendix A 向量)、域分隔表 |
 | projection validator | `arkforge-core::projection::validate_projection` |
 | daemon read-only API | `arkforged`：UDS 双 socket、Protobuf 帧、15.3 全 API |
-| golden transcript 库 | `transcripts/dayu200-gj4-ecamp-{96effff15,31e041bc}.yaml` |
+| golden transcript 库 | `test/transcripts/dayu200-gj4-ecamp-{96effff15,31e041bc}.yaml` |
 
 ## 2. 验收逐条
 
@@ -192,7 +192,7 @@ fsync + rename)，输入为等长确定性合成流，不是厂商归档本身�
   该表的一个直接后果：ArkDeck 的 effect 阶梯没有 transient 档，`enterUpdater` /
   `rebootDevice` 的下限落在 `Mutating`，因此 Rockchip provider 的模式变更步骤按
   `Mutating` 声明(over-declare 只会收紧准入)。
-- `proto/arkforge.proto`：IPC 正本 schema，含演进规则(未知 field 跳过 / 未知 enum 硬失败)。
+- `api/arkforge.proto`：IPC 正本 schema，含演进规则(未知 field 跳过 / 未知 enum 硬失败)。
 - `arkforge`：统一只读诊断命令树，从 `--runtime-dir` 派生 public socket，结构上
   无法 import 或 execute；旧 `arkforge-cli` 已在未发布阶段直接移除。
 

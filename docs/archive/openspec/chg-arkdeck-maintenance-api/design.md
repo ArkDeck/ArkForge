@@ -11,7 +11,7 @@ trusted Runtime. It owns no CLI process or transport and cannot mint authority.
 
 The result contract remains protocol 1.0, adapter tables 1.0.0, flash verification
 0/9/7 and restoration 0/1/2. No existing wire or conformance bytes change. The new
-port is draft, documented in spec/ports/authority-maintenance.md. It needs a
+port is draft, documented in docs/spec/ports/authority-maintenance.md. It needs a
 consumer implementation and review before any Catalog operation is enabled.
 
 Fault injection covers successful full hashes, typed writable skips, mismatches,

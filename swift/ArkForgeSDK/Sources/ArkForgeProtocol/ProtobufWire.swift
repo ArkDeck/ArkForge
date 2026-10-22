@@ -8,7 +8,7 @@ public enum ArkForgeFraming {
   public static let maxFrameBytes = 16 * 1024 * 1024
 }
 
-/// The proto3 wire subset `proto/arkforge.proto` uses.
+/// The proto3 wire subset `api/arkforge.proto` uses.
 ///
 /// Hand-written rather than generated, for the same reason ArkForge's side is
 /// (AFD-0001): this is the codec on a trust boundary where one side authorizes

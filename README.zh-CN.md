@@ -199,7 +199,7 @@ codec 均在仓内实现，并使用公开测试向量验证。设计理由见
 
 ## 文档
 
-- [语言无关规范正本](spec/README.md) — 状态机、摘要模型、端口契约、错误码与 conformance fixtures
+- [语言无关规范正本](docs/spec/README.md) — 状态机、摘要模型、端口契约、错误码与 conformance fixtures
 - [架构与安全边界](docs/architecture.md)
 - [Agent-native CLI 设计](docs/archive/openspec/chg-agent-native-cli/proposal.md)（已归档的 change 草案）
 - [CLI 验收矩阵](docs/archive/openspec/chg-agent-native-cli/verification.md)（已归档的 change 草案）

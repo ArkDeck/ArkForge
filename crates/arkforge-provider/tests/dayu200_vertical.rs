@@ -33,7 +33,7 @@ use std::io;
 use std::path::{Path, PathBuf};
 
 const PROFILE_SOURCE: &str = include_str!("../../../profiles/dayu200.yaml");
-const CAMPAIGN: &str = include_str!("../../../transcripts/dayu200-gj4-ecamp-96effff15.yaml");
+const CAMPAIGN: &str = include_str!("../../../test/transcripts/dayu200-gj4-ecamp-96effff15.yaml");
 
 #[derive(Debug)]
 struct AmpleSpace;

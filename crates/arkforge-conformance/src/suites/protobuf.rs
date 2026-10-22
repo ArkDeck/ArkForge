@@ -1,4 +1,4 @@
-//! Protobuf wire vectors for `proto/arkforge.proto` and the decoder's refusal
+//! Protobuf wire vectors for `api/arkforge.proto` and the decoder's refusal
 //! rules. The schema file is the contract; these bytes are what it means.
 
 use crate::json::{Json, hex};
@@ -347,7 +347,7 @@ pub fn populate(tree: &mut Tree) {
                 requirements: vec!["AF-IPC-010", "AF-IPC-011"],
                 kind: "encode",
                 description: format!(
-                    "Encoding of `arkforge.ipc.v1.{}` per proto/arkforge.proto. Proto3 \
+                    "Encoding of `arkforge.ipc.v1.{}` per api/arkforge.proto. Proto3 \
                      defaults (0, false, empty) are omitted; fields are written in field \
                      number order; repeated message fields are one tag per element.",
                     vector.message

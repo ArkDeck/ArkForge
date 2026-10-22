@@ -12,14 +12,14 @@ and restoration boundaries are unchanged.
 
 ## Local targeted checks
 
-- `python scripts/test-preboot-init.py`: exit 0, three tests covering four
+- `python hack/test-preboot-init.py`: exit 0, three tests covering four
   paths: success, missing readiness, measurement failure and timeout. The
   complete wrapper runs against host-only applet fixtures and must hand off
   without creating `/dev/null`. Its failure markers and inherited argument
   and umask are checked. The same fixture with the unmodified published
   wrapper exits 65 at the stock-init mount guard, demonstrating that the
   regression is detected.
-- `sh scripts/test-preboot-holder.sh`: exit 0; exact argv and eight rejection
+- `sh hack/test-preboot-holder.sh`: exit 0; exact argv and eight rejection
   cases for both matchers. Logs for these checks and `git diff --check`:
   `preboot-userdata-20261015/dev-init-shell-checks-01.{json,log}`.
 - In isolated ARM64 emulation, both variants use the pinned original ARM

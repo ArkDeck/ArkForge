@@ -206,7 +206,7 @@ vectors. See [AFD-0001](docs/decisions/AFD-0001-zero-dependency-core.md) for the
 
 ## Documentation
 
-- [Normative, language-neutral specification](spec/README.md) — state machines, digest models,
+- [Normative, language-neutral specification](docs/spec/README.md) — state machines, digest models,
   port contracts, stable errors, and conformance fixtures
 - [Architecture and safety boundaries](docs/architecture.md)
 - [Agent-native CLI design](docs/archive/openspec/chg-agent-native-cli/proposal.md) (archived change draft)

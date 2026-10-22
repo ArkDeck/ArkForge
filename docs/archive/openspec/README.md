@@ -1,7 +1,7 @@
 # OpenSpec change 草案
 
 > **已归档。** 这些 OpenSpec 草案是历史过程文档，不是现行规范。规范行为以
-> [`spec/`](../../../spec/README.md) 为准。部分 change 已复制进 ArkDeck，并在之后被
+> [`docs/spec/`](../../spec/README.md) 为准。部分 change 已复制进 ArkDeck，并在之后被
 > 超越；先看下面的状态表和 superseded 注记。
 
 本目录保存尚待维护者 review 的跨边界 change。草案不等于批准，更不开放新的

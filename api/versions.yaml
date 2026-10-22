@@ -1,0 +1,17 @@
+# Machine-readable contract identity.
+#
+# ArkDeck's pin check reads this file and api/arkforge.proto. The values match
+# the in-process constants. Development still pins a 40-hex git rev. These
+# strings are not git tags, and this repository does not publish a GitHub Release.
+schema: arkforge.contract-versions/v1
+proto: api/arkforge.proto
+package: arkforge.ipc.v1
+protocolMajor: 1
+protocolMinor: 0
+protocolVersion: "1.0"
+contractTag: arkforge-contract-v1.0.0
+arkdeckContract: arkforge.arkdeck-contract/1.0.0
+mappingTable: arkforge.arkdeck-step-map/v1
+controlTable: arkforge.arkdeck-control-map/v1
+cargoPackage: "0.1.0"
+specVersion: 1.0.0-draft.4

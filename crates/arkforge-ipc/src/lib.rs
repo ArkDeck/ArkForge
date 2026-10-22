@@ -1,7 +1,7 @@
 //! # arkforge-ipc
 //!
 //! Versioned local IPC: framing, session kinds and the message codec for
-//! `proto/arkforge.proto`.
+//! `api/arkforge.proto`.
 //!
 //! architecture.md 15.2. Two properties matter more than the encoding:
 //!

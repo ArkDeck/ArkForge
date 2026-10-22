@@ -2,7 +2,7 @@
 //! subprocess, capability store or pairing secret. Only a trusted Runtime may
 //! implement the ports; caller-provided facts must never implement these ports.
 //!
-//! See `spec/ports/authority-maintenance.md`. The ports retain target exclusion
+//! See `docs/spec/ports/authority-maintenance.md`. The ports retain target exclusion
 //! for the entire call, including verification, and durably consume every
 //! restoration reservation. Neither process restart nor a returned error is
 //! permission to replay a reservation.

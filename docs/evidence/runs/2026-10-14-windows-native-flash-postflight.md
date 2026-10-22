@@ -198,7 +198,7 @@ The subsequent [private-plan persistence and restart validation](2026-10-14-dura
 fixes storage for newly materialized plans. It does not recover the missing
 historical bytes or change this campaign's unknown outcome.
 
-[AF-REC-001](../../../spec/requirements/recovery.md#af-rec-001--never-replay)
+[AF-REC-001](../../spec/requirements/recovery.md#af-rec-001--never-replay)
 prohibits re-sending the old intent or calling another full flash a retry.
 No safety predicate, recovery declaration or journal was changed to get past
 this refusal. Completing the automated acceptance requires a reviewed recovery

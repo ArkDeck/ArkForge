@@ -7,13 +7,13 @@ It does not replay the source job or retry an uncertain restoration apply.
 
 ## Local targeted checks
 
-- `python -m unittest discover -s scripts -p test_restore_boot_loop.py`: exit 0,
+- `python -m unittest discover -s hack -p test_restore_boot_loop.py`: exit 0,
   14 host-only tests. Cases include delayed Loader and Normal appearance,
   no USB, incorrect/ambiguous/weak identity, incomplete or uncertain source
   receipts, disappearance during planning, changed restoration effects,
   one apply after a read-only observation expiry, no retry after a lost apply
   reply, full-hash-only completion and refusal to reuse an output directory.
-- `python scripts/restore-boot-loop.py --help`: exit 0.
+- `python hack/restore-boot-loop.py --help`: exit 0.
 - `git diff --check`: exit 0.
 - Logs: `preboot-userdata-20261015/boot-loop-checks-01.{json,log}`.
 - Rust and Swift were not rerun locally because no Rust, Swift or wire code

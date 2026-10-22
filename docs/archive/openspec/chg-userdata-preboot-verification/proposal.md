@@ -85,7 +85,7 @@ The restoration pin is the hash of the complete original-plus-zero image.
 Neither phase upgrades production support. Unknown effects are never replayed.
 
 For a boot loop after the full flash's confirmed final reboot,
-`scripts/restore-boot-loop.py` listens through the published Runtime device
+`hack/restore-boot-loop.py` listens through the published Runtime device
 interface, binds the current mode's fresh identity to durable Runtime records and
 submits one separately sealed pinned restoration. An explicit ramdisk-only
 acknowledgement is required. Only the final-reboot rebind boundary may be
@@ -120,10 +120,10 @@ conformance changes are limited to that identity, its maturity-key projection
 and resulting plan/fixture digests; existing full-restore steps and effects
 retain their semantics. No authority support record is added.
 
-Host preparation uses `scripts/prepare-preboot-firmware.py` with a published
+Host preparation uses `hack/prepare-preboot-firmware.py` with a published
 CLI, the original archive and its independent SHA-256, plus `--support-library`
 pointing to `system/lib/chipset-sdk-sp/libcrypto_openssl.z.so` extracted from
-that original `system.img`. `scripts/preboot_support.py` checks the library
+that original `system.img`. `hack/preboot_support.py` checks the library
 and generates the exact gzip/newc support archive; differing compressor output
 fails closed instead of changing the accepted pin. It emits two derived
 bundles and a provenance record without modifying the source. Import the
