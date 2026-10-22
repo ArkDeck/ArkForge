@@ -22,5 +22,7 @@ publish git tags or GitHub Releases. Consumers pin a full git commit.
 
 - `README.md` is English. The Chinese readme is `README.zh-CN.md`.
 - The stage ledger `TASKS.md` and the OpenSpec change drafts `docs/openspec/`
-  now live under `docs/archive/`. Evidence, decisions, architecture, and the
-  normative spec stay in place.
+  now live under `docs/archive/`. Evidence, decisions, and architecture stay
+  in place.
+- `proto/` is `api/` (`api/arkforge.proto` and `api/versions.yaml`). `scripts/`
+  is `hack/`. `transcripts/` is `test/transcripts/`. `spec/` is `docs/spec/`.

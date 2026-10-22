@@ -167,7 +167,7 @@ ProductionVerified 前必须全部 PASS。当前 **0/18**。
 | 产出 | 地位 | 不可用于 |
 |---|---|---|
 | `crates/arkforge-artifact/src/pac.rs` | 结构观测器，非 PAC parser | 任何关于 PAC 字段的断言 |
-| `transcripts/dayu600-research-synthetic.yaml` | **synthetic**，手写 | 任何协议、USB 或设备事实 |
+| `test/transcripts/dayu600-research-synthetic.yaml` | **synthetic**，手写 | 任何协议、USB 或设备事实 |
 | `profiles/dayu600.yaml` | 研究 profile，无可写目标 | 任何执行 |
 | PAC research fuzz(1500+3600 变异输入) | 覆盖**观测器**的健壮性 | 第 14 条门(那要求生产 parser) |
 

@@ -13,9 +13,9 @@
 > 安全声明：本文是架构提案，不构成代码批准、Provider 发布或设备执行授权。生产启用新 Operation、Provider、integration/device profile 或 destructive admission 变化，必须经过 ArkDeck 规定的 OpenSpec 与维护者 PR review。
 >
 > 规范正本（2026-08-23 起）：可检查的语义——摘要与 CBOR 模型、状态机与崩溃处置、
-> permit、journal、端口契约、稳定错误码——以 [`spec/`](../spec/README.md) 为准，
+> permit、journal、端口契约、稳定错误码——以 [`docs/spec/`](spec/README.md) 为准，
 > 其 conformance fixture 是最高优先级；本文保留为设计依据、ArkDeck 边界与历史。
-> 本文的 Rust 代码块与 §13.1 状态图不是规范（差异见 [`spec/ISSUES.md`](../spec/ISSUES.md)，
+> 本文的 Rust 代码块与 §13.1 状态图不是规范（差异见 [`docs/spec/ISSUES.md`](spec/ISSUES.md)，
 > 决定见 [AFD-0005](decisions/AFD-0005-language-neutral-spec.md)）。
 
 ---
@@ -361,10 +361,12 @@ arkforge/
 │   └── arkforged
 ├── adapters/
 │   └── arkforge-arkdeck-adapter
+├── api/
+├── hack/
 ├── profiles/
-├── proto/
+├── docs/spec/
 ├── fixtures/
-├── transcripts/
+├── test/transcripts/
 └── fuzz/
 ~~~
 
@@ -1692,7 +1694,7 @@ Postflight 至少验证：
 
 任何 external intent 后不能切回 legacy backend。
 
-Parity 的锚是真实 campaign 收据：GJ-4 两次真机 campaign(ECAMP-96EFFF15 / ECAMP-31E041BC)的 13 步 receipts 应作为 golden transcript 进入 `transcripts/`，Provider contract 与 Transport replay 测试自首日对其回放。
+Parity 的锚是真实 campaign 收据：GJ-4 两次真机 campaign(ECAMP-96EFFF15 / ECAMP-31E041BC)的 13 步 receipts 应作为 golden transcript 进入 `test/transcripts/`，Provider contract 与 Transport replay 测试自首日对其回放。
 
 ---
 
@@ -1867,7 +1869,7 @@ evidenceRefs: [AD-006]
 ~~~
 
 该骨架使用 loader 实际接受的字段名和类型；完整机器可校验模型见
-`spec/model/profile.schema.json`，生产实例见 `profiles/dayu200.yaml`。
+`docs/spec/model/profile.schema.json`，生产实例见 `profiles/dayu200.yaml`。
 
 ### 18.3 Profile invariant
 

@@ -259,7 +259,7 @@ impl FlashPlanEnvelope {
     /// the domain prefix: `plan_digest = SHA-256(Domain::Plan || bytes)`.
     ///
     /// Exposed so a conformance fixture can publish the exact preimage a
-    /// second implementation has to reproduce (spec/conformance/v1/plan).
+    /// second implementation has to reproduce (docs/spec/conformance/v1/plan).
     pub fn digest_body_bytes(&self) -> Result<Vec<u8>, PlanError> {
         let input = PlanSealInput {
             schema_version: self.schema_version,

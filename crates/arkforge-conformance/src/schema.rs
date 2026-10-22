@@ -1,6 +1,6 @@
 //! In-tree validation for the committed JSON Schemas and their published YAML
 //! instances. This implements exactly the Draft 2020-12 keyword subset used by
-//! `spec/model/*.schema.json`; an unknown regex is an error, not a silent pass.
+//! `docs/spec/model/*.schema.json`; an unknown regex is an error, not a silent pass.
 
 use crate::json::{Json, parse as parse_json};
 use arkforge_core::digest::Domain;
@@ -24,8 +24,9 @@ impl ValidationReport {
 
 pub fn validate_repository(root: &Path) -> ValidationReport {
     let mut report = ValidationReport::default();
-    let profile_schema = read_schema(root, "spec/model/profile.schema.json", &mut report);
-    let transcript_schema = read_schema(root, "spec/model/transcript.schema.json", &mut report);
+    let profile_schema = read_schema(root, "docs/spec/model/profile.schema.json", &mut report);
+    let transcript_schema =
+        read_schema(root, "docs/spec/model/transcript.schema.json", &mut report);
 
     if let Some(schema) = &profile_schema {
         validate_yaml_directory(
@@ -44,7 +45,7 @@ pub fn validate_repository(root: &Path) -> ValidationReport {
     if let Some(schema) = &transcript_schema {
         validate_yaml_directory(
             root,
-            "transcripts",
+            "test/transcripts",
             schema,
             |source| {
                 arkforge_transport::transcript::parse(source)
@@ -380,7 +381,7 @@ fn known_pattern(pattern: &str, value: &str) -> Option<bool> {
 }
 
 fn validate_cddl_and_domains(root: &Path, report: &mut ValidationReport) {
-    let relative = "spec/model/digest-bodies.cddl";
+    let relative = "docs/spec/model/digest-bodies.cddl";
     let source = match std::fs::read_to_string(root.join(relative)) {
         Ok(source) => source,
         Err(error) => {
@@ -471,5 +472,12 @@ mod tests {
         assert_eq!(report.profiles, 2);
         assert_eq!(report.transcripts, 3);
         assert_eq!(report.domains, Domain::ALL.len());
+    }
+
+    #[test]
+    fn api_versions_names_this_spec_draft() {
+        let versions = include_str!("../../../api/versions.yaml");
+        assert!(versions.contains(&format!("specVersion: {}", crate::SPEC_VERSION)));
+        assert!(versions.contains("proto: api/arkforge.proto"));
     }
 }

@@ -58,7 +58,7 @@ fn expand(expression: &str) -> Vec<String> {
 
 #[test]
 fn rust_mapping_covers_every_requirement_exactly_by_id() {
-    let spec = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../spec");
+    let spec = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../docs/spec");
     let mut defined = BTreeSet::new();
     for file in files(&spec.join("requirements")) {
         let source = std::fs::read_to_string(file).unwrap();

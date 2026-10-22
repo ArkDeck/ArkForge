@@ -15,7 +15,7 @@ use arkforge_transport::transcript::{self, TranscriptProvenance};
 const LEDGER: &str = include_str!("../../../docs/evidence/ledger.md");
 const DAYU600_PROFILE: &str = include_str!("../../../profiles/dayu600.yaml");
 const DAYU600_TRANSCRIPT: &str =
-    include_str!("../../../transcripts/dayu600-research-synthetic.yaml");
+    include_str!("../../../test/transcripts/dayu600-research-synthetic.yaml");
 
 /// Rows of the gate table: `| # | gate | status | blocker |`.
 fn gate_rows() -> Vec<(u32, String, String)> {

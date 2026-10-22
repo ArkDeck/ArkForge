@@ -1,5 +1,5 @@
 //! Every requirement id a fixture cites must be defined somewhere under
-//! `spec/` (a `### AF-…` heading in requirements/model docs, or an `id:` in a
+//! `docs/spec/` (a `### AF-…` heading in requirements/model docs, or an `id:` in a
 //! state-machine table). A fixture that cites a ghost requirement is a fixture
 //! nobody can trace.
 
@@ -52,6 +52,7 @@ fn fixture_requirements_are_defined_in_the_spec() {
     let spec = Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("..")
         .join("..")
+        .join("docs")
         .join("spec");
     let mut defined = BTreeSet::new();
     let mut files = Vec::new();

@@ -33,9 +33,9 @@ use arkforge_transport::{DeviceTransport, TypedDiscoveryFilter};
 const DAYU600_PROFILE: &str = include_str!("../../../profiles/dayu600.yaml");
 const DAYU200_PROFILE: &str = include_str!("../../../profiles/dayu200.yaml");
 const DAYU600_TRANSCRIPT: &str =
-    include_str!("../../../transcripts/dayu600-research-synthetic.yaml");
+    include_str!("../../../test/transcripts/dayu600-research-synthetic.yaml");
 const DAYU200_TRANSCRIPT: &str =
-    include_str!("../../../transcripts/dayu200-gj4-ecamp-96effff15.yaml");
+    include_str!("../../../test/transcripts/dayu200-gj4-ecamp-96effff15.yaml");
 
 /// A container shaped like a firmware package. It is not a PAC file and no test
 /// here claims it is one.

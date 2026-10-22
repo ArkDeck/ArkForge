@@ -14,7 +14,7 @@ The constants are defined by the [Linux filesystem ABI](https://github.com/torva
 
 ## Local targeted checks
 
-- `python scripts/test-preboot-report.py`: exit 0, four tests with 17 paths.
+- `python hack/test-preboot-report.py`: exit 0, four tests with 17 paths.
   The complete production query runs against isolated host applet fixtures.
   RAMFS with an unknown display name and TMPFS with a live report path pass.
   F2FS, ext4, overlayfs, unknown or malformed numbers fail without exposing
@@ -22,7 +22,7 @@ The constants are defined by the [Linux filesystem ABI](https://github.com/torva
   or oversized files, nonregular files and an unexpected path also fail.
 - The same RAMFS fixture with the unmodified published query exits 1 and
   emits no report, demonstrating that the regression is detected.
-- `python scripts/test-preboot-init.py`, `sh scripts/test-preboot-holder.sh`
+- `python hack/test-preboot-init.py`, `sh hack/test-preboot-holder.sh`
   and `git diff --check`: exit 0. Logs:
   `preboot-userdata-20261015/fs-magic-shell-checks-01.{json,log}`.
 - `cargo fmt --all -- --check`: exit 0. Workspace Clippy with all targets

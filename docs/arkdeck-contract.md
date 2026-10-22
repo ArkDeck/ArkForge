@@ -5,7 +5,8 @@ and `arkforge-arkdeck-adapter`. This document is the compatibility rule for
 that pin, including the boot-loop and `flash verify` outcomes ArkDeck shows
 to an operator.
 
-The wire schema is `proto/arkforge.proto`. The numeric handshake is
+The wire schema is `api/arkforge.proto`. The same identifiers are listed in
+`api/versions.yaml` for a pin check to read without compiling Rust. The numeric handshake is
 `arkforge_ipc::PROTOCOL_MAJOR` / `PROTOCOL_MINOR`. The dotted form and the
 recovery exits live in `arkforge_ipc::contract`. The adapter re-exports those
 constants and adds `ARKDECK_CONTRACT_VERSION`.
@@ -145,7 +146,7 @@ These exits mean a verification result. The process can exit earlier, with no
 
 ## Boot-loop recovery
 
-`docs/boot-loop-restoration.md` and `scripts/restore-boot-loop.py` are the
+`docs/boot-loop-restoration.md` and `hack/restore-boot-loop.py` are the
 operator workflow. ArkDeck surfaces that workflow. It is a CLI/Runtime
 restoration plus a second full-hash `flash verify`. It is separate from
 `startExecution`, from automatic replay, and from native rescue.
@@ -178,7 +179,7 @@ handles the ramdisk case above; it does not replace the guide.
 `arkforge_arkdeck_adapter::maintenance` exposes `verify` and `restore` as typed,
 in-process workflows over Runtime-owned ports. They do not spawn the standalone
 CLI or acquire its authority. The port contract is
-`spec/ports/authority-maintenance.md`. This API leaves the IPC Hello,
+`docs/spec/ports/authority-maintenance.md`. This API leaves the IPC Hello,
 step/control tables, and their `1.0.0` identity strings unchanged.
 
 Consume it by advancing the same 40-hex `rev` on every ArkForge crate to a

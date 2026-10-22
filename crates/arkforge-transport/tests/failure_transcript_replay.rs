@@ -2,7 +2,7 @@
 //!
 //! These are not hardware evidence. `TranscriptProvenance::Synthetic` cannot
 //! support a protocol claim. They pin the replay rule from
-//! `spec/model/transcript.md`: an invocation returns its recorded status, and
+//! `docs/spec/model/transcript.md`: an invocation returns its recorded status, and
 //! a timeout with no later attach does not settle as a rebind.
 
 use arkforge_core::digest::sha256;
@@ -16,15 +16,15 @@ use arkforge_transport::{
 };
 
 const MID_TRANSFER: &str =
-    include_str!("../../../transcripts/synthetic/dayu200-mid-transfer-disconnect.yaml");
+    include_str!("../../../test/transcripts/synthetic/dayu200-mid-transfer-disconnect.yaml");
 const LOADER_TIMEOUT: &str =
-    include_str!("../../../transcripts/synthetic/dayu200-loader-switch-timeout.yaml");
+    include_str!("../../../test/transcripts/synthetic/dayu200-loader-switch-timeout.yaml");
 const READBACK_MISMATCH: &str =
-    include_str!("../../../transcripts/synthetic/dayu200-readback-verify-mismatch.yaml");
+    include_str!("../../../test/transcripts/synthetic/dayu200-readback-verify-mismatch.yaml");
 const LOADER_IDENTITY: &str =
-    include_str!("../../../transcripts/synthetic/dayu200-loader-identity-change.yaml");
+    include_str!("../../../test/transcripts/synthetic/dayu200-loader-identity-change.yaml");
 const POWER_INTERRUPTION: &str =
-    include_str!("../../../transcripts/synthetic/dayu200-power-interruption-journal.yaml");
+    include_str!("../../../test/transcripts/synthetic/dayu200-power-interruption-journal.yaml");
 
 fn loader_expectation() -> RebindExpectation {
     RebindExpectation {

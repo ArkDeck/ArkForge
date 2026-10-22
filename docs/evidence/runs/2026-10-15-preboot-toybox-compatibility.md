@@ -9,7 +9,7 @@ Report metadata, nonce, boot, storage and range checks remain unchanged.
 
 ## Local targeted checks
 
-- `bash scripts/test-preboot-holder.sh`: exit 0. Both shipped matchers execute
+- `bash hack/test-preboot-holder.sh`: exit 0. Both shipped matchers execute
   against an applet shim that permits only `od`, accepting the exact argv and
   rejecting eight malformed, oversized or missing inputs. macOS and Windows
   CI now run this regression.

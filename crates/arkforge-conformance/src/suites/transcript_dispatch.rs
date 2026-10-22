@@ -11,7 +11,8 @@ use arkforge_transport::replay::TranscriptTransport;
 use arkforge_transport::transcript;
 
 const SUITE: &str = "transcript-dispatch";
-const CAMPAIGN: &str = include_str!("../../../../transcripts/dayu200-gj4-ecamp-96effff15.yaml");
+const CAMPAIGN: &str =
+    include_str!("../../../../test/transcripts/dayu200-gj4-ecamp-96effff15.yaml");
 
 pub fn populate(tree: &mut Tree) {
     let parsed = transcript::parse(CAMPAIGN).expect("published transcript parses");

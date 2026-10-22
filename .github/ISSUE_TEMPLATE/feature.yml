@@ -7,7 +7,7 @@ body:
     attributes:
       value: |
         Describe the problem before the design. Spec changes still need a
-        requirements or model update under spec/, not only a code change.
+        requirements or model update under docs/spec/, not only a code change.
         Unsupported devices stay unsupported until their evidence gates pass.
   - type: textarea
     id: problem

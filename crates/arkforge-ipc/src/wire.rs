@@ -1,6 +1,6 @@
 //! Protobuf wire primitives.
 //!
-//! A hand-written codec against `proto/arkforge.proto` (AFD-0001). The subset
+//! A hand-written codec against `api/arkforge.proto` (AFD-0001). The subset
 //! is what the schema uses: varints, length-delimited fields, and nested
 //! messages. No groups, no fixed32/64, no maps — the schema does not use them,
 //! and a decoder that accepted shapes the schema cannot produce would be

@@ -123,7 +123,7 @@ USB identity、稳定芯片标识、协议 request/ACK/error/timeout、存储与
 
 ### 2.7 未把 plan-only 记为真机刷写通过
 
-- `transcripts/dayu600-research-synthetic.yaml` 的 provenance 是 `synthetic`，
+- `test/transcripts/dayu600-research-synthetic.yaml` 的 provenance 是 `synthetic`，
   文件头明列它**不可**用于 UNI-U01/U05/U06/U07 的任何一条；
 - `TranscriptProvenance::supports_protocol_claims()` 对 `synthetic` 与
   `derived-from-published-receipts` 都返回 false，只有 `captured` 返回 true；

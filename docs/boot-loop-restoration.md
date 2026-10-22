@@ -1,6 +1,6 @@
 # Recover a DAYU200 boot loop after a temporary ramdisk
 
-`scripts/restore-boot-loop.py` watches for the same board in Normal or Loader
+`hack/restore-boot-loop.py` watches for the same board in Normal or Loader
 mode and submits one separate original-ramdisk restoration through the running
 ArkForge CLI/Runtime. It is intended for a full flash whose writes, verification
 steps and final reboot all have confirmed success receipts, but whose system
@@ -15,12 +15,12 @@ MaskROM recovery, and does not promote a device's production support status.
 
 Use the published CLI and a running Runtime in the same explicitly authorized
 hardware campaign. Import the restoration bundle produced by
-`scripts/prepare-preboot-firmware.py` before starting. The source job must be the
+`hack/prepare-preboot-firmware.py` before starting. The source job must be the
 sole active job, or the latest durable job when none is active. Both the CLI and
 the Runtime continue to enforce their ordinary identity and admission gates.
 
 ```sh
-python3 scripts/restore-boot-loop.py \
+python3 hack/restore-boot-loop.py \
   --arkforge /path/to/published/arkforge \
   --runtime-dir /path/to/campaign-runtime \
   --source-job JOB-... \

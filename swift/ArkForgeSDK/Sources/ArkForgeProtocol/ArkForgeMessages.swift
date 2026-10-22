@@ -1,6 +1,6 @@
 import Foundation
 
-/// The message subset of `proto/arkforge.proto` this authority needs.
+/// The message subset of `api/arkforge.proto` this authority needs.
 ///
 /// Field numbers are the contract and are written out literally next to each
 /// access so a reader can check them against the `.proto` without holding a

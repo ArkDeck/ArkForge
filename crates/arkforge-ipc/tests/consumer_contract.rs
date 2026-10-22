@@ -153,8 +153,29 @@ fn flash_verify_exits_follow_failed_then_skipped() {
 }
 
 #[test]
+fn the_api_versions_file_matches_the_ipc_contract() {
+    let versions = include_str!("../../../api/versions.yaml");
+    for needle in [
+        "schema: arkforge.contract-versions/v1",
+        "proto: api/arkforge.proto",
+        "package: arkforge.ipc.v1",
+        "protocolMajor: 1",
+        "protocolMinor: 0",
+        "protocolVersion: \"1.0\"",
+        &format!("contractTag: {CONTRACT_TAG}"),
+        "cargoPackage: \"0.1.0\"",
+        "specVersion: 1.0.0-draft.4",
+    ] {
+        assert!(
+            versions.contains(needle),
+            "api/versions.yaml lacks {needle}"
+        );
+    }
+}
+
+#[test]
 fn the_boot_loop_script_publishes_the_pinned_summary_schema() {
-    let script = include_str!("../../../scripts/restore-boot-loop.py");
+    let script = include_str!("../../../hack/restore-boot-loop.py");
     assert!(script.contains(BOOT_LOOP_RESTORATION_SCHEMA));
     assert!(script.contains("No usable USB session"));
     assert!(script.contains("enter Loader physically"));

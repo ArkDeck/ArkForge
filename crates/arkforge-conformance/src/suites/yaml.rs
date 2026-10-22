@@ -1,4 +1,4 @@
-//! The strict YAML subset (spec/model/strict-yaml.md): what the profile reader
+//! The strict YAML subset (docs/spec/model/strict-yaml.md): what the profile reader
 //! accepts, as a value tree, and what it refuses.
 
 use crate::json::Json;

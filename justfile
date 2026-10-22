@@ -32,10 +32,10 @@ fmt:
 # Host checks from .github/workflows/rust.yml.
 ci:
 	cargo fmt --all -- --check
-	sh scripts/test-preboot-holder.sh
-	python3 scripts/test-preboot-init.py
-	python3 scripts/test-preboot-report.py
-	python3 -m unittest discover -s scripts -p test_restore_boot_loop.py
+	sh hack/test-preboot-holder.sh
+	python3 hack/test-preboot-init.py
+	python3 hack/test-preboot-report.py
+	python3 -m unittest discover -s hack -p test_restore_boot_loop.py
 	cargo clippy --workspace --all-targets --all-features -- -D warnings
 	cargo test --workspace --all-targets
 	swift test

@@ -1,8 +1,8 @@
-# AFD-0005 — 语言无关规范：`spec/` 是正本，Rust 是第一个实现
+# AFD-0005 — 语言无关规范：`docs/spec/` 是正本，Rust 是第一个实现
 
 - 状态：Accepted
 - 日期：2026-08-23
-- 关联：architecture.md 全篇；AFD-0001；`spec/README.md`；`spec/ISSUES.md`
+- 关联：architecture.md 全篇；AFD-0001；`docs/spec/README.md`；`docs/spec/ISSUES.md`
 
 ## 背景：ArkForge 的价值不依赖语言
 
@@ -21,9 +21,9 @@ ArkForge 不是 UI 工程。它的价值是一组**语义**——不可变计划
 
 ## 决定
 
-1. 新建 `spec/`，它是 ArkForge 的**语言无关规范正本**。优先级：conformance fixture
+1. 新建 `docs/spec/`，它是 ArkForge 的**语言无关规范正本**。优先级：conformance fixture
    字节 > 机器可读模型/状态表/错误注册表 > 要求条文 > `docs/architecture.md`（设计
-   依据）> Rust 实现（**不是规范**）。冲突是规范缺陷，在 `spec/ISSUES.md` 登记，
+   依据）> Rust 实现（**不是规范**）。冲突是规范缺陷，在 `docs/spec/ISSUES.md` 登记，
    由维护者决定，不允许任何实现悄悄选边。
 2. 每条要求有稳定 ID（`AF-<AREA>-<NNN>`），说明 `status`（normative / draft /
    informative）、依据、对应 conformance case 与实现符号。
@@ -32,13 +32,13 @@ ArkForge 不是 UI 工程。它的价值是一组**语义**——不可变计划
    crash disposition、状态机边集、Protobuf、rebind、严格 YAML、DAYU200 全链路
    plan lowering），生成后提交并 review；其集成测试在 Rust 行为漂移时失败，
    把"改了编码"变成一次可见的规范修订。第二实现靠复现这些字节通过，不调用 Rust。
-4. Port 按固定阶段推进（`spec/README.md` §3），每阶段只读一个规范切片、通过对应
+4. Port 按固定阶段推进（`docs/spec/README.md` §3），每阶段只读一个规范切片、通过对应
    套件后再进入下一阶段。完整 port 实现同一 CLI/IPC，以进程边界黑盒验证；
    只有 USB 叶子允许通过 C ABI 混合链接。
 5. `docs/architecture.md` 保留为设计依据、ArkDeck 边界与历史；它的状态图、
    Rust 示例不再是任何语义的正本。
 
-## 提取时发现的偏差（摘要，详见 `spec/ISSUES.md`）
+## 提取时发现的偏差（摘要，详见 `docs/spec/ISSUES.md`）
 
 - §13.1 状态图缺五条代码中存在的合法边（SI-001）；
 - journal 同一批记录种类有两个写入者（engine 的 typed helper 与 daemon 自己），
@@ -52,7 +52,7 @@ ArkForge 不是 UI 工程。它的价值是一组**语义**——不可变计划
 
 这些历史偏差已在 `1.0.0-draft.2`/`draft.3` 依次关闭。当前正本、Rust
 实现、架构状态图和 conformance fixture 对这些语义给出同一答案；逐项决定与回归入口
-保留在 `spec/ISSUES.md`。
+保留在 `docs/spec/ISSUES.md`。
 
 ## 不做什么
 
@@ -64,4 +64,4 @@ ArkForge 不是 UI 工程。它的价值是一组**语义**——不可变计划
 ## 复审条件
 
 - 第一个非 Rust 实现通过 stage 0–3 套件时，把那些条目从 `draft` 升为 `normative`；
-- `spec/ISSUES.md` 任一条拍板后，同一次变更里更新要求条文、fixture 与 `manifest.yaml`。
+- `docs/spec/ISSUES.md` 任一条拍板后，同一次变更里更新要求条文、fixture 与 `manifest.yaml`。

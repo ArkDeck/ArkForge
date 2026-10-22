@@ -14,7 +14,7 @@ source, and still submits at most one restoration apply.
 - `cargo build --locked --offline --release --target x86_64-pc-windows-msvc -j 2 -p arkforged --bin arkforged`: exit 0.
 - `cargo test --locked --offline --release --target x86_64-pc-windows-msvc -j 2 --workspace --all-targets`: exit 0.
 - Rust logs: `preboot-userdata-20261015/boot-loop-durable-checks-03.{json,log}`.
-- `python -m unittest discover -s scripts -p test_restore_boot_loop.py -v`:
+- `python -m unittest discover -s hack -p test_restore_boot_loop.py -v`:
   exit 0, 17 tests. Output is retained in the local task execution record.
 - `git diff --check`: exit 0.
 

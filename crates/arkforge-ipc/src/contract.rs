@@ -1,4 +1,4 @@
-//! Consumer contract for `proto/arkforge.proto`, this crate, and
+//! Consumer contract for `api/arkforge.proto`, this crate, and
 //! `arkforge-arkdeck-adapter`.
 //!
 //! The handshake is [`handshake_refusal`]. Compatibility, the git-rev pin, and
@@ -50,7 +50,7 @@ pub const STRENGTH_FULL_HASH: &str = "fullHash";
 /// Typed-skip `reason` for a partition that is mounted writable after boot.
 pub const SKIP_MOUNTED_WRITABLE: &str = "mounted-writable-after-boot";
 
-/// Summary schema written by `scripts/restore-boot-loop.py` on success.
+/// Summary schema written by `hack/restore-boot-loop.py` on success.
 pub const BOOT_LOOP_RESTORATION_SCHEMA: &str = "arkforge.boot-loop-restoration/v1";
 
 /// `HelloAck.refusal` when `peer_major` differs from [`PROTOCOL_MAJOR`].

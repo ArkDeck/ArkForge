@@ -32,7 +32,8 @@ use arkforge_transport::{DeviceTransport, TypedDiscoveryFilter, transcript};
 const SUITE: &str = "plan";
 
 const PROFILE_SOURCE: &str = include_str!("../../../../profiles/dayu200.yaml");
-const CAMPAIGN: &str = include_str!("../../../../transcripts/dayu200-gj4-ecamp-96effff15.yaml");
+const CAMPAIGN: &str =
+    include_str!("../../../../test/transcripts/dayu200-gj4-ecamp-96effff15.yaml");
 
 fn native_tool() -> ToolchainIdentity {
     ToolchainIdentity {
@@ -172,13 +173,13 @@ pub fn populate(tree: &mut Tree) {
             title: "golden transcript → first observation and probe facts".to_string(),
             requirements: vec!["AF-TRN-001", "AF-TRN-002", "AF-TRN-020"],
             kind: "digest",
-            description: "Replay transcripts/dayu200-gj4-ecamp-96effff15.yaml through the \
+            description: "Replay test/transcripts/dayu200-gj4-ecamp-96effff15.yaml through the \
                           transcript transport; discover yields exactly one observation."
                 .to_string(),
             input: Json::object(vec![
                 (
                     "transcript",
-                    Json::str("transcripts/dayu200-gj4-ecamp-96effff15.yaml"),
+                    Json::str("test/transcripts/dayu200-gj4-ecamp-96effff15.yaml"),
                 ),
                 (
                     "transcriptFileSha256",

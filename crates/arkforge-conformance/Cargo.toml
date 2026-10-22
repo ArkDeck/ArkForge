@@ -5,7 +5,7 @@ edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
 repository.workspace = true
-description = "Generates and checks the language-neutral conformance fixtures under spec/conformance/v1 from the Rust reference implementation."
+description = "Generates and checks the language-neutral conformance fixtures under docs/spec/conformance/v1 from the Rust reference implementation."
 
 [dependencies]
 arkforge-core = { path = "../arkforge-core" }

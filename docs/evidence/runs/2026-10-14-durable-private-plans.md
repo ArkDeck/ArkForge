@@ -75,8 +75,8 @@ cannot supply a superseding plan. The successful new plan-storage check does
 not repair those historical bytes or prove recovery eligibility for that job.
 
 The operator has only the current board available. Under
-[AF-PROJ-014](../../../spec/requirements/plan.md#af-proj-014--no-re-lowering-after-sealing)
-and [AF-REC-001](../../../spec/requirements/recovery.md#af-rec-001--never-replay),
+[AF-PROJ-014](../../spec/requirements/plan.md#af-proj-014--no-re-lowering-after-sealing)
+and [AF-REC-001](../../spec/requirements/recovery.md#af-rec-001--never-replay),
 no replacement private plan was fabricated and no old intent was replayed.
 The task-owned Runtime was stopped through the typed CLI after the assessment;
 the final status confirms `runtime.running=false`. Original records remain

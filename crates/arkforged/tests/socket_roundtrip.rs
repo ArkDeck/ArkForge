@@ -55,7 +55,7 @@ impl Daemon {
             .arg("--profile")
             .arg(repo_root.join("profiles/dayu200.yaml"))
             .arg("--transcript")
-            .arg(repo_root.join("transcripts/dayu200-gj4-ecamp-96effff15.yaml"))
+            .arg(repo_root.join("test/transcripts/dayu200-gj4-ecamp-96effff15.yaml"))
             .stdout(Stdio::null())
             .stderr(Stdio::null());
         if paired {

@@ -165,7 +165,7 @@ pairing secret 只在内存里，不落盘明文（ArkForge `architecture.md` 15
 
 ## 3. 线上契约
 
-正本：ArkForge `proto/arkforge.proto`。以下是实现要点，不是重复定义。
+正本：ArkForge `api/arkforge.proto`。以下是实现要点，不是重复定义。
 
 ### 3.1 方向：daemon 从不主动呼出
 
