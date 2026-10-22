@@ -1,3 +1,4 @@
+use super::*;
 
 /// Starts the background authority through a packaged ArkForge launcher.
 ///
@@ -307,7 +308,11 @@ pub fn materialize_recovery_plan(
     })
 }
 
-fn request(runtime_dir: &Path, verb: &str, arguments: &[&str]) -> Result<Vec<u8>, StandaloneError> {
+pub(super) fn request(
+    runtime_dir: &Path,
+    verb: &str,
+    arguments: &[&str],
+) -> Result<Vec<u8>, StandaloneError> {
     let endpoint = LocalEndpoint::for_runtime(runtime_dir, LocalChannel::Supervisor);
     let mut stream = LocalStream::connect(&endpoint).map_err(|error| {
         StandaloneError::new(
@@ -336,10 +341,10 @@ fn request(runtime_dir: &Path, verb: &str, arguments: &[&str]) -> Result<Vec<u8>
     decode_reply(&response)
 }
 
-struct SupervisorSession<'a> {
-    epoch: u64,
-    pairing: &'a ControllerPairingSecret,
-    hdc: Option<&'a mut HdcControlPort>,
-    hdc_digest: Option<Sha256Digest>,
-    hardware_campaign: Option<&'a str>,
+pub(super) struct SupervisorSession<'a> {
+    pub(super) epoch: u64,
+    pub(super) pairing: &'a ControllerPairingSecret,
+    pub(super) hdc: Option<&'a mut HdcControlPort>,
+    pub(super) hdc_digest: Option<Sha256Digest>,
+    pub(super) hardware_campaign: Option<&'a str>,
 }

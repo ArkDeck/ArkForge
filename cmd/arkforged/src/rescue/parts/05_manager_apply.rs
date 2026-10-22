@@ -1,5 +1,6 @@
-impl<B: RescueBackend> RescueManager<B> {
+use super::*;
 
+impl<B: RescueBackend> RescueManager<B> {
     pub fn apply(
         &self,
         plan_id: &str,
@@ -116,7 +117,7 @@ impl<B: RescueBackend> RescueManager<B> {
     }
 
     #[allow(clippy::too_many_arguments)]
-    fn apply_write(
+    pub(super) fn apply_write(
         &self,
         plan_id: &str,
         plan_digest: Sha256Digest,
@@ -223,7 +224,7 @@ impl<B: RescueBackend> RescueManager<B> {
         }
     }
 
-    fn apply_reset(
+    pub(super) fn apply_reset(
         &self,
         plan_id: &str,
         plan_digest: Sha256Digest,

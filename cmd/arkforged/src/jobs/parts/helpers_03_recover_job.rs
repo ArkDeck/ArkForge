@@ -1,5 +1,6 @@
+use super::*;
 
-fn recover_job(path: &Path) -> Result<Job, JobError> {
+pub(super) fn recover_job(path: &Path) -> Result<Job, JobError> {
     let (mut journal, _) = DurableJournal::open(path)?;
     let records = journal.journal().records();
     let created = records

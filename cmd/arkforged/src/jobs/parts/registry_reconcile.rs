@@ -1,5 +1,6 @@
-impl JobRegistry {
+use super::*;
 
+impl JobRegistry {
     /// Enters the read-only reconciliation state after durably recording the
     /// exact possible-effect set that will be observed.
     pub fn begin_reconcile(

@@ -1,3 +1,4 @@
+use super::*;
 
 impl JobSummary {
     pub fn encode(&self) -> Vec<u8> {

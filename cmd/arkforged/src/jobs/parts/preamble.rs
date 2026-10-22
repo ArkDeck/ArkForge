@@ -1,35 +1,4 @@
-use arkforge_authority_api::{
-    ControllerPairingSecret, CurrentFacts, DispatchIntent, FreshnessVerdict, PairingEpoch,
-    PermitIntegrityTag, PermitVerificationError, StepAdmissionSnapshot as AuthoritySnapshot,
-    StepPermit, evaluate_freshness,
-};
-use arkforge_core::PersistentEffect;
-use arkforge_core::Sha256Digest;
-use arkforge_core::digest::{CanonicalCbor, sha256};
-use arkforge_core::ids::{AttemptId, ControllerSessionId, JobId, OpaqueId, PlanId, StepId};
-use arkforge_core::outcome::ActionDisposition;
-use arkforge_core::plan::FlashPlanEnvelope;
-use arkforge_core::profile::DeviceProfile;
-use arkforge_core::projection::{PrivateActionRecord, PrivateActionRole, StoredProviderPlan};
-use arkforge_core::verification::VerificationOutcome;
-use arkforge_engine::JobState;
-use arkforge_engine::durable::{DurableJournal, DurableJournalError};
-use arkforge_engine::journal::{JournalRecord, JournalRecordKind};
-use arkforge_engine::recovery::{CrashDisposition, fact};
-use arkforge_engine::step::{
-    DispatchInFlight, StepError, admit_step, begin_dispatch, begin_dispatch_with_facts, checkpoint,
-    record_receipt_with_facts, record_transport_evidence,
-};
-use arkforge_engine::superseding::{EffectObservation, ReconcileVerdict, reconcile};
-use arkforge_ipc::messages::{
-    ActionReceiptSummary, JobEvent, JobEventKind, KeyValue, ManagedControlAction,
-    ManagedControlRequest, StepAdmissionSnapshot, SubmitManagedControlReceiptRequest,
-};
-use arkforge_provider::rockchip_execute::StoredAction;
-use arkforge_transport::{DeviceObservation, SerialEvidence};
-use core::fmt;
-use std::collections::BTreeMap;
-use std::path::{Path, PathBuf};
+use super::*;
 
 /// How long an admission snapshot may be signed against.
 ///
@@ -55,7 +24,7 @@ pub struct AdmissionFacts {
 }
 
 impl AdmissionFacts {
-    fn authority_snapshot(&self) -> Result<AuthoritySnapshot, JobError> {
+    pub(super) fn authority_snapshot(&self) -> Result<AuthoritySnapshot, JobError> {
         Ok(AuthoritySnapshot {
             captured_at_epoch_ms: self.observation.observed_at_epoch_ms,
             freshness_deadline_epoch_ms: self
@@ -77,25 +46,25 @@ impl AdmissionFacts {
 /// A job the authority is driving.
 #[derive(Debug)]
 pub struct Job {
-    job_id: String,
-    controller_session_id: ControllerSessionId,
-    plan_id: String,
-    plan_digest: Sha256Digest,
-    state: JobState,
+    pub(super) job_id: String,
+    pub(super) controller_session_id: ControllerSessionId,
+    pub(super) plan_id: String,
+    pub(super) plan_digest: Sha256Digest,
+    pub(super) state: JobState,
     /// Index into the plan's public steps.
-    step_index: usize,
-    total_steps: usize,
-    journal: DurableJournal,
-    events: Vec<JobEvent>,
-    pending: Option<Pending>,
+    pub(super) step_index: usize,
+    pub(super) total_steps: usize,
+    pub(super) journal: DurableJournal,
+    pub(super) events: Vec<JobEvent>,
+    pub(super) pending: Option<Pending>,
     /// Work a dispatcher took and has not yet reported on. While this is set,
     /// whether the device changed is unknown.
-    in_flight: Option<InFlightDispatch>,
+    pub(super) in_flight: Option<InFlightDispatch>,
     /// Set once the job has stopped for a reason that is not a state.
-    stopped: Option<JobStop>,
+    pub(super) stopped: Option<JobStop>,
     /// Durable operator intent to stop after the current non-interruptible
     /// action reaches a settled checkpoint.
-    cancellation_requested: bool,
+    pub(super) cancellation_requested: bool,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -119,7 +88,7 @@ impl CancellationDisposition {
 
 /// What a job is waiting for.
 #[derive(Debug)]
-enum Pending {
+pub(super) enum Pending {
     /// A permit for the step at `step_index`.
     Admission {
         request_id: String,
@@ -146,9 +115,9 @@ enum Pending {
 /// One dispatch handed across the service-lock boundary. The work may be
 /// cloned for the native runner; the linear transaction token may not.
 #[derive(Debug)]
-struct InFlightDispatch {
-    work: PendingDispatch,
-    transaction: DispatchInFlight,
+pub(super) struct InFlightDispatch {
+    pub(super) work: PendingDispatch,
+    pub(super) transaction: DispatchInFlight,
 }
 
 /// One private action waiting for this daemon's dispatcher.
@@ -329,7 +298,7 @@ impl Job {
             })
     }
 
-    fn next_sequence(&self) -> u64 {
+    pub(super) fn next_sequence(&self) -> u64 {
         // A live job publishes every event, so length and cursor happen to
         // agree. Recovery intentionally reconstructs only durable receipts and
         // classifications; those events retain their original (possibly
@@ -343,7 +312,7 @@ impl Job {
             .saturating_add(1)
     }
 
-    fn publish(
+    pub(super) fn publish(
         &mut self,
         kind: JobEventKind,
         at_epoch_ms: u64,
@@ -363,7 +332,7 @@ impl Job {
         self.events.push(event);
     }
 
-    fn move_to(&mut self, next: JobState) -> Result<(), JobError> {
+    pub(super) fn move_to(&mut self, next: JobState) -> Result<(), JobError> {
         if !self.state.may_transition_to(next) {
             return Err(JobError::IllegalTransition {
                 from: self.state,
@@ -378,8 +347,8 @@ impl Job {
 /// Every job this daemon is running.
 #[derive(Debug)]
 pub struct JobRegistry {
-    root: PathBuf,
-    jobs: BTreeMap<String, Job>,
+    pub(super) root: PathBuf,
+    pub(super) jobs: BTreeMap<String, Job>,
     /// Monotonic, so two jobs started in the same millisecond differ.
-    counter: u64,
+    pub(super) counter: u64,
 }

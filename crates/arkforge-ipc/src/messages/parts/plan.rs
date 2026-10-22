@@ -1,3 +1,4 @@
+use super::*;
 
 impl InspectArtifactResponse {
     pub fn encode(&self) -> Vec<u8> {

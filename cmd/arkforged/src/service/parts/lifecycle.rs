@@ -1,6 +1,6 @@
+use super::*;
 
 impl Service {
-
     /// Builds the service.
     ///
     /// `campaign` is the acceptance campaign this daemon is running, if any.
@@ -153,7 +153,11 @@ impl Service {
         self.bind_rockchip_dispatcher(toolchain, identity);
     }
 
-    fn bind_rockchip_dispatcher(&mut self, toolchain: BoundToolchain, identity: ToolchainIdentity) {
+    pub(super) fn bind_rockchip_dispatcher(
+        &mut self,
+        toolchain: BoundToolchain,
+        identity: ToolchainIdentity,
+    ) {
         self.readiness.dispatcher = Some(toolchain);
         self.rockchip_toolchain = Some(identity.clone());
         for profile in self.profiles.values() {
@@ -186,7 +190,7 @@ impl Service {
     /// the read-only daemon: it materializes assessments, and an assessment
     /// names the combination it was assessed against rather than one it
     /// could run.
-    fn bound_rockchip_toolchain_identity(&self) -> ToolchainIdentity {
+    pub(super) fn bound_rockchip_toolchain_identity(&self) -> ToolchainIdentity {
         self.rockchip_toolchain
             .clone()
             .unwrap_or_else(unbound_native_toolchain_identity)
@@ -315,7 +319,7 @@ impl Service {
         Ok(())
     }
 
-    fn publish_live_admission(
+    pub(super) fn publish_live_admission(
         &mut self,
         job_id: &str,
         allow_unique_rebind: bool,
@@ -417,7 +421,7 @@ impl Service {
         Ok(())
     }
 
-    fn current_facts_for_job(&mut self, job_id: &str) -> Result<CurrentFacts, String> {
+    pub(super) fn current_facts_for_job(&mut self, job_id: &str) -> Result<CurrentFacts, String> {
         let stored = self
             .stored_plan_for_job(job_id)
             .ok_or_else(|| format!("no job {job_id}"))?;

@@ -1,3 +1,4 @@
+use super::*;
 
 impl JobEvent {
     pub fn encode(&self) -> Vec<u8> {

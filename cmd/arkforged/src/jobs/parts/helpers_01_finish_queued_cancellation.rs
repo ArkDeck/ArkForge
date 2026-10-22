@@ -1,5 +1,6 @@
+use super::*;
 
-fn finish_queued_cancellation(
+pub(super) fn finish_queued_cancellation(
     job: &mut Job,
     now_epoch_ms: u64,
     checkpoint: Sha256Digest,
@@ -12,7 +13,7 @@ fn finish_queued_cancellation(
     )
 }
 
-fn conclude_cancellation(
+pub(super) fn conclude_cancellation(
     job: &mut Job,
     now_epoch_ms: u64,
     _prior: Sha256Digest,
@@ -56,7 +57,7 @@ fn conclude_cancellation(
 }
 
 /// Moves to the next step, or concludes.
-fn advance(
+pub(super) fn advance(
     job: &mut Job,
     envelope: &FlashPlanEnvelope,
     now_epoch_ms: u64,
@@ -115,7 +116,7 @@ fn advance(
 }
 
 /// Publishes the admission the job's current step needs.
-fn request_admission(
+pub(super) fn request_admission(
     job: &mut Job,
     envelope: &FlashPlanEnvelope,
     private_plan: &StoredProviderPlan,
@@ -231,7 +232,7 @@ fn request_admission(
 /// Read-only sub-actions first, then the single primary effect. The projection
 /// validator already guarantees there is exactly one primary; this only puts it
 /// last, because a sub-action exists to establish something the primary needs.
-fn ordered_actions(
+pub(super) fn ordered_actions(
     private_plan: &StoredProviderPlan,
     step_id: &str,
 ) -> Result<Vec<PrivateActionRecord>, JobError> {
@@ -258,9 +259,9 @@ fn ordered_actions(
 /// the provider already writes `via: managed-device-control-port` into the
 /// action body, and a second copy of that mapping in the daemon is a second
 /// copy that can drift.
-type ManagedControlSpec = (ManagedControlAction, Vec<(String, String)>);
+pub(super) type ManagedControlSpec = (ManagedControlAction, Vec<(String, String)>);
 
-fn managed_control_for(
+pub(super) fn managed_control_for(
     private_plan: &StoredProviderPlan,
     step_id: &str,
 ) -> Result<Option<ManagedControlSpec>, JobError> {
@@ -292,7 +293,9 @@ fn managed_control_for(
     }
 }
 
-fn private_action_digest(snapshot: &StepAdmissionSnapshot) -> Result<Sha256Digest, JobError> {
+pub(super) fn private_action_digest(
+    snapshot: &StepAdmissionSnapshot,
+) -> Result<Sha256Digest, JobError> {
     digest_from(&snapshot.private_action_sha256).ok_or(JobError::TagNotADigest)
 }
 
@@ -319,7 +322,10 @@ pub fn canonical_facts_digest(facts: &[KeyValue]) -> Sha256Digest {
     sha256(&bytes)
 }
 
-fn missing_expected_control_facts(expected: &[KeyValue], observed: &[KeyValue]) -> Vec<String> {
+pub(super) fn missing_expected_control_facts(
+    expected: &[KeyValue],
+    observed: &[KeyValue],
+) -> Vec<String> {
     expected
         .iter()
         .filter(|expected| !observed.contains(expected))
@@ -327,7 +333,7 @@ fn missing_expected_control_facts(expected: &[KeyValue], observed: &[KeyValue]) 
         .collect()
 }
 
-fn validate_receipt_fact_keys(facts: &[KeyValue]) -> Result<(), JobError> {
+pub(super) fn validate_receipt_fact_keys(facts: &[KeyValue]) -> Result<(), JobError> {
     let mut seen = std::collections::BTreeSet::new();
     for fact in facts {
         OpaqueId::new(&fact.key).map_err(|_| JobError::InvalidReceiptFactKey(fact.key.clone()))?;

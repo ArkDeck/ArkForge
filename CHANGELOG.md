@@ -31,3 +31,6 @@ publish git tags or GitHub Releases. Consumers pin a full git commit.
 - `arkforge` and `arkforged` live under `cmd/`. `arkforge-arkdeck-adapter`
   lives under `crates/`. Crate names are unchanged. `Package.swift` stays at
   the repository root.
+- The `include!` splits in `service`, `jobs`, `rescue`, `supervisor`,
+  `messages`, and `rockchip_execute` are real modules. `arkforge` help text
+  stays `include!`-based.

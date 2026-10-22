@@ -1,5 +1,6 @@
-impl<B: RescueBackend> RescueManager<B> {
+use super::*;
 
+impl<B: RescueBackend> RescueManager<B> {
     pub fn plan_write(
         &self,
         device_id: &str,

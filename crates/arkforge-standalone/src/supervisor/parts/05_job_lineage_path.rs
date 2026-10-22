@@ -1,12 +1,13 @@
+use super::*;
 
-fn job_lineage_path(runtime_dir: &Path, job_id: &str) -> PathBuf {
+pub(super) fn job_lineage_path(runtime_dir: &Path, job_id: &str) -> PathBuf {
     runtime_dir
         .join("authority")
         .join("jobs")
         .join(format!("{}.binding", sha256(job_id.as_bytes())))
 }
 
-fn encode_job_lineage(lineage: &ActiveTargetLineage) -> Vec<u8> {
+pub(super) fn encode_job_lineage(lineage: &ActiveTargetLineage) -> Vec<u8> {
     let mut out = Vec::new();
     wire::write_string(&mut out, 1, &lineage.plan_id);
     wire::write_string(&mut out, 2, &lineage.current_device_id);
@@ -16,7 +17,7 @@ fn encode_job_lineage(lineage: &ActiveTargetLineage) -> Vec<u8> {
     out
 }
 
-fn persist_job_lineage(
+pub(super) fn persist_job_lineage(
     runtime_dir: &Path,
     job_id: &str,
     lineage: &ActiveTargetLineage,
@@ -70,7 +71,7 @@ fn persist_job_lineage(
         .map_err(|error| internal("publish target-lineage revision", error))
 }
 
-fn load_job_lineage(
+pub(super) fn load_job_lineage(
     runtime_dir: &Path,
     job_id: &str,
 ) -> Result<ActiveTargetLineage, StandaloneError> {
@@ -116,7 +117,7 @@ fn load_job_lineage(
     Ok(lineage)
 }
 
-fn encode_authority_plan(record: &AuthorityPlanRecord) -> Vec<u8> {
+pub(super) fn encode_authority_plan(record: &AuthorityPlanRecord) -> Vec<u8> {
     let mut out = Vec::new();
     wire::write_message(&mut out, 1, &record.plan.encode());
     wire::write_string(&mut out, 2, &record.binding_id);
@@ -129,7 +130,7 @@ fn encode_authority_plan(record: &AuthorityPlanRecord) -> Vec<u8> {
     out
 }
 
-fn persist_authority_plan(
+pub(super) fn persist_authority_plan(
     runtime_dir: &Path,
     record: &AuthorityPlanRecord,
 ) -> Result<(), StandaloneError> {
@@ -168,7 +169,7 @@ fn persist_authority_plan(
         .map_err(|error| internal("commit the authority plan journal", error))
 }
 
-fn load_authority_plan(
+pub(super) fn load_authority_plan(
     runtime_dir: &Path,
     plan_id: &str,
 ) -> Result<AuthorityPlanRecord, StandaloneError> {
@@ -240,7 +241,7 @@ fn load_authority_plan(
     Ok(record)
 }
 
-fn drive_active_jobs(
+pub(super) fn drive_active_jobs(
     runtime_dir: &Path,
     epoch: u64,
     pairing: &ControllerPairingSecret,
@@ -374,7 +375,7 @@ fn drive_active_jobs(
     Ok(())
 }
 
-fn submit_control_receipt(
+pub(super) fn submit_control_receipt(
     controller: &mut ControllerClient,
     receipt: &SubmitManagedControlReceiptRequest,
 ) -> Result<(), StandaloneError> {

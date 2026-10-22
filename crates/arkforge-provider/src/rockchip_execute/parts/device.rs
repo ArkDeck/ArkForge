@@ -1,28 +1,7 @@
-use arkforge_artifact::manifest::PartitionTableFact;
-use arkforge_core::Sha256Digest;
-use arkforge_core::digest::{CborValue, Sha256, sha256};
-use arkforge_core::effect::ByteRange;
-use arkforge_core::ids::{ActionId, OpaqueId, StepId};
-use arkforge_core::outcome::ActionDisposition;
-use arkforge_core::profile::DeviceProfile;
-use arkforge_core::projection::PrivateActionRecord;
-use arkforge_core::verification::{
-    FailureClassification, TypedSkipReason, VerificationOutcome, VerificationStrength,
-};
-use core::fmt;
-use std::collections::BTreeMap;
-use std::fs::File;
-#[cfg(not(target_os = "macos"))]
-use std::io::Read;
-use std::io::{Seek, SeekFrom};
-use std::path::{Path, PathBuf};
-#[cfg(target_os = "macos")]
-use std::process::{Command, Stdio};
-use std::thread::JoinHandle;
-use std::time::Instant;
+use super::*;
 
 /// `a / b` rounded up. `u64::div_ceil` is unstable on this toolchain.
-fn ceil_div(numerator: u64, denominator: u64) -> u64 {
+pub(super) fn ceil_div(numerator: u64, denominator: u64) -> u64 {
     numerator / denominator + u64::from(!numerator.is_multiple_of(denominator))
 }
 
@@ -222,7 +201,7 @@ impl StagedImage {
 /// ~6.9s to ~1.0s on the DAYU200 test host. The child never receives a path,
 /// so it cannot follow a replacement between validation and transfer.
 #[cfg(target_os = "macos")]
-fn hash_open_file(
+pub(super) fn hash_open_file(
     file: &mut File,
     path: &Path,
 ) -> Result<(Sha256Digest, u64, &'static str), ExecutionError> {
@@ -264,7 +243,7 @@ fn hash_open_file(
 }
 
 #[cfg(not(target_os = "macos"))]
-fn hash_open_file(
+pub(super) fn hash_open_file(
     file: &mut File,
     path: &Path,
 ) -> Result<(Sha256Digest, u64, &'static str), ExecutionError> {
@@ -287,11 +266,11 @@ fn hash_open_file(
 /// A full digest proof tied to the exact open file that will be transferred.
 #[derive(Debug)]
 pub struct ValidatedImage {
-    staged: StagedImage,
-    file: File,
-    fingerprint: StagedFileFingerprint,
-    validation_duration_ms: u64,
-    validation_backend: &'static str,
+    pub(super) staged: StagedImage,
+    pub(super) file: File,
+    pub(super) fingerprint: StagedFileFingerprint,
+    pub(super) validation_duration_ms: u64,
+    pub(super) validation_backend: &'static str,
 }
 
 impl ValidatedImage {
@@ -326,31 +305,31 @@ impl ValidatedImage {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-struct StagedFileFingerprint {
-    size_bytes: u64,
-    readonly: bool,
+pub(super) struct StagedFileFingerprint {
+    pub(super) size_bytes: u64,
+    pub(super) readonly: bool,
     #[cfg(unix)]
-    device: u64,
+    pub(super) device: u64,
     #[cfg(unix)]
-    inode: u64,
+    pub(super) inode: u64,
     #[cfg(unix)]
-    mode: u32,
+    pub(super) mode: u32,
     #[cfg(unix)]
-    links: u64,
+    pub(super) links: u64,
     #[cfg(unix)]
-    modified_seconds: i64,
+    pub(super) modified_seconds: i64,
     #[cfg(unix)]
-    modified_nanoseconds: i64,
+    pub(super) modified_nanoseconds: i64,
     #[cfg(unix)]
-    changed_seconds: i64,
+    pub(super) changed_seconds: i64,
     #[cfg(unix)]
-    changed_nanoseconds: i64,
+    pub(super) changed_nanoseconds: i64,
     #[cfg(not(unix))]
-    modified: Option<std::time::SystemTime>,
+    pub(super) modified: Option<std::time::SystemTime>,
 }
 
 impl StagedFileFingerprint {
-    fn read(file: &File, path: &Path) -> Result<Self, ExecutionError> {
+    pub(super) fn read(file: &File, path: &Path) -> Result<Self, ExecutionError> {
         let metadata = file.metadata().map_err(|error| {
             ExecutionError::StagingChanged(format!("{}: {error}", path.display()))
         })?;

@@ -1,6 +1,7 @@
-impl Service {
+use super::*;
 
-    fn materialize_plan(&mut self, session: SessionKind, request: &Request) -> Response {
+impl Service {
+    pub(super) fn materialize_plan(&mut self, session: SessionKind, request: &Request) -> Response {
         let artifact_id = first_string_field(&request.payload, 1).unwrap_or_default();
         let profile_id = first_string_field(&request.payload, 2).unwrap_or_default();
         let observation_id = first_string_field(&request.payload, 3).unwrap_or_default();
