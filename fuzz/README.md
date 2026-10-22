@@ -30,7 +30,13 @@ cargo +nightly fuzz run tar -- -max_total_time=30 -max_len=4096
 ```
 
 CI runs each target for a few seconds (`fuzz.yml`). That is a smoke pass,
-not an overnight campaign.
+not an overnight campaign. `fuzz-nightly.yml` runs the same targets for five
+minutes each. Both jobs upload `fuzz/artifacts` when a target crashes.
+
+Reviewed seeds live in `fuzz/corpus/<target>/seed-*`. Each file is under 64
+KiB and is copied from a conformance sample, a transcript, or the in-repo
+DAYU200 fixture shape (`spec/conformance/GROWTH.md`). libFuzzer reads that
+directory at the start of a run. Campaign files it adds are gitignored.
 
 ## Mutation tests
 

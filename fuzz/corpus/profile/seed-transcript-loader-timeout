@@ -1,0 +1,57 @@
+# Synthetic failure transcript — DAYU200 Loader switch times out.
+#
+# Provenance: synthetic. The host asked the device to leave HDC-normal, saw
+# the expected disconnect, and then no Loader enumerated before the deadline.
+# Replay must not invent an attach. Nothing here is evidence of hardware.
+
+schemaVersion: arkforge.transcript/v1
+
+transcript:
+  id: SYN-DAYU200-LOADER-SWITCH-TIMEOUT
+  provenance: synthetic
+  source: "synthetic loader-switch timeout; no device was measured"
+  profileId: org.openharmony.dayu200
+
+records:
+  - sequence: 1
+    kind: observation
+    atEpochMs: 1000
+    status: ok
+    observation:
+      id: OBS-NORMAL
+      mode: hdc-normal
+      topologyDigest: 00000000000000000000000000000000000000000000000000000000000000b1
+      descriptorDigest: 00000000000000000000000000000000000000000000000000000000000000b2
+      serialKind: descriptor
+      serialDigest: 00000000000000000000000000000000000000000000000000000000000000b3
+      identityStrength: serialAndTopology
+    semantic:
+      - key: step
+        value: observe-before-loader-switch
+  - sequence: 2
+    kind: invocation
+    atEpochMs: 1100
+    durationMs: 200
+    status: ok
+    action: enter-loader-mode
+    semantic:
+      - key: step
+        value: enter-loader-mode
+  - sequence: 3
+    kind: detach
+    atEpochMs: 1300
+    status: ok
+    semantic:
+      - key: step
+        value: wait-loader-disconnect
+  - sequence: 4
+    kind: invocation
+    atEpochMs: 1400
+    durationMs: 30000
+    status: timeout
+    action: wait-loader-reconnect
+    semantic:
+      - key: step
+        value: loader-switch-timeout
+      - key: deadlineMs
+        value: "30000"
