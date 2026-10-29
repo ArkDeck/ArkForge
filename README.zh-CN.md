@@ -29,7 +29,7 @@ ArkForge 目前处于**硬件准入阶段**。生产支持注册表仍为空；�
 
 ## 构建
 
-仓库通过 `rust-toolchain.toml` 跟随 Rust stable，最低支持 Rust 1.99.0 / Edition 2024。
+仓库通过 `rust-toolchain.toml` 跟随 Rust stable，最低支持 Rust 1.99.1 / Edition 2024。
 受支持的宿主是 macOS 与 Windows x64，也是每条 pull request 实际跑 CI 的两个平台。
 Linux 没有原生 USB，也不是 CI 宿主。Windows 的发布签名和真机证据按独立成熟度组合验收，
 不由每条 PR 的单元测试代替。
@@ -37,6 +37,7 @@ Linux 没有原生 USB，也不是 CI 宿主。Windows 的发布签名和真机�
 ```bash
 git clone https://github.com/ArkDeck/ArkForge.git
 cd ArkForge
+rustup update stable
 cargo build --workspace
 target/debug/arkforge
 ```

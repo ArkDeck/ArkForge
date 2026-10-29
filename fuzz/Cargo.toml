@@ -5,14 +5,14 @@ name = "arkforge-fuzz"
 version = "0.0.0"
 publish = false
 edition = "2024"
-rust-version = "1.99.0"
+rust-version = "1.99.1"
 license = "MIT"
 
 [package.metadata]
 cargo-fuzz = true
 
 [dependencies]
-libfuzzer-sys = "0.4.8"
+libfuzzer-sys = "0.4.13"
 arkforge-artifact = { path = "../crates/arkforge-artifact" }
 arkforge-core = { path = "../crates/arkforge-core" }
 arkforge-ipc = { path = "../crates/arkforge-ipc" }
