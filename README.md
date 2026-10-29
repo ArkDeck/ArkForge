@@ -32,7 +32,7 @@ safety gates, and never publishes production support automatically. See the
 ## Build
 
 The repository follows Rust stable via `rust-toolchain.toml`; the minimum supported Rust version
-is 1.99.0, with Edition 2024. The supported hosts are macOS and Windows x64, which are also the
+is 1.99.1, with Edition 2024. The supported hosts are macOS and Windows x64, which are also the
 two platforms every pull request actually tests. Linux has no native USB backend and is not a CI
 host. Windows release signing and physical-device evidence are a separate maturity combination;
 the per-PR unit tests do not stand in for them.
@@ -40,6 +40,7 @@ the per-PR unit tests do not stand in for them.
 ```bash
 git clone https://github.com/ArkDeck/ArkForge.git
 cd ArkForge
+rustup update stable
 cargo build --workspace
 target/debug/arkforge
 ```
