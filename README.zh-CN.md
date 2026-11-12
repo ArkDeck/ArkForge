@@ -2,9 +2,14 @@
 
 简体中文 · [English](README.md)
 
+[![Rust](https://github.com/ArkDeck/ArkForge/actions/workflows/rust.yml/badge.svg)](https://github.com/ArkDeck/ArkForge/actions/workflows/rust.yml)
+[![Windows](https://github.com/ArkDeck/ArkForge/actions/workflows/windows.yml/badge.svg)](https://github.com/ArkDeck/ArkForge/actions/workflows/windows.yml)
+[![License: MIT](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE)
+
 ArkForge 是一个开源、设备无关的固件操作平台。它把固件解析、设备识别、刷写协议、
 USB 传输、验证与恢复收敛到一套原生 Rust 工作流中，既可以独立运行，也可以作为
-[ArkDeck](https://github.com/ArkDeck/ArkDeck) 的底层执行层。
+[ArkDeck](https://github.com/ArkDeck/ArkDeck)（[ArkDeck 组织](https://github.com/ArkDeck)的主工具集）
+的刷机层。Trace 工具在 [ArkTrace](https://github.com/ArkDeck/ArkTrace) 中。
 
 它不会“找到一台设备就开始刷”，而是先把设备、固件、Profile、数据影响和执行环境
 封进一份精确计划，再经过明确同意后执行，并为每一步留下可审计的记录。
@@ -15,8 +20,8 @@ USB 传输、验证与恢复收敛到一套原生 Rust 工作流中，既可以�
 
 ## 当前状态
 
-ArkForge 目前处于**硬件准入阶段**。生产支持注册表仍为空；普通用户请勿将它视为
-一键刷机工具。
+ArkForge 仍在开发中，目前处于**硬件准入阶段**。没有打过 tag 的发布版本，请从源码构建。
+生产支持注册表仍为空；普通用户请勿将它视为一键刷机工具。
 
 | 设备 | 能力 | 状态 |
 | --- | --- | --- |
@@ -27,12 +32,19 @@ ArkForge 目前处于**硬件准入阶段**。生产支持注册表仍为空；�
 也不会自动发布生产支持。当前细节见[证据账本](docs/evidence/ledger.md)。阶段台账已归档到
 [docs/archive/TASKS.md](docs/archive/TASKS.md)。
 
-## 构建
+## 环境要求
 
-仓库通过 `rust-toolchain.toml` 跟随 Rust stable，最低支持 Rust 1.99.1 / Edition 2024。
-受支持的宿主是 macOS 与 Windows x64，也是每条 pull request 实际跑 CI 的两个平台。
-Linux 没有原生 USB，也不是 CI 宿主。Windows 的发布签名和真机证据按独立成熟度组合验收，
-不由每条 PR 的单元测试代替。
+- 通过 [`rust-toolchain.toml`](rust-toolchain.toml) 跟随 Rust stable；最低支持 Rust 1.99.1 / Edition 2024
+- 宿主为 macOS 或 Windows x64。Linux 没有原生 USB 后端，不是受支持的宿主
+- Swift 6.0 及以上，仅 Swift SDK（`swift test`）需要
+- Python 3，仅 [`hack/`](hack/) 中的 preboot 与启动循环恢复脚本需要
+- [`just`](https://github.com/casey/just)（可选），用于根目录 [`justfile`](justfile) 中的快捷命令
+
+运行时工作区没有第三方 crate。SHA-256、deterministic CBOR、DEFLATE、tar 和 Protobuf wire
+codec 均在仓内实现，并使用公开测试向量验证。设计理由见
+[AFD-0001](docs/decisions/AFD-0001-zero-dependency-core.md)。
+
+## 构建
 
 ```bash
 git clone https://github.com/ArkDeck/ArkForge.git
@@ -44,25 +56,6 @@ target/debug/arkforge
 
 不带子命令的 `arkforge` 等价于 `arkforge status`：它只报告主机、runtime、设备、
 artifact、任务与 blocker，不会为了回答状态而启动 runtime 或修改设备。
-
-## 持续集成
-
-每条 push 和 pull request 运行下面两个 workflow。它们覆盖的宿主就是上一节的
-macOS 与 Windows x64。
-
-| Workflow | 宿主 | 每次运行的内容 |
-| --- | --- | --- |
-| [`.github/workflows/rust.yml`](.github/workflows/rust.yml) | `macos-latest` | `cargo fmt`、clippy `-D warnings`、`cargo test --workspace --all-targets`、Swift SDK、preboot 脚本 |
-| [`.github/workflows/windows.yml`](.github/workflows/windows.yml) | `windows-latest` | 同一套 Rust 检查，加上 Windows 打包脚本解析和无硬件验收守卫。workspace 测试在 Windows 上编译 `platform_windows.rs` / `windows_topology.rs`，并跑 USB transcript replay（含 `golden_transcript_parity`） |
-
-[`.github/workflows/windows-acceptance.yml`](.github/workflows/windows-acceptance.yml)
-只接受手动 `workflow_dispatch`，跑在带 DAYU200 的自托管 Windows x64 runner 上。
-它不是每条 PR 的门。
-
-解析器 fuzz 随上面的 `cargo test` 在两个宿主上执行：seeded 变异在
-[`crates/arkforge-artifact/tests/parser_fuzz.rs`](crates/arkforge-artifact/tests/parser_fuzz.rs)。
-范围、语料和「拒绝必须是 typed error」的约定写在 [`fuzz/README.md`](fuzz/README.md)。
-默认分支上还没有独立的 libFuzzer workflow。
 
 ## 使用 ArkForge
 
@@ -130,9 +123,9 @@ Runtime 从原封存计划读取范围和 SHA-256，检查当前分区映射与�
 `typedSkip`。退出码 0 表示全部镜像范围匹配，9 表示存在跳过，7 表示验证失败。
 原 Job 的历史收据不会改变。
 
-临时验收 ramdisk 导致重启循环、且原任务已确认完成最后一次重启时，可使用
-[端口监听与原始 ramdisk 恢复脚本](docs/boot-loop-restoration.md)。它核对同一设备的
-Normal/Loader 身份，通过 Runtime 单次提交恢复并做完整哈希验证；无 USB 枚举时仍需物理进入 Loader。
+临时验收 ramdisk 导致开发板陷入重启循环、且原任务已确认完成最后一次重启时，可使用
+[启动循环恢复脚本](docs/boot-loop-restoration.md)。它核对同一块开发板的 Normal/Loader 身份，
+通过 Runtime 单次提交恢复并做完整哈希验证；没有 USB 枚举时，仍需手动让开发板进入 Loader 模式。
 
 不要猜参数或复用历史命令。当前二进制可以输出完整的人类帮助、稳定 JSON 契约和 shell
 completion：
@@ -154,7 +147,7 @@ target/debug/arkforge completion --shell zsh
 - **Agent-native**：同一命令树生成稳定 JSON/JSONL、typed error、可执行修复建议和 completion。
 
 DAYU200 的枚举、Loader 切换、分区读写、复位和 read-domain-aware verification 均由
-`arkforged` 的原生 RockUSB 实现；发布包不安装或调用 vendor RockUSB 刷写工具。
+`arkforged` 的原生 RockUSB 实现；ArkForge 不安装或调用 vendor RockUSB 刷写工具。
 
 ## 接入方式
 
@@ -178,41 +171,70 @@ cargo clippy --workspace --all-targets --all-features -- -D warnings
 cargo test --workspace --all-targets
 ```
 
-根目录 [`justfile`](justfile) 包装上述命令，以及 `cargo build --workspace` 和
-[`.github/workflows/rust.yml`](.github/workflows/rust.yml) 里的宿主检查：
+根目录 [`justfile`](justfile) 封装了这些命令：
 
-```bash
-just build
-just test
-just lint
-just fmt
-just ci
-```
+| 命令 | 执行内容 |
+| --- | --- |
+| `just build` | `cargo build --workspace` |
+| `just test` | `cargo test --workspace --all-targets` |
+| `just lint` | 带 `-D warnings` 的 clippy |
+| `just fmt` | `cargo fmt --all`（就地格式化） |
+| `just ci` | [`rust.yml`](.github/workflows/rust.yml) 中的宿主检查：格式检查、preboot 脚本测试、clippy、workspace 测试和 `swift test` |
 
-`just fmt` 就地格式化 Rust 源码。`just ci` 检查格式、跑 preboot 脚本测试、clippy、
-workspace 测试和 `swift test`。Windows 打包守卫仍在
-[`.github/workflows/windows.yml`](.github/workflows/windows.yml)。`just` 只是开发
-便利，不是运行时依赖。
+Windows 打包守卫仍在 [`windows.yml`](.github/workflows/windows.yml)。`just` 只是开发便利，
+不是运行时依赖。
 
-Rust runtime 没有第三方依赖。SHA-256、deterministic CBOR、DEFLATE、tar 和 Protobuf wire
-codec 均在仓内实现，并使用公开测试向量验证。设计理由见
-[AFD-0001](docs/decisions/AFD-0001-zero-dependency-core.md)。
+### 持续集成
+
+| Workflow | 触发 | 宿主 | 运行内容 |
+| --- | --- | --- | --- |
+| [`rust.yml`](.github/workflows/rust.yml) | push、pull request | `macos-latest` | `cargo fmt`、clippy `-D warnings`、`cargo test --workspace --all-targets`、Swift SDK、preboot 脚本 |
+| [`windows.yml`](.github/workflows/windows.yml) | push、pull request | `windows-latest` | 同一套 Rust 检查，加上 Windows 打包脚本解析和无硬件验收守卫。workspace 测试在 Windows 上编译 `platform_windows.rs` / `windows_topology.rs`，并跑 USB transcript replay（含 `golden_transcript_parity`） |
+| [`fuzz.yml`](.github/workflows/fuzz.yml) | push、pull request | `ubuntu-latest` | 对 [`fuzz/`](fuzz/) 中每个 target 做限时的 `cargo-fuzz` 冒烟 |
+| [`fuzz-nightly.yml`](.github/workflows/fuzz-nightly.yml) | 每晚、手动 | `ubuntu-latest` | 每个 target 更长时间的 libFuzzer 运行 |
+| [`windows-acceptance.yml`](.github/workflows/windows-acceptance.yml) | 仅手动 | 带 DAYU200 的自托管 Windows x64 | 真机验收；不是 pull request 的门 |
+
+每次 `cargo test` 也会运行带种子的解析器变异测试
+（[`crates/arkforge-artifact/tests/parser_fuzz.rs`](crates/arkforge-artifact/tests/parser_fuzz.rs)）。
+fuzz 范围、语料和「拒绝必须是 typed error」的约定写在 [`fuzz/README.md`](fuzz/README.md)。
+
+## 仓库结构
+
+| 路径 | 内容 |
+| --- | --- |
+| [`cmd/`](cmd/) | 可执行程序：`arkforge` CLI 与 `arkforged` 守护进程 |
+| [`crates/`](crates/) | 库 crate：core、artifact、engine、provider、transport、USB、platform、IPC、client、authority API、standalone authority、ArkDeck adapter 与 conformance |
+| [`swift/ArkForgeSDK/`](swift/ArkForgeSDK/) | Swift SDK，由根目录 [`Package.swift`](Package.swift) 构建 |
+| [`profiles/`](profiles/) | 设备 Profile（`dayu200.yaml`、`dayu600.yaml`） |
+| [`api/`](api/) | 协议定义 |
+| [`fuzz/`](fuzz/) | 独立的 `cargo-fuzz` 工作区 |
+| [`test/`](test/) | USB transcript fixture |
+| [`packaging/`](packaging/) | macOS 与 Windows 打包脚本 |
+| [`hack/`](hack/) | preboot 固件准备与启动循环恢复脚本 |
+| [`docs/`](docs/) | 规范、架构、决定记录、证据与归档 |
 
 ## 文档
 
 - [语言无关规范正本](docs/spec/README.md) — 状态机、摘要模型、端口契约、错误码与 conformance fixtures
 - [架构与安全边界](docs/architecture.md)
-- [Agent-native CLI 设计](docs/archive/openspec/chg-agent-native-cli/proposal.md)（已归档的 change 草案）
-- [CLI 验收矩阵](docs/archive/openspec/chg-agent-native-cli/verification.md)（已归档的 change 草案）
-- [真机与验收证据](docs/evidence/)
+- [真机与验收证据](docs/evidence/)及[证据账本](docs/evidence/ledger.md)
 - [架构决定记录](docs/decisions/)
 - [Windows x64 打包与验收](packaging/windows/README.md)
 - [ArkDeck 消费契约与版本钉扎](docs/arkdeck-contract.md)
-- [贡献指南](CONTRIBUTING.md)
-- [安全报告](SECURITY.md)
-- [行为准则](CODE_OF_CONDUCT.md)
+- [DAYU200 启动循环恢复](docs/boot-loop-restoration.md)
+- [Agent-native CLI 设计](docs/archive/openspec/chg-agent-native-cli/proposal.md)与
+  [CLI 验收矩阵](docs/archive/openspec/chg-agent-native-cli/verification.md)（已归档的 change 草案）
 - [变更记录](CHANGELOG.md)
+
+## 参与贡献
+
+先读 [CONTRIBUTING.md](CONTRIBUTING.md)。[AGENTS.md](AGENTS.md) 规定了 Agent 与维护者的边界。
+社区规范见 [CODE_OF_CONDUCT.md](CODE_OF_CONDUCT.md)。
+
+## 安全
+
+漏洞请按 [SECURITY.md](SECURITY.md) 私下报告，不要为安全问题开公开 issue。
 
 ## License
 
-MIT，见 [LICENSE](LICENSE)。
+ArkForge 以 [MIT License](LICENSE) 发布。

@@ -2,10 +2,16 @@
 
 [简体中文](README.zh-CN.md) · English
 
+[![Rust](https://github.com/ArkDeck/ArkForge/actions/workflows/rust.yml/badge.svg)](https://github.com/ArkDeck/ArkForge/actions/workflows/rust.yml)
+[![Windows](https://github.com/ArkDeck/ArkForge/actions/workflows/windows.yml/badge.svg)](https://github.com/ArkDeck/ArkForge/actions/workflows/windows.yml)
+[![License: MIT](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE)
+
 ArkForge is an open, device-neutral firmware operations platform. It brings artifact parsing,
 device identification, flashing protocols, USB transport, verification, and recovery into one
-native Rust workflow. Run it standalone or use it as the mechanics layer behind
-[ArkDeck](https://github.com/ArkDeck/ArkDeck).
+native Rust workflow. Run it standalone or use it as the flashing layer behind
+[ArkDeck](https://github.com/ArkDeck/ArkDeck), the main toolkit of the
+[ArkDeck organization](https://github.com/ArkDeck). Trace tooling lives in
+[ArkTrace](https://github.com/ArkDeck/ArkTrace).
 
 It never “finds a device and starts flashing.” ArkForge first seals the exact device, firmware,
 profile, data effects, and execution environment into a plan. That plan runs only after explicit
@@ -17,8 +23,9 @@ identify device and firmware → assess effects → seal plan → acknowledge �
 
 ## Status
 
-ArkForge is in the **hardware-qualification stage**. The production support registry is still
-empty; general users should not treat it as a one-click flasher.
+ArkForge is in development and in the **hardware-qualification stage**. There are no tagged
+releases; build from source. The production support registry is still empty; general users should
+not treat it as a one-click flasher.
 
 | Device | Capabilities | Status |
 | --- | --- | --- |
@@ -29,13 +36,20 @@ empty; general users should not treat it as a one-click flasher.
 safety gates, and never publishes production support automatically. See the
 [evidence ledger](docs/evidence/ledger.md) for current details. The stage ledger is archived at [docs/archive/TASKS.md](docs/archive/TASKS.md).
 
-## Build
+## Requirements
 
-The repository follows Rust stable via `rust-toolchain.toml`; the minimum supported Rust version
-is 1.99.1, with Edition 2024. The supported hosts are macOS and Windows x64, which are also the
-two platforms every pull request actually tests. Linux has no native USB backend and is not a CI
-host. Windows release signing and physical-device evidence are a separate maturity combination;
-the per-PR unit tests do not stand in for them.
+- Rust stable via [`rust-toolchain.toml`](rust-toolchain.toml); the minimum supported Rust version
+  is 1.99.1, with Edition 2024
+- macOS or Windows x64 as the host. Linux has no native USB backend and is not a supported host
+- Swift 6.0 or newer, only for the Swift SDK (`swift test`)
+- Python 3, only for the preboot and boot-loop scripts in [`hack/`](hack/)
+- [`just`](https://github.com/casey/just) (optional) for the shortcuts in the root [`justfile`](justfile)
+
+The runtime workspace has no third-party crates. SHA-256, deterministic CBOR, DEFLATE, tar, and the
+Protobuf wire codec are implemented in the repository and checked against published test vectors.
+See [AFD-0001](docs/decisions/AFD-0001-zero-dependency-core.md) for the rationale.
+
+## Build
 
 ```bash
 git clone https://github.com/ArkDeck/ArkForge.git
@@ -47,26 +61,6 @@ target/debug/arkforge
 
 A bare `arkforge` is equivalent to `arkforge status`: it reports host, runtime, device, artifact,
 job, and blocker state without starting the runtime or mutating a device.
-
-## Continuous integration
-
-Every push and pull request runs the two workflows below. Their hosts are the macOS and Windows
-x64 platforms named above.
-
-| Workflow | Host | What runs |
-| --- | --- | --- |
-| [`.github/workflows/rust.yml`](.github/workflows/rust.yml) | `macos-latest` | `cargo fmt`, clippy `-D warnings`, `cargo test --workspace --all-targets`, the Swift SDK, and the preboot scripts |
-| [`.github/workflows/windows.yml`](.github/workflows/windows.yml) | `windows-latest` | The same Rust checks, plus Windows packaging parse and no-hardware acceptance guards. The workspace tests compile `platform_windows.rs` / `windows_topology.rs` and run USB transcript replay, including `golden_transcript_parity` |
-
-[`.github/workflows/windows-acceptance.yml`](.github/workflows/windows-acceptance.yml) is
-`workflow_dispatch` only. It runs on a self-hosted Windows x64 runner that has a DAYU200. It is
-not a gate on every pull request.
-
-Parser fuzzing runs inside the `cargo test` step on both hosts: the seeded mutations live in
-[`crates/arkforge-artifact/tests/parser_fuzz.rs`](crates/arkforge-artifact/tests/parser_fuzz.rs).
-Scope, corpus, and the rule that every rejection is a typed error are in
-[`fuzz/README.md`](fuzz/README.md). The default branch does not yet have a separate libFuzzer
-workflow.
 
 ## Run ArkForge
 
@@ -140,6 +134,13 @@ boot remains an explicit `typedSkip`. Exit 0 means every image range matched, 9
 means partial verification with skips, and 7 means a verification failure. Original
 job receipts remain unchanged.
 
+If a temporary acceptance ramdisk leaves the board in a boot loop after the
+original job confirmed its final reboot, use the
+[boot-loop restoration script](docs/boot-loop-restoration.md). It checks the
+same board's Normal and Loader identity, submits one restoration through the
+runtime, and verifies the full hash. Without USB enumeration, the board still
+has to be put into Loader mode by hand.
+
 Do not guess options or reuse historical command names. The current binary provides complete human
 help, a stable JSON contract, and shell completion:
 
@@ -164,8 +165,8 @@ target/debug/arkforge completion --shell zsh
   remediation, and shell completion.
 
 DAYU200 enumeration, Loader transitions, partition I/O, reset, and read-domain-aware verification
-are implemented by `arkforged` over native RockUSB. Release packages do not install or invoke a
-vendor RockUSB flashing tool.
+are implemented by `arkforged` over native RockUSB. ArkForge does not install or invoke a vendor
+RockUSB flashing tool.
 
 ## Embed ArkForge
 
@@ -189,38 +190,73 @@ cargo clippy --workspace --all-targets --all-features -- -D warnings
 cargo test --workspace --all-targets
 ```
 
-The root [`justfile`](justfile) wraps those commands, plus `cargo build --workspace` and the host checks from [`.github/workflows/rust.yml`](.github/workflows/rust.yml):
+The root [`justfile`](justfile) wraps those commands:
 
-```bash
-just build
-just test
-just lint
-just fmt
-just ci
-```
+| Recipe | What it runs |
+| --- | --- |
+| `just build` | `cargo build --workspace` |
+| `just test` | `cargo test --workspace --all-targets` |
+| `just lint` | clippy with `-D warnings` |
+| `just fmt` | `cargo fmt --all` (formats in place) |
+| `just ci` | the host checks from [`rust.yml`](.github/workflows/rust.yml): format check, preboot script tests, clippy, workspace tests, and `swift test` |
 
-`just fmt` formats Rust sources in place. `just ci` checks formatting, runs the preboot script tests, clippy, the workspace tests, and `swift test`. Windows packaging guards stay in [`.github/workflows/windows.yml`](.github/workflows/windows.yml). `just` is a developer convenience and is not a runtime dependency.
+Windows packaging guards stay in [`windows.yml`](.github/workflows/windows.yml). `just` is a
+developer convenience, not a runtime dependency.
 
-The Rust runtime has no third-party dependencies. SHA-256, deterministic CBOR, DEFLATE, tar, and
-the Protobuf wire codec are implemented in the repository and checked against published test
-vectors. See [AFD-0001](docs/decisions/AFD-0001-zero-dependency-core.md) for the rationale.
+### Continuous integration
+
+| Workflow | Trigger | Host | What runs |
+| --- | --- | --- | --- |
+| [`rust.yml`](.github/workflows/rust.yml) | push, pull request | `macos-latest` | `cargo fmt`, clippy `-D warnings`, `cargo test --workspace --all-targets`, the Swift SDK, and the preboot scripts |
+| [`windows.yml`](.github/workflows/windows.yml) | push, pull request | `windows-latest` | The same Rust checks, plus Windows packaging parse and no-hardware acceptance guards. The workspace tests compile `platform_windows.rs` / `windows_topology.rs` and run USB transcript replay, including `golden_transcript_parity` |
+| [`fuzz.yml`](.github/workflows/fuzz.yml) | push, pull request | `ubuntu-latest` | A time-boxed `cargo-fuzz` smoke of every target in [`fuzz/`](fuzz/) |
+| [`fuzz-nightly.yml`](.github/workflows/fuzz-nightly.yml) | nightly, manual | `ubuntu-latest` | A longer libFuzzer run per target |
+| [`windows-acceptance.yml`](.github/workflows/windows-acceptance.yml) | manual only | self-hosted Windows x64 with a DAYU200 | Hardware acceptance; not a pull request gate |
+
+Seeded parser mutations also run in every `cargo test`
+([`crates/arkforge-artifact/tests/parser_fuzz.rs`](crates/arkforge-artifact/tests/parser_fuzz.rs)).
+Fuzz scope, corpus, and the rule that every rejection is a typed error are in
+[`fuzz/README.md`](fuzz/README.md).
+
+## Repository layout
+
+| Path | Contents |
+| --- | --- |
+| [`cmd/`](cmd/) | Binaries: the `arkforge` CLI and the `arkforged` daemon |
+| [`crates/`](crates/) | Library crates: core, artifact, engine, provider, transport, USB, platform, IPC, client, authority API, standalone authority, ArkDeck adapter, and conformance |
+| [`swift/ArkForgeSDK/`](swift/ArkForgeSDK/) | Swift SDK, built by the root [`Package.swift`](Package.swift) |
+| [`profiles/`](profiles/) | Device profiles (`dayu200.yaml`, `dayu600.yaml`) |
+| [`api/`](api/) | Protocol definitions |
+| [`fuzz/`](fuzz/) | Separate `cargo-fuzz` workspace |
+| [`test/`](test/) | USB transcript fixtures |
+| [`packaging/`](packaging/) | macOS and Windows packaging scripts |
+| [`hack/`](hack/) | Preboot firmware preparation and boot-loop restoration scripts |
+| [`docs/`](docs/) | Specification, architecture, decisions, evidence, and the archive |
 
 ## Documentation
 
 - [Normative, language-neutral specification](docs/spec/README.md) — state machines, digest models,
   port contracts, stable errors, and conformance fixtures
 - [Architecture and safety boundaries](docs/architecture.md)
-- [Agent-native CLI design](docs/archive/openspec/chg-agent-native-cli/proposal.md) (archived change draft)
-- [CLI acceptance matrix](docs/archive/openspec/chg-agent-native-cli/verification.md) (archived change draft)
-- [Hardware and acceptance evidence](docs/evidence/)
+- [Hardware and acceptance evidence](docs/evidence/) and the [evidence ledger](docs/evidence/ledger.md)
 - [Architecture decision records](docs/decisions/)
 - [Windows x64 packaging and acceptance](packaging/windows/README.md)
 - [ArkDeck consumer contract and version pin](docs/arkdeck-contract.md)
-- [Contributing](CONTRIBUTING.md)
-- [Security](SECURITY.md)
-- [Code of Conduct](CODE_OF_CONDUCT.md)
+- [DAYU200 boot-loop restoration](docs/boot-loop-restoration.md)
+- [Agent-native CLI design](docs/archive/openspec/chg-agent-native-cli/proposal.md) and
+  [CLI acceptance matrix](docs/archive/openspec/chg-agent-native-cli/verification.md) (archived change drafts)
 - [Changelog](CHANGELOG.md)
+
+## Contributing
+
+Read [CONTRIBUTING.md](CONTRIBUTING.md) first. [AGENTS.md](AGENTS.md) defines the agent and
+maintainer boundary. Community expectations are in [CODE_OF_CONDUCT.md](CODE_OF_CONDUCT.md).
+
+## Security
+
+Report vulnerabilities privately, as described in [SECURITY.md](SECURITY.md). Do not open a public
+issue for a security report.
 
 ## License
 
-MIT; see [LICENSE](LICENSE).
+ArkForge is released under the [MIT License](LICENSE).
